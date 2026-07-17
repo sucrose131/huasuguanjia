@@ -1,0 +1,8 @@
+2026-07-17 14:20:35 INFO test_register_and_order.py: ============================================================
+2026-07-17 14:20:35 INFO test_register_and_order.py: 开始执行注册下单流程测试
+2026-07-17 14:20:35 INFO test_register_and_order.py: 本次测试使用手机号: 18147575080
+2026-07-17 14:20:35 INFO test_register_and_order.py: 步骤1: 前台填写注册信息并触发获取验证码
+2026-07-17 14:21:05 ERROR base_page.py: 元素定位失败:('xpath', "//span[contains(normalize-space(),'立即注册')]")
+2026-07-17 14:21:05 ERROR base_page.py: None
+2026-07-17 14:21:05 ERROR base_page.py: 点击失败:('xpath', "//span[contains(normalize-space(),'立即注册')]")
+2026-07-17 14:21:05 ERROR base_page.py: None

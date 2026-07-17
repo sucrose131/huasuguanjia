@@ -41,4 +41,14 @@ class GlobalCfg():
     REGISTER_PASSWORD = "abcd1234"  # 注册默认密码
     RECHARGE_AMOUNT = 100  # 充值金额（元）
 
+    # 华溯管家ERP测试配置
+    ERP_URL = "http://hspsi.dev.huasubiotech.com/"
+    ERP_USERNAME = "admin"
+    ERP_PASSWORD = "admin123"
+
+    HEADLESS = False  # 显示浏览器
+    SLOW_MO = 500  # 放慢速度，看得清楚
+
+
+
 

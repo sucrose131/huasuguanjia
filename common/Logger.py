@@ -8,7 +8,6 @@ class Logger():
                             datefmt="%Y-%m-%d %H:%M:%S",
                             handlers=[logging.FileHandler(GlobalCfg.LOG_PATH,"a","utf-8"),logging.StreamHandler()]
                             )
-        logging.getLogger("selenium").setLevel(logging.WARNING)#关闭selenium日志
         logging.getLogger("urllib3").setLevel(logging.WARNING)#关闭urllib3日志
         cls.testlog=logging.getLogger("131")#自定义日志名称
         cls.testlog.setLevel(logging.DEBUG)

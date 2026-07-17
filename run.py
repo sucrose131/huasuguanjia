@@ -1,38 +1,16 @@
-from common.Logger import Logger
-from page.login_page import LoginPage
-from common import RichyExcelRW
+import pytest
+import os
 from config.global_cfg import GlobalCfg
-import time
-from unittestreport import TestRunner
-import unittest
+from common import RichyExcelRW
 
-Logger.init()
 RichyExcelRW.rinit(GlobalCfg.CASE_FILE)
 
-# 选择要执行的测试用例
-# 选项1: 执行所有测试用例
-# testcase = unittest.defaultTestLoader.discover(start_dir="./testcase", pattern="test_*.py")
-
-# 选项2: 执行特定的测试文件
-# testcase = unittest.defaultTestLoader.discover(start_dir="./testcase", pattern="test_order_flow.py")  # 自动发货订单流程测试
-# testcase = unittest.defaultTestLoader.discover(start_dir="./testcase", pattern="test_login.py")  # 登录测试
-# testcase = unittest.defaultTestLoader.discover(start_dir="./testcase", pattern="test_signup.py")  # 注册测试
-testcase = unittest.defaultTestLoader.discover(start_dir="./testcase", pattern="test_register_and_order.py")  # 注册下单完整流程测试
-
-runner = TestRunner(
-    testcase,
-    filename=GlobalCfg.REPORT_NAME,
-    report_dir=GlobalCfg.REPORT_PATH,
-    title="华数生物自动化测试报告",
-    tester="131",
-    templates=2
-)
-runner.run(thread_count=1, count=1)  # 指定并发线程数和执行次数
-
-# 发送邮件报告（可选）
-# runner.send_email(host="smtp.qq.com",
-#                   port=465,
-#                   user="你的邮箱@qq.com",
-#                   password="alg123412bab",
-#                   to_addrs=["对方的邮箱@qq.com",""])
-
+# 默认运行注册下单流程，可通过命令行参数覆盖
+# 例如: python run.py -k login  运行登录测试
+#       python run.py           运行所有测试
+if __name__ == "__main__":
+    pytest.main([
+        "--html", os.path.join(GlobalCfg.REPORT_PATH, GlobalCfg.REPORT_NAME),
+        "--self-contained-html",
+        *__import__('sys').argv[1:]
+    ])

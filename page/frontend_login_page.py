@@ -1,60 +1,33 @@
-from base.base_page import BasePage
 from config.global_cfg import GlobalCfg
-from locator.frontend_login_locator import FrontendLoginLocator
-import time
 
 
-class FrontendLoginPage(BasePage, FrontendLoginLocator):
-    """前台登录页面对象"""
-    
+class FrontendLoginPage:
+    def __init__(self, page):
+        self.page = page
+
     def open_frontend(self):
-        """打开前台首页"""
-        self.get(GlobalCfg.FRONTEND_URL)
-        self.driver.maximize_window()
-        self.driver.implicitly_wait(10)
-        time.sleep(2)
-    
+        self.page.goto(GlobalCfg.FRONTEND_URL)
+        self.page.wait_for_load_state("networkidle")
+        self.page.wait_for_timeout(2000)
+
     def login(self, username=None, password=None):
-        """
-        前台登录
-        :param username: 用户名，默认使用配置中的前台账号
-        :param password: 密码，默认使用配置中的前台密码
-        """
         if username is None:
             username = GlobalCfg.FRONTEND_USERNAME
         if password is None:
             password = GlobalCfg.FRONTEND_PASSWORD
-        
-        try:
-            # 点击登录按钮
-            self.find_element_click(*self.LOGIN_BUTTON)
-            time.sleep(1)
-            
-            # 输入用户名
-            self.find_element_sendkeys(*self.USERNAME_INPUT, text=username)
-            time.sleep(0.5)
-            
-            # 输入密码
-            self.find_element_sendkeys(*self.PASSWORD_INPUT, text=password)
-            time.sleep(0.5)
-            
-            # 点击提交
-            self.find_element_click(*self.SUBMIT_BUTTON)
-            time.sleep(2)
-            
-            self.logger.info(f"前台登录成功: {username}")
-        except Exception as e:
-            self.logger.error(f"前台登录失败: {str(e)}")
-            raise
-    
+
+        self.page.get_by_role("button", name="登录").first.click()
+        self.page.wait_for_timeout(1000)
+        self.page.get_by_placeholder("请输入手机号").fill(username)
+        self.page.wait_for_timeout(500)
+        self.page.get_by_placeholder("请输入密码").fill(password)
+        self.page.wait_for_timeout(500)
+        self.page.get_by_role("button", name="登录").first.click()
+        self.page.wait_for_timeout(2000)
+
     def get_user_info(self):
-        """获取用户信息"""
-        try:
-            user_info = self.find_element_text(*self.USER_INFO)
-            return user_info
-        except:
-            return None
-    
+        el = self.page.locator("div.user-info, span.username")
+        return el.text_content() if el.count() > 0 else None
+
     def is_logged_in(self):
-        """判断是否已登录"""
-        return self.is_element(*self.USER_INFO)
+        return self.page.locator("div.user-info, span.username").is_visible()

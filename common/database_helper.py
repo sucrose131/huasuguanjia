@@ -4,6 +4,8 @@ from common.Logger import Logger
 
 
 class DatabaseHelper:
+
+
     """数据库操作帮助类"""
     
     def __init__(self):
