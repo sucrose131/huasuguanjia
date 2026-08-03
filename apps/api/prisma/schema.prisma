@@ -1,0 +1,1765 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_customer {
+  customer_id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  org_id              BigInt    @default(0)
+  name                String    @default("") @db.VarChar(100)
+  gender              Int       @default(0) @db.TinyInt
+  birthday            DateTime? @db.Date
+  mobile              String    @default("") @db.VarChar(20)
+  address             String    @default("") @db.VarChar(255)
+  referrer_name       String    @default("") @db.VarChar(32)
+  referrer_mobile     String    @default("") @db.VarChar(20)
+  source_type         Int       @default(0) @db.TinyInt
+  related_customer_id BigInt    @default(0)
+  status              Int       @default(1) @db.TinyInt
+  remark              String    @default("") @db.VarChar(255)
+  sort                Int       @default(0)
+  created_by          BigInt    @default(0)
+  updated_by          BigInt    @default(0)
+  created_at          DateTime? @default(now()) @db.DateTime(0)
+  updated_at          DateTime? @default(now()) @db.DateTime(0)
+  deleted_at          DateTime? @db.DateTime(0)
+
+  @@index([org_id], map: "idx_org_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_dept {
+  dept_id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  org_id         BigInt    @default(0)
+  parent_id      BigInt    @default(0)
+  path           String    @default("") @db.VarChar(500)
+  name           String    @db.VarChar(100)
+  dept_no        String?   @db.VarChar(30)
+  leader_id      BigInt    @default(0)
+  sort           Int       @default(0)
+  status         Int       @default(0) @db.TinyInt
+  account_set_id BigInt    @default(0)
+  app_id         String    @default("") @db.VarChar(50)
+  outer_ref_id   String    @default("") @db.VarChar(50)
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+
+  @@index([org_id], map: "idx_org_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_organization {
+  org_id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  parent_id        BigInt    @default(0)
+  path             String    @default("") @db.VarChar(500)
+  org_no           String    @default("") @db.VarChar(30)
+  name             String    @default("") @db.VarChar(100)
+  org_level        Int       @default(0) @db.TinyInt
+  short_name       String    @default("") @db.VarChar(50)
+  contact_name     String    @default("") @db.VarChar(50)
+  contact_phone    String    @default("") @db.VarChar(20)
+  address          String    @default("") @db.VarChar(255)
+  sort             Int       @default(0)
+  operation_status Int       @default(0) @db.TinyInt
+  established_at   DateTime? @db.Date
+  app_id           String    @default("") @db.VarChar(100)
+  account_set_id   BigInt    @default(0) @db.UnsignedBigInt
+  outer_ref_id     String    @default("") @db.VarChar(50)
+  remark           String    @default("") @db.VarChar(255)
+  created_by       BigInt    @default(0)
+  updated_by       BigInt    @default(0)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_post {
+  id         BigInt    @id @default(autoincrement())
+  org_id     BigInt    @default(0)
+  name       String    @default("") @db.VarChar(255)
+  post_code  String    @default("") @db.VarChar(30)
+  status     Int       @default(1) @db.TinyInt
+  remark     String    @default("") @db.VarChar(255)
+  created_by BigInt    @default(0)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_post_scope {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  post_id    BigInt    @default(0) @db.UnsignedBigInt
+  org_id     BigInt    @default(0) @db.UnsignedBigInt
+  created_by BigInt    @default(0)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@unique([post_id, org_id], map: "uk_post_org")
+}
+
+model hspsi_basic_position {
+  id             BigInt    @id @default(autoincrement())
+  name           String    @default("") @db.VarChar(255)
+  post_code      String    @default("") @db.VarChar(30)
+  app_id         String    @default("") @db.VarChar(50)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  outer_ref_id   String    @default("") @db.VarChar(50)
+  status         Int       @default(1) @db.TinyInt
+  sort           Int       @default(0)
+  remark         String    @default("") @db.VarChar(255)
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+}
+
+model hspsi_basic_position_belongs {
+  id             BigInt    @id @default(autoincrement())
+  position_id    BigInt    @default(0)
+  app_id         String    @db.VarChar(50)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  outer_ref_id   String    @default("") @db.VarChar(50)
+  org_type       Int       @default(1) @db.TinyInt
+  created_at     DateTime? @db.DateTime(0)
+  updated_at     DateTime? @db.DateTime(0)
+
+  @@index([position_id], map: "idx_position_id")
+}
+
+model hspsi_basic_position_scope {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  post_id    BigInt    @default(0) @db.UnsignedBigInt
+  org_id     BigInt    @default(0) @db.UnsignedBigInt
+  created_by BigInt    @default(0)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@unique([post_id, org_id], map: "uk_post_org")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_staff {
+  id             BigInt    @id @default(autoincrement())
+  post_id        BigInt    @default(0)
+  name           String    @default("") @db.VarChar(30)
+  mobile         String    @default("") @db.VarChar(20)
+  staff_code     String    @default("") @db.VarChar(50)
+  gender         Int       @default(0) @db.TinyInt
+  status         Int       @default(0) @db.TinyInt
+  app_id         String    @default("") @db.VarChar(50)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  out_staff_id   String    @default("") @db.VarChar(50)
+  outer_ref_id   String    @default("") @db.VarChar(50)
+  created_at     DateTime? @db.DateTime(0)
+  updated_at     DateTime? @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+}
+
+model hspsi_basic_staff_organizations {
+  id             BigInt    @id @default(autoincrement())
+  org_id         BigInt
+  staff_id       BigInt
+  app_id         String    @default("") @db.VarChar(50)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  org_type       Int       @default(0) @db.TinyInt
+  type           Int       @db.TinyInt
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_unit {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @default("") @db.VarChar(32)
+  sort       Int       @default(0) @db.UnsignedInt
+  status     Int       @default(1) @db.TinyInt
+  remark     String    @default("") @db.VarChar(255)
+  created_by BigInt    @default(0)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_vendor {
+  vendor_id       BigInt    @id @default(autoincrement())
+  query_code      String    @default("") @db.VarChar(20)
+  conpany_name    String    @default("") @db.VarChar(100)
+  short_name      String    @default("") @db.VarChar(30)
+  sale_contact    String    @default("") @db.VarChar(30)
+  sale_tel        String    @default("") @db.VarChar(50)
+  sale_email      String    @default("") @db.VarChar(50)
+  service_contact String    @default("") @db.VarChar(30)
+  service_tel     String    @default("") @db.VarChar(60)
+  address         String    @default("") @db.VarChar(100)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_basic_warehouse {
+  warehouse_id   BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  org_id         BigInt    @default(0) @db.UnsignedBigInt
+  dept_id        BigInt    @default(0)
+  name           String    @default("") @db.VarChar(32)
+  warehouse_type Int       @default(0)
+  address        String    @default("") @db.VarChar(255)
+  manager_name   String    @default("") @db.VarChar(10)
+  contact_phone  String    @default("") @db.VarChar(20)
+  status         Int       @default(1) @db.TinyInt
+  sort           Int       @default(0)
+  remark         String    @db.VarChar(255)
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+
+  @@index([org_id, warehouse_type], map: "uk_org_type")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve {
+  draw_id              BigInt    @id @default(autoincrement())
+  draw_no              String    @unique(map: "uk_draw_no") @default("") @db.VarChar(20)
+  draw_qty             Int       @default(0)
+  fact_draw_qty        Int       @default(0)
+  org_id               BigInt    @default(0)
+  warehouse_id         BigInt    @default(0)
+  dept_id              BigInt    @default(0)
+  applicant_id         BigInt    @default(0)
+  draw_type            Int       @default(0) @db.TinyInt
+  draw_date            DateTime? @db.DateTime(0)
+  draw_reason          String    @default("") @db.VarChar(300)
+  signature_content    String?   @db.LongText
+  signature_attachment String    @default("") @db.VarChar(500)
+  signed_by            BigInt    @default(0)
+  signed_at            DateTime? @db.DateTime(0)
+  status               Int       @default(0) @db.TinyInt
+  approve_status       Int       @default(0) @db.TinyInt
+  approve_comment      String    @default("") @db.VarChar(255)
+  approve_by           BigInt    @default(0)
+  approve_date         DateTime? @db.DateTime(0)
+  remark               String?   @default("") @db.VarChar(255)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve_detail {
+  draw_detail_id BigInt    @id @default(autoincrement())
+  draw_id        BigInt    @default(0)
+  goods_id       BigInt    @default(0)
+  sku_id         BigInt    @default(0)
+  batch_no       String?   @db.VarChar(50)
+  unit_type      Int       @default(0)
+  draw_qty       Int       @default(0)
+  is_returnable  Int       @default(0) @db.TinyInt
+  remark         String    @default("") @db.VarChar(255)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([draw_id], map: "idx_draw_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve_output {
+  draw_output_id  BigInt    @id @default(autoincrement())
+  draw_output_no  String?   @unique(map: "uk_draw_output_no") @default("") @db.VarChar(20)
+  draw_id         BigInt    @default(0)
+  generation_key  String?   @unique(map: "uk_draw_output_generation_key") @db.VarChar(100)
+  auto_created    Int       @default(0) @db.TinyInt
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  dept_id         BigInt    @default(0)
+  receiver_id     BigInt    @default(0)
+  output_date     DateTime? @db.DateTime(0)
+  status          Int       @default(0) @db.TinyInt
+  comfirm_status  Int       @default(0) @db.TinyInt
+  comfirm_comment String?   @default("") @db.VarChar(255)
+  comfirm_by      BigInt    @default(0)
+  comfirm_date    DateTime? @db.DateTime(0)
+  posting_version Int       @default(0)
+  remark          String?   @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([draw_id, deleted_at], map: "idx_draw_output_draw")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve_output_detail {
+  output_detail_id BigInt    @id @default(autoincrement())
+  draw_output_id   BigInt    @default(0)
+  draw_detail_id   BigInt    @default(0)
+  goods_id         BigInt    @default(0)
+  sku_id           BigInt    @default(0)
+  batch_no         String    @default("") @db.VarChar(50)
+  unit_type        Int       @default(0)
+  draw_qty         Int       @default(0)
+  fact_draw_qty    Int       @default(0)
+  is_returnable    Int       @default(0) @db.TinyInt
+  remark           String    @default("") @db.VarChar(255)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([draw_output_id], map: "idx_draw_output_id")
+  @@index([draw_detail_id], map: "idx_draw_output_source_detail")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve_output_exit {
+  draw_exit_id    BigInt    @id @default(autoincrement())
+  draw_exit_no    String?   @unique(map: "uk_draw_exit_no") @default("") @db.VarChar(20)
+  draw_id         BigInt    @default(0)
+  draw_output_id  BigInt
+  exit_reson      String?   @default("") @db.VarChar(300)
+  exit_qty        Int       @default(0)
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  dept_id         BigInt    @default(0)
+  receiver_id     BigInt    @default(0)
+  return_date     DateTime? @db.DateTime(0)
+  status          Int       @default(0) @db.TinyInt
+  comfirm_status  Int       @default(0) @db.TinyInt
+  comfirm_comment String?   @default("") @db.VarChar(255)
+  comfirm_by      BigInt    @default(0)
+  comfirm_date    DateTime? @db.DateTime(0)
+  posting_version Int       @default(0)
+  remark          String?   @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([draw_output_id, deleted_at], map: "idx_draw_exit_output")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_draw_approve_output_exit_detail {
+  exit_detail_id        BigInt    @id @default(autoincrement())
+  draw_exit_id          BigInt    @default(0)
+  draw_output_detail_id BigInt    @default(0)
+  goods_id              BigInt    @default(0)
+  sku_id                BigInt    @default(0)
+  batch_no              String?   @default("") @db.VarChar(50)
+  unit_type             Int       @default(0)
+  so_qty                Int       @default(0)
+  exit_qty              Int       @default(0)
+  remark                String?   @default("") @db.VarChar(255)
+  created_at            DateTime? @default(now()) @db.DateTime(0)
+  updated_at            DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([draw_exit_id], map: "idx_draw_exit_id")
+  @@index([draw_output_detail_id], map: "idx_draw_exit_output_detail")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_info {
+  goods_id             BigInt    @id @default(autoincrement())
+  org_id               BigInt    @default(0)
+  query_code           String    @default("") @db.VarChar(30)
+  goods_name           String    @default("") @db.VarChar(100)
+  goods_image          String    @default("") @db.VarChar(255)
+  short_name           String    @default("") @db.VarChar(30)
+  brand_name           String    @default("") @db.VarChar(30)
+  spec_models          String    @default("") @db.VarChar(200)
+  unit_type            Int       @default(0)
+  goods_catg_id        BigInt    @default(0)
+  supply_type          Int       @default(2) @db.TinyInt
+  goods_type           Int       @default(0)
+  const_price          Decimal   @default(0.00) @db.Decimal(10, 2)
+  sale_price           Decimal   @default(0.00) @db.Decimal(10, 2)
+  vendor_id            BigInt    @default(0)
+  warehouse_id         BigInt?
+  status               Int       @default(0) @db.TinyInt
+  sort                 Int       @default(0)
+  remark               String    @default("") @db.VarChar(255)
+  free_warranty_period Int       @default(0)
+  is_alert_period      Int       @default(0) @db.TinyInt
+  is_maintenance_free  Int       @default(0) @db.TinyInt
+  alert_aty            Int       @default(0)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+
+  @@index([warehouse_id], map: "idx_goods_warehouse_id")
+  @@index([org_id], map: "idx_org_id")
+  @@index([query_code], map: "idx_query_code")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_info_category {
+  goods_catg_id        BigInt    @id @default(autoincrement())
+  goods_name           String    @default("") @db.VarChar(100)
+  parent_goods_catg_id BigInt    @default(0)
+  warehouse_type       Int       @default(0)
+  sort                 Int       @default(0)
+  status               Int       @default(0) @db.TinyInt
+  remark               String?   @default("") @db.VarChar(255)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_info_category_property {
+  category_id BigInt
+  property_id BigInt
+  created_at  DateTime? @default(now()) @db.DateTime(0)
+  updated_at  DateTime? @default(now()) @db.DateTime(0)
+
+  @@id([category_id, property_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_info_property {
+  goods_id    BigInt
+  property_id BigInt
+  created_at  DateTime? @default(now()) @db.DateTime(0)
+  updated_at  DateTime? @default(now()) @db.DateTime(0)
+
+  @@id([goods_id, property_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_info_sku {
+  sku_id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  good_id              BigInt    @default(0)
+  spec_models          String    @default("") @db.VarChar(200)
+  image                String    @default("") @db.VarChar(255)
+  pcs_qty              Int       @default(0)
+  const_price          Decimal   @default(0.00) @db.Decimal(10, 2)
+  sale_price           Decimal   @default(0.00) @db.Decimal(10, 2)
+  unit_type            Int       @default(0)
+  is_default           Int       @default(0) @db.TinyInt
+  sort                 Int       @default(0)
+  status               Int       @default(1) @db.TinyInt
+  remark               String    @default("") @db.VarChar(255)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  free_warranty_period Int       @default(0)
+  is_alert_period      Int       @default(0) @db.TinyInt
+  alert_aty            Int       @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_property {
+  property_id    BigInt    @id @default(autoincrement())
+  property_name  String?   @default("") @db.VarChar(255)
+  property_desc  String?   @default("") @db.VarChar(255)
+  property_logic String?   @default("") @db.VarChar(500)
+  sort           Int?      @default(0)
+  status         Int?      @default(1) @db.TinyInt
+  remark         String?   @default("") @db.VarChar(255)
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_adjust {
+  adjust_id       BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  adjust_no       String    @unique(map: "uk_adjust_no") @default("") @db.VarChar(20)
+  adjust_reason   String    @default("") @db.VarChar(255)
+  applicant_date  DateTime? @db.DateTime(0)
+  status          Int       @default(0) @db.TinyInt
+  remark          String    @default("") @db.VarChar(255)
+  approve_status  Int       @default(0) @db.TinyInt
+  approve_comment String    @default("") @db.VarChar(255)
+  approve_by      BigInt    @default(0)
+  approve_date    DateTime? @db.DateTime(0)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_adjust_detail {
+  detail_id    BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  adjust_id    BigInt    @default(0) @db.UnsignedBigInt
+  goods_id     BigInt    @default(0)
+  sku_id       BigInt    @default(0)
+  warehouse_id BigInt    @default(0)
+  batch_no     String?   @db.VarChar(50)
+  adjust_type  Int       @default(0) @db.TinyInt
+  before_qty   Int       @default(0)
+  adjust_qty   Int       @default(0)
+  remark       String    @default("") @db.VarChar(255)
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([adjust_id], map: "idx_detail_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_alert_period {
+  id           BigInt    @id @default(autoincrement())
+  goods_id     BigInt    @default(0)
+  sku_id       BigInt    @default(0)
+  warehouse_id BigInt    @default(0)
+  batch_no     String    @default("") @db.VarChar(255)
+  alter_type   Int       @default(0) @db.TinyInt
+  alter_qty    Int?      @default(0)
+  alter_day    Int?      @default(0)
+  alter_value  String?   @default("") @db.VarChar(255)
+  end_day      DateTime? @db.Date
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_alert_qty {
+  id            BigInt    @id @default(autoincrement())
+  goods_id      BigInt    @default(0)
+  sku_id        BigInt    @default(0)
+  warehouse_id  BigInt    @default(0)
+  safe_qty      Int       @default(0)
+  safe_less_qty Int       @default(0)
+  purchase_qty  Int       @default(0)
+  fact_qty      Int       @default(0)
+  created_at    DateTime? @default(now()) @db.DateTime(0)
+  updated_at    DateTime? @default(now()) @db.DateTime(0)
+
+  @@unique([warehouse_id, goods_id, sku_id], map: "uk_alert_qty_warehouse_goods_sku")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_batch_total {
+  goods_id         BigInt  @default(0)
+  sku_id           BigInt  @default(0)
+  warehouse_id     BigInt  @default(0)
+  batch_no         String  @default("") @db.VarChar(255)
+  unit_type        Int     @default(0)
+  input_qty        Int     @default(0)
+  output_qty       Int     @default(0)
+  inventory_qty    Int     @default(0)
+  inventory_amount Decimal @default(0.00) @db.Decimal(12, 2)
+  org_id           BigInt  @default(0)
+
+  @@id([goods_id, sku_id, warehouse_id, batch_no])
+  @@index([goods_id, warehouse_id], map: "idx_batch_total_goods_wh")
+  @@index([warehouse_id, batch_no], map: "idx_batch_total_wh_batch")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_check {
+  check_id               BigInt    @id @default(autoincrement())
+  check_no               String?   @unique(map: "uk_check_no") @db.VarChar(20)
+  check_type             Int       @default(0)
+  check_date             DateTime? @db.DateTime(0)
+  check_state            Int       @default(0)
+  all_qty                Int       @default(0)
+  all_value              Decimal?  @db.Decimal(10, 2)
+  less_qty               Int       @default(0)
+  less_value             Decimal?  @db.Decimal(10, 2)
+  overflow_qty           Int       @default(0)
+  overflow_value         Decimal?  @db.Decimal(10, 2)
+  overflow_process_qty   Int       @default(0)
+  overflow_process_value Decimal?  @db.Decimal(10, 2)
+  less_process_qty       Int       @default(0)
+  less_process_value     Decimal?  @db.Decimal(10, 2)
+  org_id                 BigInt    @default(0)
+  warehouse_id           BigInt    @default(0)
+  status                 Int       @default(0) @db.TinyInt
+  sort                   Int?      @default(0)
+  remark                 String    @default("") @db.VarChar(255)
+  approve_status         Int       @default(0) @db.TinyInt
+  approve_comment        String    @default("") @db.VarChar(300)
+  approve_by             BigInt    @default(0)
+  approve_date           DateTime? @db.DateTime(0)
+  created_by             BigInt    @default(0)
+  updated_by             BigInt    @default(0)
+  created_at             DateTime? @default(now()) @db.DateTime(0)
+  updated_at             DateTime? @default(now()) @db.DateTime(0)
+  deleted_at             DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_check_detail {
+  check_detail_id  BigInt    @id @default(autoincrement())
+  check_id         BigInt    @default(0)
+  goods_id         BigInt    @default(0)
+  sku_id           BigInt    @default(0)
+  batch_no         String    @default("") @db.VarChar(50)
+  unit_type        Int       @default(0)
+  inventory_qty    Int       @default(0)
+  check_qty        Int       @default(0)
+  damaged_qty      Int       @default(0)
+  different_qty    Int       @default(0)
+  unit_price       Decimal   @default(0.00) @db.Decimal(12, 2)
+  different_amount Decimal   @default(0.00) @db.Decimal(12, 2)
+  remark           String    @default("") @db.VarChar(255)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([check_id], map: "idx_check_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_loss {
+  loss_id           BigInt    @id @default(autoincrement())
+  loss_no           String    @unique(map: "uk_loss_no") @default("") @db.VarChar(20)
+  business_kind     Int       @default(2) @db.TinyInt
+  loss_type         Int       @default(0) @db.TinyInt
+  loss_reson        String    @default("") @db.VarChar(255)
+  org_id            BigInt    @default(0)
+  warehouse_id      BigInt    @default(0)
+  dept_id           BigInt    @default(0)
+  loss_date         DateTime? @db.DateTime(0)
+  source_check_id   BigInt    @default(0)
+  loss_qty          Int       @default(0)
+  loss_total_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  go_where          Int       @default(-1) @db.TinyInt
+  status            Int       @default(0) @db.TinyInt
+  approve_status    Int       @default(0) @db.TinyInt
+  approve_comment   String    @default("") @db.VarChar(255)
+  approve_by        BigInt    @default(0)
+  approve_date      DateTime? @db.DateTime(0)
+  remark            String    @default("") @db.VarChar(255)
+  created_by        BigInt    @default(0)
+  updated_by        BigInt    @default(0)
+  created_at        DateTime? @default(now()) @db.DateTime(0)
+  updated_at        DateTime? @default(now()) @db.DateTime(0)
+  deleted_at        DateTime? @db.DateTime(0)
+
+  @@index([source_check_id, business_kind], map: "idx_inventory_loss_check_kind")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_loss_detail {
+  loss_detail_id BigInt    @id @default(autoincrement())
+  loss_id        BigInt    @default(0)
+  goods_id       BigInt    @default(0)
+  sku_id         BigInt    @default(0)
+  batch_no       String    @default("") @db.VarChar(50)
+  unit_type      Int       @default(0)
+  loss_qty       Int       @default(0)
+  loss_amount    Decimal   @default(0.00) @db.Decimal(10, 2)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([loss_id], map: "idx_loss_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_loss_output {
+  loss_id           BigInt    @id @default(autoincrement())
+  loss_no           String    @unique(map: "uk_loss_no") @default("") @db.VarChar(20)
+  loss_type         Int       @default(0) @db.TinyInt
+  loss_reson        String    @default("") @db.VarChar(255)
+  org_id            BigInt    @default(0)
+  warehouse_id      BigInt    @default(0)
+  dept_id           BigInt    @default(0)
+  loss_date         DateTime? @db.DateTime(0)
+  source_loss_id    BigInt    @default(0)
+  source_check_id   BigInt    @default(0)
+  loss_qty          Int       @default(0)
+  loss_total_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  status            Int       @default(0) @db.TinyInt
+  approve_status    Int       @default(0) @db.TinyInt
+  approve_comment   String    @default("") @db.VarChar(255)
+  approve_by        BigInt    @default(0)
+  approve_date      DateTime? @db.DateTime(0)
+  remark            String    @default("") @db.VarChar(255)
+  created_by        BigInt    @default(0)
+  updated_by        BigInt    @default(0)
+  created_at        DateTime? @default(now()) @db.DateTime(0)
+  updated_at        DateTime? @default(now()) @db.DateTime(0)
+  deleted_at        DateTime? @db.DateTime(0)
+
+  @@index([source_loss_id], map: "idx_inventory_loss_output_source")
+  @@index([source_check_id], map: "idx_inventory_loss_output_check")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_loss_output_detail {
+  loss_detail_id BigInt    @id @default(autoincrement())
+  loss_id        BigInt    @default(0)
+  goods_id       BigInt    @default(0)
+  sku_id         BigInt    @default(0)
+  batch_no       String?   @db.VarChar(255)
+  unit_type      Int       @default(0)
+  loss_qty       Int       @default(0)
+  loss_amount    Decimal   @default(0.00) @db.Decimal(10, 2)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([loss_id], map: "idx_loss_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_overflow {
+  overflow_id           BigInt    @id @default(autoincrement())
+  overflow_no           String    @unique(map: "uk_overflow_no") @default("") @db.VarChar(20)
+  overflow_type         Int       @default(0)
+  overflow_reson        String    @default("") @db.VarChar(255)
+  org_id                BigInt    @default(0)
+  warehouse_id          BigInt    @default(0)
+  dept_id               BigInt    @default(0)
+  overflow_date         DateTime? @db.DateTime(0)
+  source_check_id       BigInt    @default(0)
+  input_no              String?   @unique(map: "uk_inventory_overflow_input_no") @db.VarChar(20)
+  input_status          Int       @default(0) @db.TinyInt
+  input_by              BigInt    @default(0)
+  input_date            DateTime? @db.DateTime(0)
+  overflow_qty          Int       @default(0)
+  overflow_total_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  status                Int       @default(0) @db.TinyInt
+  approve_status        Int       @default(0) @db.TinyInt
+  approve_comment       String    @default("") @db.VarChar(255)
+  approve_by            BigInt    @default(0)
+  approve_date          DateTime? @db.DateTime(0)
+  remark                String    @default("") @db.VarChar(255)
+  created_by            BigInt    @default(0)
+  updated_by            BigInt    @default(0)
+  created_at            DateTime? @default(now()) @db.DateTime(0)
+  updated_at            DateTime? @default(now()) @db.DateTime(0)
+  deleted_at            DateTime? @db.DateTime(0)
+
+  @@index([source_check_id], map: "idx_inventory_overflow_check")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_overflow_detail {
+  id              BigInt    @id @default(autoincrement())
+  overflow_id     BigInt    @default(0)
+  goods_id        BigInt    @default(0)
+  sku_id          BigInt    @default(0)
+  batch_no        String    @default("") @db.VarChar(50)
+  unit_type       Int       @default(0)
+  overflow_qty    Int       @default(0)
+  overflow_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([overflow_id], map: "idx_overflow_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_total {
+  id               BigInt    @id @default(autoincrement())
+  goods_id         BigInt    @default(0)
+  sku_id           BigInt    @default(0)
+  unit_type        Int       @default(0)
+  input_qty        Int       @default(0)
+  output_qty       Int       @default(0)
+  inventory_qty    Int       @default(0)
+  inventory_amount Decimal   @default(0.00) @db.Decimal(12, 2)
+  org_id           BigInt    @default(0)
+  warehouse_id     BigInt    @default(0)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+
+  @@unique([org_id, warehouse_id, goods_id, sku_id], map: "uk_org_good_sku")
+  @@index([goods_id, sku_id], map: "idx_goods_batch")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_total_batch {
+  id               BigInt    @id @default(autoincrement())
+  goods_id         BigInt    @default(0)
+  sku_id           BigInt    @default(0)
+  batch_no         String    @default("") @db.VarChar(50)
+  unit_type        Int       @default(0)
+  input_qty        Int       @default(0)
+  output_qty       Int       @default(0)
+  inventory_qty    Int       @default(0)
+  inventory_amount Decimal   @default(0.00) @db.Decimal(12, 2)
+  org_id           BigInt    @default(0)
+  warehouse_id     BigInt    @default(0)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+
+  @@unique([goods_id, sku_id, warehouse_id, batch_no], map: "uk_goods_batch")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_total_detail {
+  id             BigInt    @id @default(autoincrement())
+  goods_id       BigInt    @default(0)
+  sku_id         BigInt    @default(0)
+  batch_no       String    @default("") @db.VarChar(50)
+  operation_type Int       @default(0)
+  operation_qty  Int       @default(0)
+  inventory_mode Int       @default(0) @db.TinyInt
+  source_id      BigInt    @default(0)
+  source_type    String    @default("") @db.VarChar(32)
+  source_no      String    @default("") @db.VarChar(30)
+  operation_by   BigInt    @default(0)
+  after_qty      Int       @default(0)
+  posting_key    String?   @unique(map: "uk_inventory_posting_key")
+  goods_code     String    @default("") @db.VarChar(30)
+  goods_name     String    @default("") @db.VarChar(100)
+  sku_spec       String    @default("") @db.VarChar(200)
+  org_name       String    @default("") @db.VarChar(100)
+  warehouse_name String    @default("") @db.VarChar(100)
+  unit_name      String    @default("") @db.VarChar(50)
+  remark         String    @default("") @db.VarChar(255)
+  org_id         BigInt    @default(0)
+  warehouse_id   BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([goods_id, sku_id], map: "idx_goods_sku")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_transfer {
+  transfer_id     BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  transfer_no     String    @unique(map: "uk_transfer_no") @default("") @db.VarChar(20)
+  transfer_date   DateTime? @db.DateTime(0)
+  transfer_reason String    @default("") @db.VarChar(255)
+  approve_status  Int       @default(0) @db.TinyInt
+  approve_comment String    @default("") @db.VarChar(255)
+  approve_by      BigInt    @default(0)
+  approve_date    DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  status          Int       @default(0) @db.TinyInt
+  send_by         BigInt    @default(0)
+  send_date       DateTime? @db.DateTime(0)
+  receive_by      BigInt    @default(0)
+  receive_date    DateTime? @db.DateTime(0)
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  to_org_id       BigInt    @default(0)
+  to_warehouse_id BigInt    @default(0)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_inventory_transfer_detail {
+  id           BigInt    @id @default(autoincrement())
+  transfer_id  BigInt    @default(0)
+  goods_id     BigInt    @default(0)
+  sku_id       BigInt    @default(0)
+  batch_no     String    @default("") @db.VarChar(50)
+  unit_type    Int       @default(0)
+  transfer_qty Int       @default(0)
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([transfer_id], map: "idx_transfer_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_bom {
+  bom_id       BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  bom_no       String    @unique(map: "uk_production_bom_no") @default("") @db.VarChar(30)
+  bom_name     String    @default("") @db.VarChar(100)
+  goods_id     BigInt    @default(0)
+  sku_id       BigInt    @default(0)
+  warehouse_id BigInt    @default(0)
+  org_id       BigInt    @default(0)
+  status       Int       @default(0) @db.TinyInt
+  sort         Int       @default(0)
+  remark       String    @default("") @db.VarChar(255)
+  created_by   Int       @default(0)
+  updated_by   Int       @default(0)
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+  deleted_at   DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_bom_detail {
+  id          BigInt  @id @default(autoincrement())
+  bom_id      BigInt  @default(0)
+  goods_id    BigInt  @default(0)
+  sku_id      BigInt  @default(0)
+  require_qty Int     @default(0)
+  unit_type   Int     @default(0)
+  remark      String  @default("") @db.VarChar(255)
+}
+
+model hspsi_production_material_out {
+  out_id       Int       @id @default(autoincrement())
+  out_no       String    @unique(map: "uk_production_material_out_no") @default("") @db.VarChar(30)
+  plan_id      BigInt?
+  warehouse_id Int?
+  org_id       Int?
+  out_date     DateTime? @db.DateTime(0)
+  out_type     Int       @default(1) @db.TinyInt
+  confirm_tag  Int       @default(0)
+  remark       String?   @db.VarChar(300)
+  created_by   Int?
+  created_date DateTime? @db.DateTime(0)
+  updated_by   Int?
+  updated_date DateTime? @db.DateTime(0)
+  deleted_at   DateTime? @db.DateTime(0)
+
+  @@index([confirm_tag], map: "idx_material_out_confirm")
+  @@index([plan_id], map: "idx_material_out_plan")
+  @@index([out_type], map: "idx_material_out_type")
+}
+
+model hspsi_production_material_out_detail {
+  serial_number Int      @id @default(autoincrement())
+  out_id        Int
+  goods_id      Int?
+  sku_id        Int?
+  unit_type     Int?
+  out_qty       Int?
+  batch_no      String   @default("") @db.VarChar(100)
+  remark        String   @default("") @db.VarChar(300)
+
+  @@index([out_id], map: "idx_material_out_detail_out")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_plan {
+  plan_id              BigInt    @id @default(autoincrement())
+  plan_no              String    @unique(map: "uk_production_plan_no") @default("") @db.VarChar(30)
+  org_id               BigInt    @default(0)
+  bom_id               BigInt    @default(0)
+  goods_id             BigInt    @default(0)
+  sku_id               BigInt    @default(0)
+  plan_qty             Int       @default(0)
+  plan_date            DateTime? @db.DateTime(0)
+  warehouse_id         BigInt    @default(0)
+  product_warehouse_id BigInt    @default(0)
+  plan_status          Int       @default(0) @db.TinyInt
+  material_status      Int       @default(0) @db.TinyInt
+  stock_check_status   Int       @default(0) @db.TinyInt
+  outbound_status      Int       @default(0) @db.TinyInt
+  delivered_qty        Int       @default(0)
+  source_type          String    @default("") @db.VarChar(30)
+  source_id            BigInt    @default(0)
+  approve_status       Int       @default(0) @db.TinyInt
+  approve_comment      String    @default("") @db.VarChar(255)
+  approve_by           BigInt    @default(0)
+  approve_date         DateTime? @db.DateTime(0)
+  remark               String    @default("") @db.VarChar(255)
+  created_by           Int       @default(0)
+  updated_by           Int       @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+
+  @@index([source_type, source_id], map: "idx_production_plan_source")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_plan_detail {
+  id           BigInt  @id @default(autoincrement())
+  plan_id      BigInt  @default(0)
+  bom_id       BigInt  @default(0)
+  goods_id     BigInt  @default(0)
+  sku_id       BigInt  @default(0)
+  bom_unit_qty Int     @default(0)
+  standard_qty Int     @default(0)
+  require_qty  Int     @default(0)
+  plan_out_qty Int     @default(0)
+  unit_type    Int     @default(0)
+  remark       String  @default("") @db.VarChar(255)
+
+  @@index([plan_id], map: "idx_plan_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_plan_input {
+  id              BigInt    @id @default(autoincrement())
+  input_no        String    @unique(map: "uk_production_input_no") @default("") @db.VarChar(30)
+  plan_id         BigInt    @default(0)
+  batch_no        String    @unique(map: "uk_batch_no") @default("") @db.VarChar(50)
+  org_id          BigInt    @default(0)
+  goods_id        BigInt    @default(0)
+  sku_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  input_date      DateTime? @db.DateTime(0)
+  fact_input_qty  Int       @default(0)
+  input_position  String    @default("") @db.VarChar(100)
+  validity_period DateTime? @db.DateTime(0)
+  product_date    DateTime? @db.DateTime(0)
+  remark          String?   @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([plan_id], map: "idx_plan_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_shortage {
+  shortage_id           BigInt    @id @default(autoincrement())
+  shortage_no           String    @default("") @db.VarChar(30)
+  plan_id               BigInt    @default(0)
+  pur_id                BigInt    @default(0)
+  goods_id              BigInt    @default(0)
+  sku_id                BigInt    @default(0)
+  unit_type             Int       @default(0)
+  require_qty           Int       @default(0)
+  fact_qty              Int       @default(0)
+  suggest_purchase_qty  Int       @default(0)
+  suggest_purchase_days Int       @default(0)
+  status                Int       @default(0) @db.TinyInt
+  created_by            BigInt    @default(0)
+  updated_by            BigInt    @default(0)
+  created_at            DateTime? @default(now()) @db.DateTime(0)
+  updated_at            DateTime? @default(now()) @db.DateTime(0)
+  deleted_at            DateTime? @db.DateTime(0)
+
+  @@index([plan_id], map: "idx_production_shortage_plan_id")
+  @@index([pur_id], map: "idx_production_shortage_pur_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_approve {
+  pur_id          BigInt    @id @default(autoincrement())
+  pur_no          String    @unique(map: "uk_purchase_approve_no") @db.VarChar(30)
+  org_id          BigInt
+  dept_id         BigInt
+  pur_reson       String    @db.VarChar(255)
+  source_type     String    @default("") @db.VarChar(30)
+  source_id       BigInt    @default(0)
+  warehouse_id    BigInt
+  status          Int       @default(1) @db.TinyInt
+  approve_status  Int       @db.TinyInt
+  approve_comment String    @db.VarChar(255)
+  approve_by      BigInt    @default(0)
+  approve_date    DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  updated_at      DateTime? @db.DateTime(0)
+  created_at      DateTime? @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([source_type, source_id], map: "idx_purchase_approve_source")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_approve_detail {
+  id                 BigInt  @id @default(autoincrement())
+  pur_id             BigInt  @default(0)
+  goods_id           BigInt  @default(0)
+  sku_id             BigInt  @default(0)
+  source_shortage_id BigInt  @default(0)
+  qty                Int     @default(0)
+  unit_type          Int     @default(0)
+  remark             String  @default("") @db.VarChar(255)
+  reference_price    Decimal @default(0.00) @db.Decimal(10, 2)
+
+  @@index([pur_id], map: "idx_pur_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order {
+  po_id             BigInt    @id @default(autoincrement())
+  po_no             String    @unique(map: "uk_purchase_order_no") @db.VarChar(30)
+  pur_id            BigInt
+  org_id            BigInt
+  warehouse_id      BigInt
+  dept_id           BigInt
+  receiver_id       BigInt
+  vendor_id         BigInt
+  pcs_qty           Int
+  arrival_type      Int       @db.UnsignedTinyInt
+  plan_arrival_date DateTime  @db.DateTime(0)
+  delivery_type     Int
+  delivery_no       String    @db.VarChar(255)
+  arrival_qty       Int
+  is_all_arrival    Int       @default(0) @db.TinyInt
+  pay_amout         Decimal   @db.Decimal(10, 2)
+  pay_type          Int       @default(0) @db.TinyInt
+  plan_pay_date     DateTime? @db.DateTime(0)
+  pay_amount_done   Decimal   @default(0.00) @db.Decimal(10, 2)
+  pay_status        Int       @default(0) @db.TinyInt
+  status            Int       @default(1) @db.TinyInt
+  approve_status    Int       @default(0) @db.TinyInt
+  approve_comment   String    @default("") @db.VarChar(255)
+  approve_by        BigInt    @default(0)
+  approve_date      DateTime? @db.DateTime(0)
+  remark            String?   @default("") @db.VarChar(255)
+  created_by        BigInt    @default(0)
+  updated_by        BigInt    @default(0)
+  created_at        DateTime? @db.DateTime(0)
+  updated_at        DateTime? @db.DateTime(0)
+  deleted_at        DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_detail {
+  id          BigInt  @id @default(autoincrement())
+  po_id       BigInt  @default(0)
+  goods_id    BigInt  @default(0)
+  sku_id      BigInt  @default(0)
+  qty         Int     @default(0)
+  actual_qty  Int     @default(0)
+  cancel_qty  Int     @default(0)
+  unit_type   Int     @default(0)
+  unit_price  Decimal @default(0.00) @db.Decimal(10, 2)
+  total_amout Decimal @default(0.00) @db.Decimal(10, 2)
+  remark      String  @db.VarChar(255)
+
+  @@index([po_id], map: "idx_po_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_input {
+  po_input_id     BigInt    @id @default(autoincrement())
+  po_input_no     String    @unique(map: "uk_purchase_input_no") @db.VarChar(30)
+  po_id           BigInt    @default(0)
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  dept_id         BigInt    @default(0)
+  input_type      Int       @default(0) @db.TinyInt
+  po_qty          Int       @default(0)
+  input_qty       Int       @default(0)
+  remark          String    @default("") @db.VarChar(255)
+  receiver_id     BigInt    @default(0)
+  comfirm_status  Int       @default(0) @db.TinyInt
+  comfirm_comment String    @default("") @db.VarChar(255)
+  posting_version Int       @default(0)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @db.DateTime(0)
+  updated_at      DateTime? @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_input_detail {
+  id              BigInt    @id @default(autoincrement())
+  po_input_id     BigInt    @default(0)
+  batch_no        String    @default("") @db.VarChar(50)
+  po_id           BigInt    @default(0)
+  goods_id        BigInt    @default(0)
+  sku_id          BigInt    @default(0)
+  po_qty          Int       @default(0)
+  input_qty       Int       @default(0)
+  unit_type       Int       @default(0)
+  input_position  String    @default("") @db.VarChar(255)
+  produce_period  DateTime? @db.DateTime(0)
+  validity_period DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  arrive_at       DateTime? @db.Date
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([batch_no], map: "idx_batch_no")
+  @@index([po_input_id, goods_id, sku_id], map: "idx_po_input_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_input_exit {
+  po_exit_id      BigInt    @id @default(autoincrement())
+  po_exit_no      String    @unique(map: "uk_purchase_exit_no") @db.VarChar(30)
+  po_input_id     BigInt    @default(0)
+  po_id           BigInt    @default(0)
+  exit_reson      String    @default("") @db.VarChar(255)
+  exit_date       DateTime? @db.Date
+  exit_type       Int       @default(0) @db.TinyInt
+  status          Boolean   @default(false)
+  approve_by      BigInt    @default(0)
+  approve_status  Int       @default(0) @db.TinyInt
+  approve_comment String    @default("") @db.VarChar(255)
+  approve_date    DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([po_input_id], map: "idx_po_input_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_input_exit_detail {
+  serial_number BigInt    @id @default(autoincrement())
+  po_exit_id    BigInt    @default(0)
+  po_input_id   BigInt    @default(0)
+  po_id         BigInt    @default(0)
+  goods_id      BigInt    @default(0)
+  sku_id        BigInt    @default(0)
+  batch_no      String    @default("") @db.VarChar(255)
+  unit_type     BigInt    @default(0)
+  po_qty        Int       @default(0)
+  input_qty     Int       @default(0)
+  exit_qty      Int       @default(0)
+  remark        String    @default("") @db.VarChar(255)
+  created_at    DateTime? @db.DateTime(0)
+  updated_at    DateTime? @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+
+  @@index([po_exit_id], map: "idx_po_exit_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_purchase_order_payment {
+  pay_id          BigInt    @id @default(autoincrement())
+  org_id          BigInt    @default(0)
+  dept_id         BigInt    @default(0)
+  pay_no          String    @unique(map: "uk_purchase_payment_no") @db.VarChar(30)
+  po_id           BigInt    @default(0)
+  pay_type        Int       @default(0) @db.TinyInt
+  fact_pay_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  pay_date        DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+model hspsi_purchase_refund {
+  refund_id         BigInt    @id @default(autoincrement())
+  refund_no         String    @unique(map: "uk_purchase_refund_no") @db.VarChar(30)
+  po_exit_id        BigInt    @unique(map: "uk_purchase_refund_return")
+  po_id             BigInt    @default(0)
+  po_input_id       BigInt    @default(0)
+  org_id            BigInt    @default(0)
+  dept_id           BigInt    @default(0)
+  vendor_id         BigInt    @default(0)
+  source_type       Int       @db.TinyInt
+  return_type       Int       @db.TinyInt
+  return_amount     Decimal   @default(0.00) @db.Decimal(18, 2)
+  refundable_amount Decimal   @default(0.00) @db.Decimal(18, 2)
+  refunded_amount   Decimal   @default(0.00) @db.Decimal(18, 2)
+  refund_status     Int       @db.TinyInt
+  remark            String    @default("") @db.VarChar(255)
+  created_by        BigInt    @default(0)
+  updated_by        BigInt    @default(0)
+  created_at        DateTime  @default(now()) @db.DateTime(0)
+  updated_at        DateTime  @default(now()) @db.DateTime(0)
+  deleted_at        DateTime? @db.DateTime(0)
+
+  @@index([po_id, refund_status, deleted_at], map: "idx_purchase_refund_order_status")
+  @@index([vendor_id, refund_status, deleted_at], map: "idx_purchase_refund_vendor_status")
+  @@index([created_at], map: "idx_purchase_refund_created")
+}
+
+model hspsi_purchase_refund_flow {
+  flow_id            BigInt    @id @default(autoincrement())
+  flow_no            String    @unique(map: "uk_purchase_refund_flow_no") @db.VarChar(30)
+  refund_id          BigInt
+  refund_amount      Decimal   @default(0.00) @db.Decimal(18, 2)
+  refund_channel     Int       @db.TinyInt
+  refund_date        DateTime  @db.DateTime(0)
+  supplier_serial_no String    @default("") @db.VarChar(80)
+  receive_account    String    @default("") @db.VarChar(120)
+  request_key        String    @unique(map: "uk_purchase_refund_request") @db.VarChar(80)
+  remark             String    @default("") @db.VarChar(255)
+  created_by         BigInt    @default(0)
+  updated_by         BigInt    @default(0)
+  created_at         DateTime  @default(now()) @db.DateTime(0)
+  updated_at         DateTime  @default(now()) @db.DateTime(0)
+  deleted_at         DateTime? @db.DateTime(0)
+
+  @@index([refund_id, deleted_at], map: "idx_purchase_refund_flow_task")
+  @@index([refund_date], map: "idx_purchase_refund_flow_date")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order {
+  so_id                BigInt    @id @default(autoincrement())
+  org_id               BigInt    @default(0)
+  warehouse_id         BigInt    @default(0)
+  so_no                String    @unique(map: "uk_so_no") @default("") @db.VarChar(20)
+  so_type              Int       @db.TinyInt
+  so_source            Int       @db.TinyInt
+  so_source_id         BigInt
+  business_source_type String    @default("") @db.VarChar(30)
+  business_source_id   BigInt    @default(0)
+  business_source_no   String    @default("") @db.VarChar(30)
+  so_property_type     Int       @db.TinyInt
+  customer_id          BigInt
+  customer_name        String    @db.VarChar(30)
+  customer_mobile      String    @db.VarChar(20)
+  customer_address     String    @db.VarChar(100)
+  order_date           DateTime? @db.DateTime(0)
+  sales_name           String    @db.VarChar(30)
+  sales_mobile         String    @db.VarChar(20)
+  so_qty               Int       @default(0)
+  so_amount            Decimal   @default(0.00) @db.Decimal(10, 2)
+  fact_amount          Decimal   @default(0.00) @db.Decimal(10, 2)
+  priceoff_amount      Decimal   @default(0.00) @db.Decimal(10, 2)
+  order_status         Int       @default(0) @db.TinyInt
+  delivery_status      Int       @default(0) @db.TinyInt
+  service_status       Int       @default(0) @db.TinyInt
+  shipper              String    @default("") @db.VarChar(30)
+  delivery_date        DateTime? @db.DateTime(0)
+  status               Int       @default(0) @db.UnsignedTinyInt
+  approve_status       Int       @default(0) @db.TinyInt
+  approve_comment      String    @default("") @db.VarChar(255)
+  approve_by           BigInt    @default(0)
+  approve_date         DateTime? @db.DateTime(0)
+  remark               String    @default("") @db.VarChar(255)
+  created_by           BigInt?   @default(0)
+  updated_by           BigInt?   @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_detail {
+  id               BigInt  @id @default(autoincrement())
+  so_id            BigInt  @default(0)
+  goods_id         BigInt  @default(0)
+  sku_id           BigInt  @default(0)
+  unit_type        Int     @default(0)
+  sale_qty         Int     @default(0)
+  sale_price       Decimal @default(0.00) @db.Decimal(10, 2)
+  sale_amount      Decimal @default(0.00) @db.Decimal(10, 2)
+  fact_sale_amount Decimal @default(0.00) @db.Decimal(10, 2)
+
+  @@index([so_id], map: "idx_so_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_exit {
+  so_exit_id       BigInt    @id @default(autoincrement())
+  so_exit_no       String    @unique(map: "uk_so_exit_no") @default("") @db.VarChar(20)
+  so_id            BigInt    @default(0)
+  source_output_id BigInt    @default(0)
+  exit_reson       String    @default("") @db.VarChar(255)
+  exit_qty         Int       @default(0)
+  disposal_type    Int       @default(1) @db.TinyInt
+  org_id           BigInt    @default(0)
+  warehouse_id     BigInt    @default(0)
+  exit_date        DateTime? @db.DateTime(0)
+  dept_id          BigInt    @default(0)
+  receiver_id      BigInt    @default(0)
+  customer_id      BigInt    @default(0)
+  customer_name    String    @default("") @db.VarChar(30)
+  customer_mobile  String    @default("") @db.VarChar(20)
+  customer_address String    @default("") @db.VarChar(100)
+  sales_name       String    @default("") @db.VarChar(30)
+  sales_mobile     String    @default("") @db.VarChar(20)
+  status           Boolean   @default(false)
+  comfirm_status   Int       @default(0) @db.TinyInt
+  comfirm_comment  String    @default("") @db.VarChar(255)
+  comfirm_by       BigInt    @default(0)
+  comfirm_date     DateTime? @db.DateTime(0)
+  posting_version  Int       @default(0)
+  remark           String    @default("") @db.VarChar(255)
+  created_by       BigInt    @default(0)
+  updated_by       BigInt    @default(0)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+
+  @@index([so_id], map: "idx_so_id")
+  @@index([source_output_id], map: "idx_sale_exit_source_output")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_exit_detail {
+  id         BigInt  @id @default(autoincrement())
+  so_exit_id BigInt  @default(0)
+  so_id      BigInt  @default(0)
+  goods_id   BigInt  @default(0)
+  sku_id     BigInt  @default(0)
+  batch_no   String  @default("") @db.VarChar(50)
+  unit_type  Int     @default(0)
+  so_qty     Int     @default(0)
+  exit_qty   Int     @default(0)
+  remark     String  @default("") @db.VarChar(255)
+
+  @@index([so_exit_id], map: "idx_so_exit_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_output {
+  so_output_id    BigInt    @id @default(autoincrement())
+  so_output_no    String    @unique(map: "uk_so_output_no") @default("") @db.VarChar(20)
+  so_id           BigInt    @default(0)
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  output_date     DateTime? @db.DateTime(0)
+  go_where        Int       @default(0) @db.TinyInt
+  dept_id         BigInt    @default(0)
+  receiver_id     BigInt    @default(0)
+  output_sku_qty  Int       @default(0)
+  status          Boolean   @default(false)
+  comfirm_status  Int       @default(0) @db.TinyInt
+  comfirm_comment String    @default("") @db.VarChar(255)
+  comfirm_by      BigInt    @default(0)
+  comfirm_date    DateTime? @db.DateTime(0)
+  posting_version Int       @default(0)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([so_id], map: "idx_so_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_output_detail {
+  id           BigInt  @id @default(autoincrement())
+  so_output_id BigInt  @default(0)
+  so_id        BigInt  @default(0)
+  goods_id     BigInt  @default(0)
+  sku_id       BigInt  @default(0)
+  batch_no     String  @default("") @db.VarChar(50)
+  unit_type    Int     @default(0)
+  sale_qty     Int     @default(0)
+  output_qty   Int     @default(0)
+
+  @@index([so_output_id], map: "idx_so_output_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sale_order_service {
+  service_id         BigInt    @id @default(autoincrement())
+  service_no         String    @unique(map: "uk_sale_service_no") @default("") @db.VarChar(30)
+  so_id              BigInt    @default(0)
+  customer_id        Int       @default(0)
+  goods_id           Int       @default(0)
+  sku_id             Int       @default(0)
+  event_type         Int       @default(0) @db.TinyInt
+  event_content      String    @default("") @db.VarChar(255)
+  event_status       Int       @default(0) @db.TinyInt
+  handler_id         BigInt    @default(0)
+  event_date         DateTime? @db.DateTime(0)
+  remark             String    @default("") @db.VarChar(255)
+  next_document_type String    @default("") @db.VarChar(30)
+  next_document_id   BigInt    @default(0)
+  next_document_no   String    @default("") @db.VarChar(30)
+  created_by         BigInt    @default(0)
+  updated_by         BigInt    @default(0)
+  created_at         DateTime? @default(now()) @db.DateTime(0)
+  updated_at         DateTime? @default(now()) @db.DateTime(0)
+  deleted_at         DateTime? @db.DateTime(0)
+
+  @@index([so_id], map: "idx_so_id")
+}
+
+model hspsi_sale_order_service_detail {
+  id               BigInt  @id @default(autoincrement())
+  service_id       BigInt  @default(0)
+  source_output_id BigInt  @default(0)
+  goods_id         BigInt  @default(0)
+  sku_id           BigInt  @default(0)
+  batch_no         String  @default("") @db.VarChar(50)
+  unit_type        Int     @default(0)
+  service_qty      Int     @default(0)
+  remark           String  @default("") @db.VarChar(255)
+
+  @@unique([service_id, source_output_id, goods_id, sku_id, batch_no], map: "uk_sale_service_detail_batch")
+  @@index([service_id], map: "idx_sale_service_detail_service")
+  @@index([source_output_id], map: "idx_sale_service_detail_output")
+}
+
+model hspsi_sales_order_payment {
+  pay_id          BigInt    @id @default(autoincrement())
+  org_id          BigInt    @default(0)
+  dept_id         BigInt    @default(0)
+  pay_no          String    @unique(map: "uk_sales_payment_pay_no") @default("") @db.VarChar(30)
+  so_id           BigInt    @default(0)
+  so_pay_type     Int       @default(0) @db.TinyInt
+  pay_mode        Int       @default(0) @db.TinyInt
+  fact_pay_amount Decimal   @default(0.00) @db.Decimal(10, 2)
+  pay_date        DateTime? @db.DateTime(0)
+  request_key     String    @unique(map: "uk_sales_payment_request_key") @default("") @db.VarChar(80)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([so_id, so_pay_type, deleted_at], map: "idx_sales_payment_order_type_deleted")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_dictionary {
+  dict_id      Int       @id @default(autoincrement())
+  dict_catg_id Int?
+  dict_name    String?   @db.VarChar(60)
+  dict_value   String?   @db.VarChar(100)
+  sort         Int?      @default(0)
+  remark       String?   @db.VarChar(255)
+  created_by   Int?
+  updated_by   Int?
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+  deleted_at   DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_dictionary_category {
+  dict_catg_id   Int       @id @default(autoincrement())
+  dict_catg_name String?   @default("") @db.VarChar(100)
+  dict_catg_code String?   @unique(map: "uk_dict_catg_code") @db.VarChar(32)
+  sort           Int?      @default(0)
+  remark         String?   @db.VarChar(255)
+  created_by     Int?
+  updated_by     Int?
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_flow_definition {
+  id                BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  org_id            BigInt    @default(0) @db.UnsignedBigInt
+  name              String    @default("") @db.VarChar(100)
+  business_type     String    @default("") @db.VarChar(50)
+  approve_type      Int?      @db.TinyInt
+  approve_target_id BigInt    @default(0) @db.UnsignedBigInt
+  status            Int       @default(1) @db.TinyInt
+  created_by        BigInt    @default(0) @db.UnsignedBigInt
+  updated_by        BigInt    @default(0) @db.UnsignedBigInt
+  created_at        DateTime? @default(now()) @db.DateTime(0)
+  updated_at        DateTime? @default(now()) @db.DateTime(0)
+  deleted_at        DateTime? @db.DateTime(0)
+
+  @@unique([org_id, business_type], map: "uk_organization_business")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_menu {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  parent_id  Int       @db.UnsignedInt
+  path       String    @db.VarChar(500)
+  name       String    @db.VarChar(50)
+  code       String    @db.VarChar(100)
+  icon       String?   @db.VarChar(50)
+  route      String?   @db.VarChar(200)
+  component  String?   @db.VarChar(255)
+  redirect   String?   @db.VarChar(255)
+  type       Int?      @default(1) @db.TinyInt
+  status     Int?      @default(1) @db.SmallInt
+  sort       Int?      @default(0) @db.UnsignedInt
+  remark     String?   @db.VarChar(255)
+  created_by Int?      @default(0)
+  updated_by Int?      @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_message {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  user_id    Int       @default(0) @db.UnsignedInt
+  notice_id  Int       @default(0) @db.UnsignedInt
+  is_read    Int       @default(0) @db.TinyInt
+  read_time  DateTime? @db.DateTime(0)
+  created_by Int?      @default(0) @db.UnsignedInt
+  updated_by Int?      @default(0) @db.UnsignedInt
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@index([user_id, is_read], map: "idx_user_read")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_notice {
+  id              Int       @id @default(autoincrement()) @db.UnsignedInt
+  organization_id Int       @default(0) @db.UnsignedInt
+  title           String    @default("") @db.VarChar(100)
+  content         String?   @db.MediumText
+  source_type     Int       @default(1) @db.TinyInt
+  level           Int?      @default(1) @db.TinyInt
+  status          Int?      @default(0) @db.TinyInt
+  publish_time    DateTime? @db.DateTime(0)
+  created_by      Int?      @default(0) @db.UnsignedInt
+  updated_by      Int?      @default(0) @db.UnsignedInt
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_notice_receiver {
+  id            Int       @id @default(autoincrement()) @db.UnsignedInt
+  notice_id     Int       @default(0) @db.UnsignedInt
+  receiver_type Int       @default(1) @db.TinyInt
+  receiver_ids  Json?
+  created_by    Int?      @default(0) @db.UnsignedInt
+  updated_by    Int?      @default(0) @db.UnsignedInt
+  created_at    DateTime? @default(now()) @db.DateTime(0)
+  updated_at    DateTime? @default(now()) @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+
+  @@index([notice_id], map: "idx_notice")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_oper_log {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  method        String    @db.VarChar(20)
+  router        String    @db.VarChar(500)
+  url           String?   @default("") @db.VarChar(255)
+  service_name  String?   @db.VarChar(30)
+  ip            String?   @db.VarChar(20)
+  request_data  String?   @db.Text
+  response_code String?   @db.VarChar(10)
+  response_data String?   @db.Text
+  created_by    Int?
+  updated_by    Int?
+  created_at    DateTime? @default(now()) @db.DateTime(0)
+  updated_at    DateTime? @default(now()) @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_role {
+  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name            String    @db.VarChar(50)
+  code            String    @unique(map: "uk_code") @db.VarChar(50)
+  status          Int?      @default(1) @db.TinyInt
+  data_scope_type Int       @default(1) @db.TinyInt
+  created_by      BigInt?   @default(0)
+  updated_by      BigInt?   @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_role_menu {
+  role_id BigInt @db.UnsignedBigInt
+  menu_id BigInt @db.UnsignedBigInt
+
+  @@id([role_id, menu_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_todo {
+  id              Int       @id @default(autoincrement()) @db.UnsignedInt
+  organization_id Int       @default(0) @db.UnsignedInt
+  user_id         Int       @default(0) @db.UnsignedInt
+  title           String    @default("") @db.VarChar(100)
+  content         String    @default("") @db.VarChar(500)
+  source_type     String?   @default("") @db.VarChar(32)
+  source_id       Int?      @default(0) @db.UnsignedInt
+  business_type   String?   @default("") @db.VarChar(50)
+  business_id     Int?      @default(0) @db.UnsignedInt
+  status          Int?      @default(0) @db.TinyInt
+  completed_time  DateTime? @db.DateTime(0)
+  created_by      Int?      @default(0) @db.UnsignedInt
+  updated_by      Int?      @default(0) @db.UnsignedInt
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([user_id, status], map: "idx_user_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_user {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  org_id     BigInt?   @db.UnsignedBigInt
+  dept_id    BigInt?   @db.UnsignedBigInt
+  username   String    @unique(map: "uk_username") @db.VarChar(50)
+  password   String    @db.VarChar(64)
+  nickname   String?   @db.VarChar(50)
+  phone      String?   @db.VarChar(20)
+  email      String?   @db.VarChar(100)
+  status     Int?      @default(1) @db.TinyInt
+  created_by BigInt?   @default(0)
+  updated_by BigInt?   @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@index([org_id], map: "idx_org_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_user_role {
+  user_id Int @db.UnsignedInt
+  role_id Int @db.UnsignedInt
+
+  @@id([user_id, role_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_production_out_plan {
+  out_plan_id        BigInt    @id @default(autoincrement())
+  out_plan_no        String    @unique(map: "uk_production_out_plan_no") @default("") @db.VarChar(30)
+  plan_id            BigInt
+  org_id             BigInt    @default(0)
+  warehouse_id       BigInt    @default(0)
+  out_type           Int       @default(1) @db.TinyInt
+  stock_check_status Int       @default(0) @db.TinyInt
+  status             Int       @default(0) @db.TinyInt
+  remark             String    @default("") @db.VarChar(255)
+  created_by         BigInt    @default(0)
+  updated_by         BigInt    @default(0)
+  created_at         DateTime? @default(now()) @db.DateTime(0)
+  updated_at         DateTime? @default(now()) @db.DateTime(0)
+  deleted_at         DateTime? @db.DateTime(0)
+
+  @@unique([plan_id, out_type], map: "uk_production_out_plan_source")
+  @@index([status], map: "idx_production_out_plan_status")
+}
+
+model hspsi_business_document_relation {
+  relation_id     BigInt    @id @default(autoincrement())
+  upstream_type   String    @db.VarChar(50)
+  upstream_id     BigInt
+  upstream_no     String    @default("") @db.VarChar(50)
+  downstream_type String    @db.VarChar(50)
+  downstream_id   BigInt
+  downstream_no   String    @default("") @db.VarChar(50)
+  relation_kind   String    @default("generated") @db.VarChar(30)
+  created_by      BigInt    @default(0)
+  created_at      DateTime  @default(now()) @db.DateTime(0)
+  updated_at      DateTime  @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@unique([upstream_type, upstream_id, downstream_type, downstream_id], name: "document_relation_key", map: "uk_business_document_relation")
+  @@index([upstream_type, upstream_id, deleted_at], map: "idx_business_document_upstream")
+  @@index([downstream_type, downstream_id, deleted_at], map: "idx_business_document_downstream")
+}

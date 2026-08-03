@@ -1,0 +1,27 @@
+/**
+ * 库存业务类型以系统数据字典 inventory_business_mode 为唯一标准。
+ * 禁止在业务服务中自行重新编号。
+ */
+export const INVENTORY_BUSINESS_MODE = {
+  PURCHASE_RECEIPT: 1,
+  PURCHASE_RETURN: 2,
+  SALES_OUTPUT: 3,
+  SALES_RETURN: 4,
+  REQUISITION_OR_PRODUCTION_OUTPUT: 5,
+  REQUISITION_RETURN: 6,
+  SHORTAGE_OUTPUT: 7,
+  OVERFLOW_INPUT: 8,
+  INVENTORY_ADJUSTMENT: 9,
+  DISCOUNT_SALES_OUTPUT: 10,
+  PRODUCTION_INPUT: 11,
+  INVENTORY_TRANSFER: 12,
+  DAMAGE_SCRAP_OUTPUT: 13,
+} as const;
+
+/** 生产出库状态以 production_outbound_status 数据字典为准。 */
+export const PRODUCTION_OUTBOUND_STATUS = {
+  NOT_STARTED: 0,
+  PENDING: 1,
+  COMPLETED: 2,
+  TERMINATED: 3,
+} as const;

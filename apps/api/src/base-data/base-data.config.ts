@@ -1,0 +1,161 @@
+export type FieldType = 'string' | 'number' | 'bigint' | 'date';
+export interface ResourceConfig {
+  model: string;
+  primaryKey: string;
+  keywordFields: string[];
+  fields: Record<string, { column: string; type: FieldType; required?: boolean }>;
+  labelField: string;
+  softDelete?: boolean;
+  auditFields?: boolean;
+}
+
+export const resourceConfigs: Record<string, ResourceConfig> = {
+  vendors: {
+    model: 'hspsi_basic_vendor',
+    primaryKey: 'vendor_id',
+    keywordFields: ['query_code', 'conpany_name', 'short_name', 'sale_contact', 'sale_tel'],
+    labelField: 'companyName',
+    fields: {
+      queryCode: { column: 'query_code', type: 'string' },
+      companyName: { column: 'conpany_name', type: 'string', required: true },
+      shortName: { column: 'short_name', type: 'string' },
+      saleContact: { column: 'sale_contact', type: 'string' },
+      saleTel: { column: 'sale_tel', type: 'string' },
+      saleEmail: { column: 'sale_email', type: 'string' },
+      serviceContact: { column: 'service_contact', type: 'string' },
+      serviceTel: { column: 'service_tel', type: 'string' },
+      address: { column: 'address', type: 'string' },
+      remark: { column: 'remark', type: 'string' },
+    },
+  },
+  customers: {
+    model: 'hspsi_basic_customer',
+    primaryKey: 'customer_id',
+    keywordFields: ['name', 'mobile', 'address'],
+    labelField: 'name',
+    fields: {
+      orgId: { column: 'org_id', type: 'bigint', required: true },
+      name: { column: 'name', type: 'string', required: true },
+      gender: { column: 'gender', type: 'number' },
+      birthday: { column: 'birthday', type: 'date' },
+      mobile: { column: 'mobile', type: 'string' },
+      address: { column: 'address', type: 'string' },
+      referrerName: { column: 'referrer_name', type: 'string' },
+      referrerMobile: { column: 'referrer_mobile', type: 'string' },
+      sourceType: { column: 'source_type', type: 'number' },
+      relatedCustomerId: { column: 'related_customer_id', type: 'bigint' },
+      status: { column: 'status', type: 'number' },
+      remark: { column: 'remark', type: 'string' },
+      sort: { column: 'sort', type: 'number' },
+    },
+  },
+  organizations: {
+    model: 'hspsi_basic_organization',
+    primaryKey: 'org_id',
+    keywordFields: ['org_no', 'name', 'short_name', 'contact_name', 'contact_phone'],
+    labelField: 'name',
+    fields: {
+      parentId: { column: 'parent_id', type: 'bigint' },
+      path: { column: 'path', type: 'string' },
+      orgNo: { column: 'org_no', type: 'string', required: true },
+      name: { column: 'name', type: 'string', required: true },
+      shortName: { column: 'short_name', type: 'string' },
+      contactName: { column: 'contact_name', type: 'string' },
+      contactPhone: { column: 'contact_phone', type: 'string' },
+      address: { column: 'address', type: 'string' },
+      sort: { column: 'sort', type: 'number' },
+      operationStatus: { column: 'operation_status', type: 'number' },
+      establishedAt: { column: 'established_at', type: 'date' },
+      remark: { column: 'remark', type: 'string' },
+    },
+  },
+  warehouses: {
+    model: 'hspsi_basic_warehouse',
+    primaryKey: 'warehouse_id',
+    keywordFields: ['name', 'address', 'manager_name', 'contact_phone'],
+    labelField: 'name',
+    fields: {
+      orgId: { column: 'org_id', type: 'bigint', required: true },
+      deptId: { column: 'dept_id', type: 'bigint' },
+      name: { column: 'name', type: 'string', required: true },
+      warehouseType: { column: 'warehouse_type', type: 'number', required: true },
+      address: { column: 'address', type: 'string' },
+      managerName: { column: 'manager_name', type: 'string' },
+      contactPhone: { column: 'contact_phone', type: 'string' },
+      status: { column: 'status', type: 'number' },
+      sort: { column: 'sort', type: 'number' },
+      remark: { column: 'remark', type: 'string' },
+    },
+  },
+  units: {
+    model: 'hspsi_basic_unit',
+    primaryKey: 'id',
+    keywordFields: ['name'],
+    labelField: 'name',
+    fields: {
+      name: { column: 'name', type: 'string', required: true },
+      sort: { column: 'sort', type: 'number' },
+      status: { column: 'status', type: 'number' },
+      remark: { column: 'remark', type: 'string' },
+    },
+  },
+  departments: {
+    model: 'hspsi_basic_dept',
+    primaryKey: 'dept_id',
+    keywordFields: ['name', 'dept_no'],
+    labelField: 'name',
+    fields: {
+      orgId: { column: 'org_id', type: 'bigint', required: true },
+      parentId: { column: 'parent_id', type: 'bigint' },
+      path: { column: 'path', type: 'string' },
+      name: { column: 'name', type: 'string', required: true },
+      deptNo: { column: 'dept_no', type: 'string' },
+      leaderId: { column: 'leader_id', type: 'bigint' },
+      sort: { column: 'sort', type: 'number' },
+      status: { column: 'status', type: 'number' },
+    },
+  },
+  positions: {
+    model: 'hspsi_basic_position',
+    primaryKey: 'id',
+    keywordFields: ['name', 'post_code'],
+    labelField: 'name',
+    fields: {
+      name: { column: 'name', type: 'string', required: true },
+      postCode: { column: 'post_code', type: 'string' },
+      status: { column: 'status', type: 'number' },
+      sort: { column: 'sort', type: 'number' },
+      remark: { column: 'remark', type: 'string' },
+    },
+  },
+  employees: {
+    model: 'hspsi_basic_staff',
+    primaryKey: 'id',
+    keywordFields: ['staff_code', 'name', 'mobile'],
+    labelField: 'name',
+    auditFields: false,
+    fields: {
+      postId: { column: 'post_id', type: 'bigint' },
+      staffCode: { column: 'staff_code', type: 'string' },
+      name: { column: 'name', type: 'string', required: true },
+      gender: { column: 'gender', type: 'number' },
+      status: { column: 'status', type: 'number' },
+      mobile: { column: 'mobile', type: 'string' },
+    },
+  },
+  users: {
+    model: 'hspsi_sys_user',
+    primaryKey: 'id',
+    keywordFields: ['username', 'nickname', 'phone'],
+    labelField: 'username',
+    fields: {
+      orgId: { column: 'org_id', type: 'bigint' },
+      deptId: { column: 'dept_id', type: 'bigint' },
+      username: { column: 'username', type: 'string', required: true },
+      nickname: { column: 'nickname', type: 'string' },
+      phone: { column: 'phone', type: 'string' },
+      email: { column: 'email', type: 'string' },
+      status: { column: 'status', type: 'number' },
+    },
+  },
+};

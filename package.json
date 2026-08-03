@@ -1,0 +1,33 @@
+{
+  "name": "hspsi",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @hspsi/api --filter @hspsi/web dev",
+    "dev:api": "pnpm --filter @hspsi/api dev",
+    "dev:web": "pnpm --filter @hspsi/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "format": "prettier --write \"**/*.{ts,vue,js,mjs,cjs,json,css,md,yaml,html}\"",
+    "format:check": "prettier --check \"**/*.{ts,vue,js,mjs,cjs,json,css,md,yaml,html}\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "db:pull": "pnpm --filter @hspsi/api prisma:pull",
+    "db:generate": "pnpm --filter @hspsi/api prisma:generate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.65.0",
+    "vue-eslint-parser": "^10.4.1"
+  }
+}
