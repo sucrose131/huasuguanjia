@@ -23,3 +23,8 @@ database/*
 .nvmrc
 .tmp/
 .env.docker
+.idea/
+.vscode/
+
+
+
