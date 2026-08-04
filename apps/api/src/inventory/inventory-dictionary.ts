@@ -16,6 +16,8 @@ export const INVENTORY_BUSINESS_MODE = {
   PRODUCTION_INPUT: 11,
   INVENTORY_TRANSFER: 12,
   DAMAGE_SCRAP_OUTPUT: 13,
+  GENERIC_INPUT: 14,
+  DIRECT_OUTPUT: 15,
 } as const;
 
 /** 生产出库状态以 production_outbound_status 数据字典为准。 */

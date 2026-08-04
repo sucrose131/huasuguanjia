@@ -15,7 +15,8 @@
     "seed:menus": "tsx src/scripts/seed-current-menus.ts",
     "backfill:purchase-refunds": "tsx src/scripts/backfill-purchase-refunds.ts",
     "verify:document-chain": "tsx src/scripts/verify-document-chain.ts",
-    "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts"
+    "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts",
+    "audit:inventory-pieces": "tsx src/scripts/audit-inventory-pieces.ts"
   },
   "dependencies": {
     "@nestjs/common": "11.1.28",

@@ -19,6 +19,7 @@ function createService(
       production as never,
       { enrich: vi.fn(async (items: unknown) => items) } as never,
       trace as never,
+      { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
     ),
     posting,
   };

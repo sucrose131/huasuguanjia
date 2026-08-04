@@ -6,13 +6,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../database/prisma.service';
 import { InventoryPostingService } from '../inventory/inventory-posting.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { ProductionService } from '../production/production.service';
 import { BusinessReferenceService } from '../database/business-reference.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import { BusinessNumberService } from '../business-number/business-number.service';
 type B = Record<string, any>;
 
 import {
@@ -40,6 +41,7 @@ export class SalesService {
     @Inject(ProductionService) private readonly production: ProductionService,
     @Inject(BusinessReferenceService) private readonly refs: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
   ) {}
   private d(v: any) {
     return new Prisma.Decimal(String(v ?? 0));
@@ -52,12 +54,6 @@ export class SalesService {
   }
   private pg(q: B) {
     return { page: Math.max(1, +q.page || 1), pageSize: Math.min(100, +q.pageSize || 20) };
-  }
-  private no(p: string, id: any) {
-    const head = `${p}${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
-      capacity = 20 - head.length,
-      encoded = BigInt(String(id)).toString(36).toUpperCase();
-    return `${head}${encoded.slice(-capacity).padStart(Math.min(4, capacity), '0')}`;
   }
   private lines(v: any) {
     if (!Array.isArray(v) || !v.length) throw new BadRequestException('至少一条商品明细');
@@ -720,16 +716,16 @@ export class SalesService {
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
+      const newOrderNo = id
+        ? ''
+        : await this.businessNumber.generate(
+            propertyType === 2 ? BUSINESS_PREFIX.DISCOUNT_SALES_ORDER : BUSINESS_PREFIX.SALES_ORDER,
+          );
       const h = id
         ? await t.hspsi_sale_order.update({ where: { so_id: BigInt(id) }, data })
         : await t.hspsi_sale_order.create({
-            data: { ...data, so_no: `TMP${Date.now()}`, created_by: BigInt(u) },
+            data: { ...data, so_no: newOrderNo, created_by: BigInt(u) },
           });
-      if (!id)
-        await t.hspsi_sale_order.update({
-          where: { so_id: h.so_id },
-          data: { so_no: this.no('SO', h.so_id) },
-        });
       await t.hspsi_sale_order_detail.deleteMany({ where: { so_id: h.so_id } });
       await t.hspsi_sale_order_detail.createMany({
         data: ls.map((line) => ({
@@ -815,9 +811,10 @@ export class SalesService {
     }
     let outputId: bigint | undefined, outputNo: string | undefined;
     if (outputLines.length) {
+      outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_OUTPUT);
       const output = await t.hspsi_sale_order_output.create({
         data: {
-          so_output_no: `TMP${Date.now()}`,
+          so_output_no: outputNo,
           so_id: order.so_id,
           org_id: order.org_id,
           warehouse_id: order.warehouse_id,
@@ -837,11 +834,6 @@ export class SalesService {
         },
       });
       outputId = output.so_output_id;
-      outputNo = this.no('SOO', output.so_output_id);
-      await t.hspsi_sale_order_output.update({
-        where: { so_output_id: output.so_output_id },
-        data: { so_output_no: outputNo },
-      });
       await t.hspsi_sale_order_output_detail.createMany({
         data: outputLines.map((line) => ({
           so_output_id: output.so_output_id,
@@ -1055,6 +1047,9 @@ export class SalesService {
         remark: `折价销售单 ${locked.so_no} 确认售出自动出库`,
         updated_by: BigInt(u),
       };
+      const newOutputNo = draft
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.DISCOUNT_SALES_OUTPUT);
       const output = draft
         ? await t.hspsi_sale_order_output.update({
             where: { so_output_id: draft.so_output_id },
@@ -1063,7 +1058,7 @@ export class SalesService {
         : await t.hspsi_sale_order_output.create({
             data: {
               ...outputData,
-              so_output_no: `TMP${Date.now()}`,
+              so_output_no: newOutputNo,
               comfirm_status: 0,
               comfirm_comment: '',
               comfirm_by: 0n,
@@ -1071,12 +1066,7 @@ export class SalesService {
               created_by: BigInt(u),
             },
           });
-      outputNo = draft ? output.so_output_no : this.no('DSO', output.so_output_id);
-      if (!draft)
-        await t.hspsi_sale_order_output.update({
-          where: { so_output_id: output.so_output_id },
-          data: { so_output_no: outputNo },
-        });
+      outputNo = output.so_output_no;
       await t.hspsi_sale_order_output_detail.deleteMany({
         where: { so_output_id: output.so_output_id },
       });
@@ -1746,6 +1736,15 @@ export class SalesService {
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
+      const newOutputNo = id
+        ? ''
+        : await this.businessNumber.generate(
+            isExchange
+              ? BUSINESS_PREFIX.SALES_EXCHANGE_OUTPUT
+              : isDiscount
+                ? BUSINESS_PREFIX.DISCOUNT_SALES_OUTPUT
+                : BUSINESS_PREFIX.SALES_OUTPUT,
+          );
       const h = id
         ? await t.hspsi_sale_order_output.update({
             where: { so_output_id: lockedOutput!.so_output_id },
@@ -1754,19 +1753,14 @@ export class SalesService {
         : await t.hspsi_sale_order_output.create({
             data: {
               ...data,
-              so_output_no: `TMP${Date.now()}`,
+              so_output_no: newOutputNo,
               comfirm_status: 0,
               comfirm_comment: '',
               comfirm_by: 0n,
               created_by: BigInt(u),
             },
           });
-      const businessNo = id ? h.so_output_no : this.no(isDiscount ? 'DSO' : 'SOO', h.so_output_id);
-      if (!id)
-        await t.hspsi_sale_order_output.update({
-          where: { so_output_id: h.so_output_id },
-          data: { so_output_no: businessNo },
-        });
+      const businessNo = h.so_output_no;
       await t.hspsi_sale_order_output_detail.deleteMany({
         where: { so_output_id: h.so_output_id },
       });
@@ -2238,6 +2232,9 @@ export class SalesService {
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
+      const newReturnNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
       const h = id
         ? await t.hspsi_sale_order_exit.update({
             where: { so_exit_id: lockedReturn!.so_exit_id },
@@ -2246,19 +2243,14 @@ export class SalesService {
         : await t.hspsi_sale_order_exit.create({
             data: {
               ...data,
-              so_exit_no: `TMP${Date.now()}`,
+              so_exit_no: newReturnNo,
               comfirm_status: 0,
               comfirm_comment: '',
               comfirm_by: 0n,
               created_by: BigInt(u),
             },
           });
-      const businessNo = id ? h.so_exit_no : this.no('SOR', h.so_exit_id);
-      if (!id)
-        await t.hspsi_sale_order_exit.update({
-          where: { so_exit_id: h.so_exit_id },
-          data: { so_exit_no: businessNo },
-        });
+      const businessNo = h.so_exit_no;
       await t.hspsi_sale_order_exit_detail.deleteMany({ where: { so_exit_id: h.so_exit_id } });
       await t.hspsi_sale_order_exit_detail.createMany({
         data: ls.map((l) => ({
@@ -2398,9 +2390,10 @@ export class SalesService {
       if (disposal === 2) {
         const created = [];
         for (const line of details) {
+          const no = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
           const service = await t.hspsi_sale_order_service.create({
             data: {
-              service_no: `TMP${Date.now()}${line.goods_id}`,
+              service_no: no,
               so_id: locked.so_id,
               customer_id: Number(order.customer_id),
               goods_id: Number(line.goods_id),
@@ -2417,11 +2410,6 @@ export class SalesService {
               created_by: BigInt(u),
               updated_by: BigInt(u),
             },
-          });
-          const no = this.no('AS', service.service_id);
-          await t.hspsi_sale_order_service.update({
-            where: { service_id: service.service_id },
-            data: { service_no: no },
           });
           created.push(service.service_id);
         }
@@ -2464,11 +2452,12 @@ export class SalesService {
                 Number(goods.find((g) => g.goods_id === line.goods_id)?.sale_price ?? 0),
             0,
           );
+          const no = await this.businessNumber.generate(BUSINESS_PREFIX.DISCOUNT_SALES_ORDER);
           const order2 = await t.hspsi_sale_order.create({
             data: {
               org_id: locked.org_id,
               warehouse_id: locked.warehouse_id,
-              so_no: `TMP${Date.now()}`,
+              so_no: no,
               so_type: 1,
               so_source: 4,
               so_source_id: exitId,
@@ -2497,8 +2486,6 @@ export class SalesService {
               updated_by: BigInt(u),
             },
           });
-          const no = this.no('DS', order2.so_id);
-          await t.hspsi_sale_order.update({ where: { so_id: order2.so_id }, data: { so_no: no } });
           const grouped = new Map<string, B>();
           for (const line of details) {
             const key = `${line.goods_id}:${line.sku_id}`,
@@ -2543,9 +2530,10 @@ export class SalesService {
           successor = { successorType: 'discount_order', successorId: order2.so_id };
         }
       } else if (disposal === 4) {
+        const no = await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_DAMAGE_OUTPUT);
         const loss = await t.hspsi_inventory_loss.create({
           data: {
-            loss_no: `TMP${Date.now()}`,
+            loss_no: no,
             business_kind: 2,
             loss_type: 1,
             loss_reson: `销售退货单 ${locked.so_exit_no} 返库后报废`,
@@ -2563,11 +2551,6 @@ export class SalesService {
             created_by: BigInt(u),
             updated_by: BigInt(u),
           },
-        });
-        const no = this.no('IL', loss.loss_id);
-        await t.hspsi_inventory_loss.update({
-          where: { loss_id: loss.loss_id },
-          data: { loss_no: no },
         });
         await t.hspsi_inventory_loss_detail.createMany({
           data: details.map((line) => ({
@@ -2879,11 +2862,14 @@ export class SalesService {
           throw new BadRequestException('当前净收款加本次收款不能超过订单实际金额');
         if (type === 2 && refunded.plus(amount).greaterThan(received))
           throw new BadRequestException('累计退款不能超过累计收款');
+        const businessNo = await this.businessNumber.generate(
+          type === 1 ? BUSINESS_PREFIX.SALES_RECEIPT : BUSINESS_PREFIX.SALES_REFUND,
+        );
         const h = await t.hspsi_sales_order_payment.create({
           data: {
             org_id: order.org_id,
             dept_id: deptId,
-            pay_no: `TMP${randomUUID().replaceAll('-', '').slice(0, 27)}`,
+            pay_no: businessNo,
             so_id: order.so_id,
             so_pay_type: type,
             pay_mode: paymentMode,
@@ -2894,11 +2880,6 @@ export class SalesService {
             created_by: BigInt(u),
             updated_by: BigInt(u),
           },
-        });
-        const businessNo = this.no('PV', h.pay_id);
-        await t.hspsi_sales_order_payment.update({
-          where: { pay_id: h.pay_id },
-          data: { pay_no: businessNo },
         });
         await this.documentTrace.link(
           {
@@ -2993,7 +2974,7 @@ export class SalesService {
         return {
           ...i,
           id: i.service_id,
-          serviceNo: i.service_no || this.no('AS', i.service_id),
+          serviceNo: i.service_no,
           orderId: i.so_id,
           orderNo: order?.so_no ?? '',
           customerName: order?.customer_name ?? '',
@@ -3325,19 +3306,17 @@ export class SalesService {
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
+      const newServiceNo = existing
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
       const h = existing
         ? await t.hspsi_sale_order_service.update({
             where: { service_id: existing.service_id },
             data,
           })
         : await t.hspsi_sale_order_service.create({
-            data: { ...data, service_no: `TMP${Date.now()}`, created_by: BigInt(u) },
+            data: { ...data, service_no: newServiceNo, created_by: BigInt(u) },
           });
-      if (!existing)
-        await t.hspsi_sale_order_service.update({
-          where: { service_id: h.service_id },
-          data: { service_no: this.no('AS', h.service_id) },
-        });
       await t.hspsi_sale_order_service_detail.deleteMany({ where: { service_id: h.service_id } });
       if (requiresGoodsReturn)
         await t.hspsi_sale_order_service_detail.createMany({
@@ -3493,9 +3472,10 @@ export class SalesService {
       }
 
       const quantity = returnLines.reduce((sum, line) => sum + line.quantity, 0);
+      const no = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
       const exit = await t.hspsi_sale_order_exit.create({
         data: {
-          so_exit_no: `TMP${Date.now()}`,
+          so_exit_no: no,
           so_id: order.so_id,
           source_output_id: sourceHead.so_output_id,
           exit_reson: `售后事件 ${id} 自动退货`,
@@ -3519,11 +3499,6 @@ export class SalesService {
           created_by: BigInt(u),
           updated_by: BigInt(u),
         },
-      });
-      const no = this.no('SOR', exit.so_exit_id);
-      await t.hspsi_sale_order_exit.update({
-        where: { so_exit_id: exit.so_exit_id },
-        data: { so_exit_no: no },
       });
       await t.hspsi_sale_order_exit_detail.createMany({
         data: returnLines.map((line) => ({
@@ -3584,9 +3559,12 @@ export class SalesService {
         },
       });
       if (service.event_type === 5) {
+        const exchangeNo = await this.businessNumber.generate(
+          BUSINESS_PREFIX.SALES_EXCHANGE_OUTPUT,
+        );
         const exchange = await t.hspsi_sale_order_output.create({
           data: {
-            so_output_no: `TMP${Date.now()}`,
+            so_output_no: exchangeNo,
             so_id: order.so_id,
             org_id: order.org_id,
             warehouse_id: sourceHead.warehouse_id,
@@ -3605,11 +3583,6 @@ export class SalesService {
             created_by: BigInt(u),
             updated_by: BigInt(u),
           },
-        });
-        const exchangeNo = this.no('EXO', exchange.so_output_id);
-        await t.hspsi_sale_order_output.update({
-          where: { so_output_id: exchange.so_output_id },
-          data: { so_output_no: exchangeNo },
         });
         await t.hspsi_sale_order_output_detail.createMany({
           data: returnLines.map((line) => ({

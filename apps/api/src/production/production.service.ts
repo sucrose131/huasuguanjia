@@ -9,6 +9,8 @@ import {
 } from '../inventory/inventory-dictionary';
 import { BusinessReferenceService } from '../database/business-reference.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import { BusinessNumberService } from '../business-number/business-number.service';
 type B = Record<string, any>;
 const PRODUCTION_PLAN_STATUS = {
   DRAFT: 0,
@@ -28,6 +30,7 @@ export class ProductionService {
     @Inject(InventoryAlertService) private readonly inventoryAlerts: InventoryAlertService,
     @Inject(BusinessReferenceService) private readonly refs: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
   ) {}
   private d(v: any) {
     return new Prisma.Decimal(String(v ?? 0));
@@ -40,9 +43,6 @@ export class ProductionService {
   }
   private pg(q: B) {
     return { page: Math.max(1, +q.page || 1), pageSize: Math.min(100, +q.pageSize || 20) };
-  }
-  private no(p: string, id: any) {
-    return `${p}${new Date().toISOString().slice(0, 10).replaceAll('-', '')}${String(id).padStart(4, '0')}`;
   }
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.p.$transaction(callback, {
@@ -85,9 +85,10 @@ export class ProductionService {
     const goods = await t.hspsi_goods_info.findMany({
       where: { goods_id: { in: shortages.map((item) => item.goods_id) } },
     });
+    const purNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_APPLICATION);
     const application = await t.hspsi_purchase_approve.create({
       data: {
-        pur_no: `TMP${Date.now()}`,
+        pur_no: purNo,
         org_id: plan.org_id,
         dept_id: fallbackDept.dept_id,
         pur_reson: `生产计划 ${plan.plan_no} 缺料采购`,
@@ -103,11 +104,6 @@ export class ProductionService {
         created_at: new Date(),
         updated_at: new Date(),
       },
-    });
-    const purNo = `PA${application.pur_id}`;
-    await t.hspsi_purchase_approve.update({
-      where: { pur_id: application.pur_id },
-      data: { pur_no: purNo },
     });
     await t.hspsi_purchase_approve_detail.createMany({
       data: shortages.map((item) => ({
@@ -533,16 +529,12 @@ export class ProductionService {
         remark: String(b.remark ?? ''),
         updated_by: Number(u),
       };
+      const newBomNo = id ? '' : await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_BOM);
       const h = id
         ? await t.hspsi_production_bom.update({ where: { bom_id: BigInt(id) }, data })
         : await t.hspsi_production_bom.create({
-            data: { ...data, bom_no: `TMP${Date.now()}`, created_by: Number(u) },
+            data: { ...data, bom_no: newBomNo, created_by: Number(u) },
           });
-      if (!id)
-        await t.hspsi_production_bom.update({
-          where: { bom_id: h.bom_id },
-          data: { bom_no: this.no('BOM', h.bom_id) },
-        });
       await t.hspsi_production_bom_detail.deleteMany({ where: { bom_id: h.bom_id } });
       await t.hspsi_production_bom_detail.createMany({
         data: b.details.map((x: B) => ({
@@ -755,9 +747,10 @@ export class ProductionService {
       BigInt(b.productWarehouseId ?? 0) !== capacity.order.warehouse_id
     )
       throw new BadRequestException('生产计划组织和成品仓库必须与关联销售订单一致');
+    const planNo = await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_PLAN);
     const plan = await t.hspsi_production_plan.create({
       data: {
-        plan_no: `TMP${Date.now()}${String(sourceId).slice(-6)}`,
+        plan_no: planNo,
         org_id: capacity.order.org_id,
         bom_id: bomId,
         goods_id: bom.goods_id,
@@ -780,11 +773,6 @@ export class ProductionService {
         created_by: Number(u),
         updated_by: Number(u),
       },
-    });
-    const planNo = this.no('PP', plan.plan_id);
-    await t.hspsi_production_plan.update({
-      where: { plan_id: plan.plan_id },
-      data: { plan_no: planNo },
     });
     await this.documentTrace.link(
       {
@@ -827,9 +815,10 @@ export class ProductionService {
       });
       if (fact < standard) {
         shortage = true;
+        const shortageNo = await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_SHORTAGE);
         const item = await t.hspsi_production_shortage.create({
           data: {
-            shortage_no: `TMP${Date.now()}${line.goods_id}`,
+            shortage_no: shortageNo,
             plan_id: plan.plan_id,
             goods_id: line.goods_id,
             sku_id: line.sku_id,
@@ -841,11 +830,6 @@ export class ProductionService {
             created_by: BigInt(u),
             updated_by: BigInt(u),
           },
-        });
-        const shortageNo = this.no('PS', item.shortage_id);
-        await t.hspsi_production_shortage.update({
-          where: { shortage_id: item.shortage_id },
-          data: { shortage_no: shortageNo },
         });
         await this.documentTrace.link(
           {
@@ -956,17 +940,15 @@ export class ProductionService {
           select: { shortage_id: true },
         });
       }
+      const newPlanNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_PLAN);
       const h = id
         ? await t.hspsi_production_plan.update({ where: { plan_id: BigInt(id) }, data: base })
         : await t.hspsi_production_plan.create({
-            data: { ...base, plan_no: `TMP${Date.now()}`, created_by: Number(u) },
+            data: { ...base, plan_no: newPlanNo, created_by: Number(u) },
           });
-      const planNo = id ? h.plan_no : this.no('PP', h.plan_id);
-      if (!id)
-        await t.hspsi_production_plan.update({
-          where: { plan_id: h.plan_id },
-          data: { plan_no: planNo },
-        });
+      const planNo = h.plan_no;
       for (const shortage of replacedShortages)
         await this.documentTrace.removeForDocument('production_shortage', shortage.shortage_id, t);
       await t.hspsi_production_plan_detail.deleteMany({ where: { plan_id: h.plan_id } });
@@ -1000,9 +982,12 @@ export class ProductionService {
         });
         if (fact < standard) {
           shortage = true;
-          const item = await t.hspsi_production_shortage.create({
+          const shortageNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.PRODUCTION_SHORTAGE,
+          );
+          await t.hspsi_production_shortage.create({
             data: {
-              shortage_no: `TMP${Date.now()}${line.goodsId}`,
+              shortage_no: shortageNo,
               plan_id: h.plan_id,
               goods_id: BigInt(line.goodsId),
               sku_id: BigInt(line.skuId),
@@ -1014,10 +999,6 @@ export class ProductionService {
               created_by: BigInt(u),
               updated_by: BigInt(u),
             },
-          });
-          await t.hspsi_production_shortage.update({
-            where: { shortage_id: item.shortage_id },
-            data: { shortage_no: this.no('PS', item.shortage_id) },
           });
         }
       }
@@ -1157,9 +1138,12 @@ export class ProductionService {
         const fact = Number(stock._sum.inventory_qty ?? 0),
           required = Number(line.standard_qty);
         if (fact + 0.000001 < required) {
+          const shortageNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.PRODUCTION_SHORTAGE,
+          );
           const shortage = await t.hspsi_production_shortage.create({
             data: {
-              shortage_no: `TMP${Date.now()}${line.goods_id}`,
+              shortage_no: shortageNo,
               plan_id: planId,
               goods_id: line.goods_id,
               sku_id: line.sku_id,
@@ -1171,11 +1155,6 @@ export class ProductionService {
               created_by: BigInt(u),
               updated_by: BigInt(u),
             },
-          });
-          const shortageNo = this.no('PS', shortage.shortage_id);
-          await t.hspsi_production_shortage.update({
-            where: { shortage_id: shortage.shortage_id },
-            data: { shortage_no: shortageNo },
           });
           await this.documentTrace.link(
             {
@@ -1578,9 +1557,12 @@ export class ProductionService {
       isLab = outType === 3;
     if (isLab) {
       const id = await this.p.$transaction(async (t) => {
+        const outNo = await this.businessNumber.generate(
+          BUSINESS_PREFIX.PRODUCTION_MATERIAL_OUTPUT,
+        );
         const h = await t.hspsi_production_material_out.create({
           data: {
-            out_no: `TMP${Date.now()}`,
+            out_no: outNo,
             warehouse_id: Number(b.warehouseId),
             org_id: Number(b.orgId ?? 1),
             out_date: new Date(b.outDate ?? Date.now()),
@@ -1592,10 +1574,6 @@ export class ProductionService {
             updated_by: Number(u),
             updated_date: new Date(),
           },
-        });
-        await t.hspsi_production_material_out.update({
-          where: { out_id: h.out_id },
-          data: { out_no: this.no('PMO', h.out_id) },
         });
         await t.hspsi_production_material_out_detail.createMany({
           data: b.details.map((l: B) => ({
@@ -1638,9 +1616,10 @@ export class ProductionService {
       } else if (plan.outbound_status !== PRODUCTION_OUTBOUND_STATUS.COMPLETED) {
         throw new BadRequestException('正式BOM尚未确认出库，不能临时补料');
       }
+      const outNo = await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_MATERIAL_OUTPUT);
       const h = await t.hspsi_production_material_out.create({
         data: {
-          out_no: `TMP${Date.now()}`,
+          out_no: outNo,
           plan_id: plan.plan_id,
           warehouse_id: Number(plan.warehouse_id),
           org_id: Number(plan.org_id),
@@ -1653,11 +1632,6 @@ export class ProductionService {
           updated_by: Number(u),
           updated_date: new Date(),
         },
-      });
-      const outNo = this.no('PMO', h.out_id);
-      await t.hspsi_production_material_out.update({
-        where: { out_id: h.out_id },
-        data: { out_no: outNo },
       });
       await t.hspsi_production_material_out_detail.createMany({
         data: b.details.map((l: B) => ({
@@ -1932,9 +1906,10 @@ export class ProductionService {
         where: { warehouse_id: warehouseId, org_id: plan.org_id, status: 1, deleted_at: null },
       });
       if (!warehouse) throw new BadRequestException('成品仓库不属于计划组织或已停用');
+      const no = await this.businessNumber.generate(BUSINESS_PREFIX.PRODUCTION_PRODUCT_INPUT);
       const h = await t.hspsi_production_plan_input.create({
         data: {
-          input_no: `TMP${Date.now()}`,
+          input_no: no,
           plan_id: plan.plan_id,
           batch_no: String(b.batchNo),
           org_id: plan.org_id,
@@ -1951,8 +1926,6 @@ export class ProductionService {
           updated_by: BigInt(u),
         },
       });
-      const no = this.no('PPI', h.id);
-      await t.hspsi_production_plan_input.update({ where: { id: h.id }, data: { input_no: no } });
       await this.documentTrace.link(
         {
           upstreamType: 'production_plan',
@@ -2182,9 +2155,12 @@ export class ProductionService {
           standard = Number(line.standardQty);
         if (fact < standard) {
           shortage = true;
+          const shortageNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.PRODUCTION_SHORTAGE,
+          );
           const item = await t.hspsi_production_shortage.create({
             data: {
-              shortage_no: `TMP${Date.now()}${line.goodsId}`,
+              shortage_no: shortageNo,
               plan_id: BigInt(id),
               goods_id: BigInt(line.goodsId),
               sku_id: BigInt(line.skuId),
@@ -2196,11 +2172,6 @@ export class ProductionService {
               created_by: BigInt(u),
               updated_by: BigInt(u),
             },
-          });
-          const shortageNo = this.no('PS', item.shortage_id);
-          await t.hspsi_production_shortage.update({
-            where: { shortage_id: item.shortage_id },
-            data: { shortage_no: shortageNo },
           });
           await this.documentTrace.link(
             {

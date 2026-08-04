@@ -11,12 +11,17 @@ function serviceWith(
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
+    { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
   );
 }
 
 describe('PurchaseService production-shortage guards', () => {
   it('creates one pending purchase-refund task for an effective paid return', async () => {
-    const refundCreate = vi.fn().mockResolvedValue({ refund_id: 77n, po_exit_id: 30n });
+    const refundCreate = vi.fn().mockResolvedValue({
+      refund_id: 77n,
+      po_exit_id: 30n,
+      refund_no: 'PRF20260804000001',
+    });
     const refundUpdate = vi.fn().mockResolvedValue({ refund_id: 77n, refund_no: 'CGTK77' });
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const tx = {
@@ -77,9 +82,8 @@ describe('PurchaseService production-shortage guards', () => {
     const created = refundCreate.mock.calls[0]![0].data;
     expect(Number(created.return_amount)).toBe(30);
     expect(Number(created.refundable_amount)).toBe(30);
-    expect(refundUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { refund_no: 'CGTK77' } }),
-    );
+    expect(created.refund_no).toBe('PRF20260804000001');
+    expect(refundUpdate).not.toHaveBeenCalled();
     expect(trace.link).toHaveBeenCalledWith(
       expect.objectContaining({
         upstreamType: 'purchase_return',
@@ -87,7 +91,7 @@ describe('PurchaseService production-shortage guards', () => {
       }),
       tx,
     );
-    expect(result.refund_no).toBe('CGTK77');
+    expect(result.refund_no).toBe('PRF20260804000001');
   });
 
   it('does not create a refund task when payment does not exceed the effective payable', async () => {
@@ -584,7 +588,7 @@ describe('PurchaseService production-shortage guards', () => {
 
   it('starts a direct order and creates an already-approved reverse application', async () => {
     const orderUpdate = vi.fn();
-    const applicationCreate = vi.fn();
+    const applicationCreate = vi.fn().mockResolvedValue({ pur_id: 7n });
     const applicationDetailCreate = vi.fn();
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const tx = {
@@ -657,7 +661,7 @@ describe('PurchaseService production-shortage guards', () => {
   });
 
   it('backfills the department for a production shortage application and creates a pending-purchase order', async () => {
-    const orderCreate = vi.fn();
+    const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const applicationLines = [
       { goods_id: 10n, sku_id: 11n, qty: 2, unit_type: 1, reference_price: 5, remark: '' },
@@ -717,7 +721,7 @@ describe('PurchaseService production-shortage guards', () => {
   });
 
   it('treats an empty plan payment date placeholder as no date when saving an order', async () => {
-    const orderCreate = vi.fn();
+    const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
     const tx = {
       hspsi_basic_organization: { findFirst: vi.fn().mockResolvedValue({ org_id: 1n }) },
       hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ org_id: 1n }) },
@@ -793,7 +797,7 @@ describe('PurchaseService production-shortage guards', () => {
           .fn()
           .mockResolvedValue([{ goods_catg_id: 30n, goods_name: '成品', warehouse_type: 1 }]),
       },
-      hspsi_purchase_order: { create: vi.fn() },
+      hspsi_purchase_order: { create: vi.fn().mockResolvedValue({ po_id: 30n }) },
       hspsi_purchase_order_detail: { deleteMany: vi.fn(), createMany: vi.fn() },
       hspsi_purchase_order_payment: { create: paymentCreate },
       hspsi_sys_dictionary_category: { findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1 }) },

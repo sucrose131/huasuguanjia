@@ -126,6 +126,8 @@ const structure = [
     sort: 50,
     children: [
       ['库存查询', 'inventory:stocks', '/inventory/stocks'],
+      ['通用入库单', 'inventory:general-inputs', '/inventory/general-inputs'],
+      ['通用出库单', 'inventory:general-outputs', '/inventory/general-outputs'],
       ['库存调拨单', 'inventory:transfers', '/inventory/transfers'],
       ['库存调整记录', 'inventory:adjustments', '/inventory/adjustments'],
       ['报损出库单', 'inventory:losses', '/inventory/losses'],
