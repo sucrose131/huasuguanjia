@@ -124,7 +124,9 @@ const differenceClass = (column: InventoryCheckColumn, row: Row) => {
             >审核通过</el-button
           >
           <template #more>
+            <!-- 暂时隐藏“业务链路”入口，保留底层查询能力以便后续恢复。
             <el-dropdown-item @click="emit('trace', row)">查看业务链路</el-dropdown-item>
+            -->
             <el-dropdown-item
               v-if="props.canApprove(row)"
               class="table-action-danger"

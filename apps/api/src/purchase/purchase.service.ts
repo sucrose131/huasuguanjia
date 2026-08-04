@@ -11,6 +11,8 @@ import { InventoryPostingService } from '../inventory/inventory-posting.service'
 import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
+import { BusinessNumberService } from '../business-number/business-number.service';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
@@ -21,14 +23,12 @@ export class PurchaseService {
     @Inject(InventoryPostingService) private inventoryPosting: InventoryPostingService,
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private businessNumber: BusinessNumberService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
       isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
     });
-  }
-  private id() {
-    return BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
   }
   private paging(query: Body) {
     return {
@@ -387,6 +387,8 @@ export class PurchaseService {
     }
     const refundStatus = 0;
     await this.assertDictionaryValue(tx, 'purchase_refund_status', refundStatus, '采购退款状态');
+    const refundNo =
+      existing?.refund_no || (await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_REFUND));
     const task = existing
       ? await tx.hspsi_purchase_refund.update({
           where: { refund_id: existing.refund_id },
@@ -410,7 +412,7 @@ export class PurchaseService {
         })
       : await tx.hspsi_purchase_refund.create({
           data: {
-            refund_no: `TMP${Date.now()}`,
+            refund_no: refundNo,
             po_exit_id: exitId,
             po_id: sourceReturn.po_id,
             po_input_id: sourceReturn.po_input_id,
@@ -430,11 +432,6 @@ export class PurchaseService {
             updated_at: new Date(),
           },
         });
-    const refundNo = `CGTK${task.refund_id}`;
-    const saved = await tx.hspsi_purchase_refund.update({
-      where: { refund_id: task.refund_id },
-      data: { refund_no: refundNo },
-    });
     await this.recalcPayment(tx, sourceReturn.po_id);
     await this.documentTrace.link(
       {
@@ -442,14 +439,14 @@ export class PurchaseService {
         upstreamId: sourceReturn.po_exit_id,
         upstreamNo: sourceReturn.po_exit_no,
         downstreamType: 'purchase_refund',
-        downstreamId: saved.refund_id,
+        downstreamId: task.refund_id,
         downstreamNo: refundNo,
         relationKind: 'refund_task',
         createdBy: userId,
       },
       tx,
     );
-    return saved;
+    return task;
   }
   private async syncProductionShortageState(
     tx: Prisma.TransactionClient,
@@ -747,7 +744,8 @@ export class PurchaseService {
   }
   async saveApplication(id: string | null, body: Body, userId: string, submit = false) {
     const lines = this.details(body.details);
-    const purId = id ? BigInt(id) : this.id();
+    let purId = id ? BigInt(id) : 0n;
+    let businessNo = '';
     for (const line of lines) this.quantity(line.quantity, '采购申请数量');
     const data = {
       org_id: BigInt(String(body.orgId)),
@@ -770,6 +768,7 @@ export class PurchaseService {
           where: { pur_id: purId, deleted_at: null },
         });
         if (!existing) throw new NotFoundException('采购申请不存在');
+        businessNo = existing.pur_no;
         if (existing.source_type === 'production_plan')
           throw new BadRequestException('生产缺料采购申请由系统生成，不允许手工编辑');
         if (!([0, 2].includes(Number(existing.status)) || Number(existing.approve_status) === 2))
@@ -780,15 +779,16 @@ export class PurchaseService {
       } else {
         await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
         await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, lines);
-        await tx.hspsi_purchase_approve.create({
+        businessNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_APPLICATION);
+        const application = await tx.hspsi_purchase_approve.create({
           data: {
-            pur_id: purId,
-            pur_no: `PA${purId}`,
+            pur_no: businessNo,
             ...data,
             created_by: BigInt(userId),
             created_at: new Date(),
           },
         });
+        purId = application.pur_id;
       }
       await tx.hspsi_purchase_approve_detail.deleteMany({ where: { pur_id: purId } });
       await tx.hspsi_purchase_approve_detail.createMany({
@@ -804,7 +804,7 @@ export class PurchaseService {
       });
       return {
         id: purId,
-        businessNo: `PA${purId}`,
+        businessNo,
         message: submit ? '已提交审批' : id ? '更新成功' : '草稿已保存',
       };
     });
@@ -876,13 +876,12 @@ export class PurchaseService {
         where: { pur_id: purId },
       });
       if (approved) await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
-      const poId = this.id();
       const quantity = appLines.reduce((s, l) => s + l.qty, 0);
       const total = appLines.reduce((s, l) => s + l.qty * Number(l.reference_price), 0);
-      await tx.hspsi_purchase_order.create({
+      const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
+      const order = await tx.hspsi_purchase_order.create({
         data: {
-          po_id: poId,
-          po_no: `PO${poId}`,
+          po_no: orderNo,
           pur_id: purId,
           org_id: app.org_id,
           warehouse_id: app.warehouse_id,
@@ -912,6 +911,7 @@ export class PurchaseService {
           updated_at: new Date(),
         },
       });
+      const poId = order.po_id;
       await tx.hspsi_purchase_order_detail.createMany({
         data: appLines.map((line) => ({
           po_id: poId,
@@ -934,7 +934,7 @@ export class PurchaseService {
           upstreamNo: app.pur_no,
           downstreamType: 'purchase_order',
           downstreamId: poId,
-          downstreamNo: `PO${poId}`,
+          downstreamNo: orderNo,
           createdBy: userId,
         },
         tx,
@@ -949,7 +949,7 @@ export class PurchaseService {
           updated_by: BigInt(userId),
         },
       });
-      return { id, orderId: poId, orderNo: `PO${poId}`, message: '审批通过，已自动生成采购订单' };
+      return { id, orderId: poId, orderNo, message: '审批通过，已自动生成采购订单' };
     });
   }
   async removeApplication(id: string, userId: string) {
@@ -1170,8 +1170,9 @@ export class PurchaseService {
   }
   async saveOrder(id: string | null, body: Body, userId: string) {
     const lines = this.details(body.details);
-    const poId = id ? BigInt(id) : this.id();
+    let poId = id ? BigInt(id) : 0n;
     const existingOrder = id ? await this.order(id) : null;
+    let orderNo = String(existingOrder?.orderNo ?? '');
     if (existingOrder && Number(existingOrder.status) !== 1)
       throw new BadRequestException('仅待采购订单可以编辑');
     const existingApplicationId = existingOrder?.applicationId
@@ -1289,10 +1290,10 @@ export class PurchaseService {
           throw new BadRequestException('订单已有入库，不能编辑关键内容');
         await tx.hspsi_purchase_order.update({ where: { po_id: poId }, data });
       } else {
-        await tx.hspsi_purchase_order.create({
+        orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
+        const order = await tx.hspsi_purchase_order.create({
           data: {
-            po_id: poId,
-            po_no: `PO${poId}`,
+            po_no: orderNo,
             ...data,
             arrival_qty: 0,
             is_all_arrival: 0,
@@ -1305,6 +1306,7 @@ export class PurchaseService {
             created_at: new Date(),
           },
         });
+        poId = order.po_id;
       }
       await tx.hspsi_purchase_order_detail.deleteMany({ where: { po_id: poId } });
       await tx.hspsi_purchase_order_detail.createMany({
@@ -1324,7 +1326,7 @@ export class PurchaseService {
       if (currentPaymentAmount.greaterThan(0)) {
         const paymentChannel = Number(body.currentPaymentChannel);
         await this.assertDictionaryValue(tx, 'payment_channel', paymentChannel, '付款渠道');
-        paymentNo = `CGFK${this.id()}`;
+        paymentNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_PAYMENT);
         const payment = await tx.hspsi_purchase_order_payment.create({
           data: {
             org_id: data.org_id,
@@ -1348,7 +1350,7 @@ export class PurchaseService {
           {
             upstreamType: 'purchase_order',
             upstreamId: poId,
-            upstreamNo: `PO${poId}`,
+            upstreamNo: orderNo,
             downstreamType: 'purchase_payment',
             downstreamId: payment.pay_id,
             downstreamNo: payment.pay_no,
@@ -1397,14 +1399,14 @@ export class PurchaseService {
             upstreamNo: applicationNo,
             downstreamType: 'purchase_order',
             downstreamId: poId,
-            downstreamNo: `PO${poId}`,
+            downstreamNo: orderNo,
             createdBy: userId,
           },
           tx,
         );
       return {
         id: poId,
-        businessNo: `PO${poId}`,
+        businessNo: orderNo,
         paymentNo: paymentNo || null,
         message: id
           ? '更新成功'
@@ -1434,7 +1436,7 @@ export class PurchaseService {
       await this.assertOrganizationScope(tx, order.org_id, order.dept_id, order.warehouse_id);
       await this.assertPurchaseWarehouse(tx, order.org_id, order.warehouse_id, lines);
       let applicationId = order.pur_id;
-      let applicationNo = applicationId > 0n ? `PA${applicationId}` : '';
+      let applicationNo = '';
       if (applicationId > 0n) {
         const application = await tx.hspsi_purchase_approve.findFirst({
           where: { pur_id: applicationId, deleted_at: null },
@@ -1444,11 +1446,9 @@ export class PurchaseService {
           throw new BadRequestException('来源采购申请不存在或未审批通过');
         applicationNo = application.pur_no || applicationNo;
       } else {
-        applicationId = this.id();
-        applicationNo = `PA${applicationId}`;
-        await tx.hspsi_purchase_approve.create({
+        applicationNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_APPLICATION);
+        const application = await tx.hspsi_purchase_approve.create({
           data: {
-            pur_id: applicationId,
             pur_no: applicationNo,
             org_id: order.org_id,
             dept_id: order.dept_id,
@@ -1468,6 +1468,7 @@ export class PurchaseService {
             updated_at: new Date(),
           },
         });
+        applicationId = application.pur_id;
         await tx.hspsi_purchase_approve_detail.createMany({
           data: lines.map((line) => ({
             pur_id: applicationId,
@@ -1608,9 +1609,10 @@ export class PurchaseService {
         returnLines.push({ orderLine, quantity: cancelQty });
       }
       await this.assertProductionShortageOrderCapacity(tx, order.pur_id);
+      const businessNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RETURN);
       const header = await tx.hspsi_purchase_order_input_exit.create({
         data: {
-          po_exit_no: `TMP${Date.now()}`,
+          po_exit_no: businessNo,
           po_input_id: 0n,
           po_id: poId,
           exit_reson: String(body.reason ?? '采购订单未到货退回'),
@@ -1627,11 +1629,6 @@ export class PurchaseService {
           created_at: new Date(),
           updated_at: new Date(),
         },
-      });
-      const businessNo = `CGTH${header.po_exit_id}`;
-      await tx.hspsi_purchase_order_input_exit.update({
-        where: { po_exit_id: header.po_exit_id },
-        data: { po_exit_no: businessNo },
       });
       await tx.hspsi_purchase_order_input_exit_detail.createMany({
         data: returnLines.map(({ orderLine, quantity }) => ({
@@ -1712,9 +1709,10 @@ export class PurchaseService {
         requestedWarehouseId > 0n,
       );
       await this.assertPurchaseWarehouse(tx, order.org_id, targetWarehouseId, lines);
+      const businessNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RECEIPT);
       const header = await tx.hspsi_purchase_order_input.create({
         data: {
-          po_input_no: `TMP${Date.now()}`,
+          po_input_no: businessNo,
           po_id: order.po_id,
           org_id: order.org_id,
           warehouse_id: targetWarehouseId,
@@ -1731,11 +1729,6 @@ export class PurchaseService {
           created_at: new Date(),
           updated_at: new Date(),
         },
-      });
-      const businessNo = `GA${header.po_input_id}`;
-      await tx.hspsi_purchase_order_input.update({
-        where: { po_input_id: header.po_input_id },
-        data: { po_input_no: businessNo },
       });
       await tx.hspsi_purchase_order_input_detail.createMany({
         data: lines.map((line: Body) => ({
@@ -1947,9 +1940,8 @@ export class PurchaseService {
           (s, l) => s + Number(l.inputQuantity) * Number(l.unitPrice ?? 0),
           0,
         );
-        const purId = this.id();
-        const newPoId = this.id();
-        generatedPurId = purId;
+        const purNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_APPLICATION);
+        const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
         const otherSettlementType = await this.dictionaryValue(
           tx,
           'purchase_settlement_type',
@@ -1974,10 +1966,9 @@ export class PurchaseService {
                 )?.vendor_id ?? 0n
               );
             })();
-        await tx.hspsi_purchase_approve.create({
+        const application = await tx.hspsi_purchase_approve.create({
           data: {
-            pur_id: purId,
-            pur_no: `PA${purId}`,
+            pur_no: purNo,
             org_id: finalOrgId,
             dept_id: deptId,
             pur_reson: `由采购入库单系统生成`,
@@ -1996,6 +1987,8 @@ export class PurchaseService {
             updated_at: new Date(),
           },
         });
+        const purId = application.pur_id;
+        generatedPurId = purId;
         await tx.hspsi_purchase_approve_detail.createMany({
           data: lines.map((line) => ({
             pur_id: purId,
@@ -2007,10 +2000,9 @@ export class PurchaseService {
             remark: String(line.remark ?? ''),
           })),
         });
-        await tx.hspsi_purchase_order.create({
+        const order = await tx.hspsi_purchase_order.create({
           data: {
-            po_id: newPoId,
-            po_no: `PO${newPoId}`,
+            po_no: orderNo,
             pur_id: purId,
             org_id: finalOrgId,
             warehouse_id: finalWhId,
@@ -2040,6 +2032,7 @@ export class PurchaseService {
             updated_at: new Date(),
           },
         });
+        const newPoId = order.po_id;
         await tx.hspsi_purchase_order_detail.createMany({
           data: lines.map((line) => ({
             po_id: newPoId,
@@ -2057,13 +2050,13 @@ export class PurchaseService {
           })),
         });
         finalPoId = newPoId;
-        finalPoNo = `PO${newPoId}`;
+        finalPoNo = orderNo;
         pcsQty = qty;
         await this.documentTrace.link(
           {
             upstreamType: 'purchase_application',
             upstreamId: purId,
-            upstreamNo: `PA${purId}`,
+            upstreamNo: purNo,
             downstreamType: 'purchase_order',
             downstreamId: newPoId,
             downstreamNo: finalPoNo,
@@ -2103,24 +2096,21 @@ export class PurchaseService {
         updated_by: BigInt(userId),
         updated_at: new Date(),
       };
+      const receiptNo = receiptId
+        ? String(lockedReceipt!.po_input_no)
+        : await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RECEIPT);
       const header = receiptId
         ? await tx.hspsi_purchase_order_input.update({ where: { po_input_id: receiptId }, data })
         : await tx.hspsi_purchase_order_input.create({
             data: {
               ...data,
-              po_input_no: `TMP${Date.now()}`,
+              po_input_no: receiptNo,
               comfirm_status: 0,
               comfirm_comment: '',
               created_by: BigInt(userId),
               created_at: new Date(),
             },
           });
-      if (!receiptId)
-        await tx.hspsi_purchase_order_input.update({
-          where: { po_input_id: header.po_input_id },
-          data: { po_input_no: `GA${header.po_input_id}` },
-        });
-      const receiptNo = `GA${header.po_input_id}`;
       if (generatedPurId > 0n)
         await tx.hspsi_purchase_approve.update({
           where: { pur_id: generatedPurId },
@@ -2608,21 +2598,19 @@ export class PurchaseService {
         updated_by: BigInt(userId),
         updated_at: new Date(),
       };
+      const newReturnNo = exitId
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RETURN);
       const header = exitId
         ? await tx.hspsi_purchase_order_input_exit.update({ where: { po_exit_id: exitId }, data })
         : await tx.hspsi_purchase_order_input_exit.create({
             data: {
               ...data,
-              po_exit_no: `TMP${Date.now()}`,
+              po_exit_no: newReturnNo,
               created_by: BigInt(userId),
               created_at: new Date(),
             },
           });
-      if (!exitId)
-        await tx.hspsi_purchase_order_input_exit.update({
-          where: { po_exit_id: header.po_exit_id },
-          data: { po_exit_no: `CGTH${header.po_exit_id}` },
-        });
       await tx.hspsi_purchase_order_input_exit_detail.deleteMany({
         where: { po_exit_id: header.po_exit_id },
       });
@@ -2643,7 +2631,7 @@ export class PurchaseService {
           updated_at: new Date(),
         })),
       });
-      const businessNo = `CGTH${header.po_exit_id}`;
+      const businessNo = header.po_exit_no;
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_receipt',
@@ -3010,9 +2998,10 @@ export class PurchaseService {
       const remaining = task.refundable_amount.minus(total._sum.refund_amount ?? 0);
       if (amount.greaterThan(remaining))
         throw new BadRequestException(`本次退款超过剩余应退款 ${remaining.toFixed(2)} 元`);
+      const flowNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_REFUND_FLOW);
       const flow = await tx.hspsi_purchase_refund_flow.create({
         data: {
-          flow_no: `TMP${Date.now()}`,
+          flow_no: flowNo,
           refund_id: refundId,
           refund_amount: amount,
           refund_channel: channel,
@@ -3026,11 +3015,6 @@ export class PurchaseService {
           created_at: new Date(),
           updated_at: new Date(),
         },
-      });
-      const flowNo = `CGTKLS${flow.flow_id}`;
-      await tx.hspsi_purchase_refund_flow.update({
-        where: { flow_id: flow.flow_id },
-        data: { flow_no: flowNo },
       });
       await this.recalcRefundTask(tx, refundId, userId);
       await this.recalcPayment(tx, task.po_id);
@@ -3333,12 +3317,15 @@ export class PurchaseService {
         updated_by: BigInt(userId),
         updated_at: new Date(),
       };
+      const newPaymentNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_PAYMENT);
       const payment = id
         ? await tx.hspsi_purchase_order_payment.update({ where: { pay_id: BigInt(id) }, data })
         : await tx.hspsi_purchase_order_payment.create({
             data: {
               ...data,
-              pay_no: `CGFK${this.id()}`,
+              pay_no: newPaymentNo,
               created_by: BigInt(userId),
               created_at: new Date(),
             },

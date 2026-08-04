@@ -7,6 +7,19 @@ x-logging: &default-logging
     max-file: '5'
 
 services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec']
+    volumes:
+      - redis_data:/data
+    logging: *default-logging
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .
@@ -55,3 +68,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  redis_data:

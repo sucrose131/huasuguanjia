@@ -170,7 +170,12 @@ describe('inventory draft document row locking', () => {
       removeForDocument: vi.fn().mockResolvedValue(undefined),
     };
     return {
-      service: new InventoryService(prisma as never, posting as never, documentTrace as never),
+      service: new InventoryService(
+        prisma as never,
+        posting as never,
+        documentTrace as never,
+        { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+      ),
       prisma,
       posting,
       documentTrace,
