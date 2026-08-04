@@ -364,7 +364,7 @@ onMounted(async () => {
             ><template #default="s">{{
               dict(goodsTypes, s.row.goodsType)
             }}</template></el-table-column
-          ><el-table-column label="成本价" width="105" align="right"
+          ><el-table-column label="参考基础件成本" width="135" align="right"
             ><template #default="s">{{ moneyText(s.row.costPrice) }}</template></el-table-column
           ><el-table-column label="销售价" width="105" align="right"
             ><template #default="s">{{ moneyText(s.row.salePrice) }}</template></el-table-column
@@ -426,7 +426,7 @@ onMounted(async () => {
               { l: '商品名称', v: form.goodsName },
               { l: '速查码', v: form.queryCode },
               { l: '商品分类', v: form.categoryName },
-              { l: '计量单位', v: form.unitName },
+              { l: '基础单位', v: form.unitName },
               { l: '供应方式', v: dict(supplyTypes, form.supplyType) },
               { l: '商品形态', v: dict(goodsTypes, form.goodsType) },
               { l: '品牌', v: form.brandName },
@@ -435,7 +435,7 @@ onMounted(async () => {
               { l: '所属组织', v: form.organizationName },
               { l: '默认仓库', v: form.warehouseName },
               { l: '状态', v: dict(statuses, form.status) },
-              { l: '成本价', v: moneyText(form.costPrice) },
+              { l: '参考基础件成本', v: moneyText(form.costPrice) },
               { l: '销售价', v: moneyText(form.salePrice) },
               { l: '排序', v: form.sort },
               { l: '备注', v: form.remark },
@@ -464,8 +464,8 @@ onMounted(async () => {
               label="规格型号"
               min-width="160" /><el-table-column
               prop="pcsQty"
-              label="包装数量"
-              width="100" /><el-table-column label="成本价" width="100"
+              label="基础件数系数"
+              width="100" /><el-table-column label="基础件成本" width="110"
               ><template #default="s">{{ moneyText(s.row.costPrice) }}</template></el-table-column
             ><el-table-column label="销售价" width="100"
               ><template #default="s">{{ moneyText(s.row.salePrice) }}</template></el-table-column
@@ -498,7 +498,7 @@ onMounted(async () => {
                 :key="item.id"
                 :label="item.name"
                 :value="item.id" /></el-select></el-form-item
-          ><el-form-item label="计量单位" required
+          ><el-form-item label="基础单位" required
             ><el-select v-model="form.unitType" filterable style="width: 100%"
               ><el-option
                 v-for="item in units"
@@ -564,7 +564,7 @@ onMounted(async () => {
                 :key="item.value"
                 :label="item.label"
                 :value="Number(item.value)" /></el-select></el-form-item
-          ><el-form-item label="成本价"
+          ><el-form-item label="参考基础件成本"
             ><el-input-number
               v-model="form.costPrice"
               :min="0"
@@ -607,7 +607,7 @@ onMounted(async () => {
               min-width="150"
               ><template #default="s"
                 ><el-input v-model="s.row.specModels" /></template></el-table-column
-            ><el-table-column label="包装数量" width="130"
+            ><el-table-column label="基础件数系数" width="150"
               ><template #default="s"
                 ><el-input-number
                   v-model="s.row.pcsQty"
@@ -622,7 +622,7 @@ onMounted(async () => {
                     :key="item.value"
                     :label="item.label"
                     :value="Number(item.value)" /></el-select></template></el-table-column
-            ><el-table-column label="成本价" width="130"
+            ><el-table-column label="基础件成本" width="130"
               ><template #default="s"
                 ><el-input-number
                   v-model="s.row.costPrice"

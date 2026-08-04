@@ -7,6 +7,7 @@ import CategoriesPage from '@/views/CategoriesPage.vue';
 import PropertiesPage from '@/views/PropertiesPage.vue';
 import PurchasePage from '@/views/PurchasePage.vue';
 import InventoryPage from '@/views/InventoryPage.vue';
+import InventoryGeneralPage from '@/views/InventoryGeneralPage.vue';
 import WorkflowPage from '@/views/WorkflowPage.vue';
 import SystemPage from '@/views/SystemPage.vue';
 import DashboardPage from '@/views/DashboardPage.vue';
@@ -25,6 +26,10 @@ const routes = [
       { path: 'goods/properties', component: PropertiesPage },
       { path: 'purchase/:resource', component: PurchasePage },
       { path: 'inventory/overflow-inputs', redirect: '/inventory/overflows' },
+      {
+        path: 'inventory/:resource(general-inputs|general-outputs)',
+        component: InventoryGeneralPage,
+      },
       {
         path: 'inventory/:resource(stocks|transfers|adjustments|losses|loss-outputs|overflows|overflow-inputs|checks|quantity-alerts|expiry-alerts)',
         component: InventoryPage,

@@ -11,6 +11,7 @@ function serviceWith(
     { syncExpiryAlert: vi.fn() } as never,
     {} as never,
     trace as never,
+    { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
   );
 }
 

@@ -399,6 +399,8 @@ export class GoodsService {
   }
   private async validate(body: Record<string, any>) {
     if (!String(body.goodsName ?? '').trim()) throw new BadRequestException('商品名称必填');
+    if (!Number.isSafeInteger(Number(body.unitType)) || Number(body.unitType) <= 0)
+      throw new BadRequestException('基础单位必填');
     const category = await this.prisma.hspsi_goods_info_category.findFirst({
       where: { goods_catg_id: BigInt(String(body.categoryId)), deleted_at: null, status: 1 },
     });
@@ -427,9 +429,20 @@ export class GoodsService {
     if (Number(body.supplyType) !== 2) body.vendorId = 0;
     if (!Array.isArray(body.skus) || !body.skus.length)
       throw new BadRequestException('至少维护一个 SKU');
+    for (const [index, sku] of (body.skus as Record<string, any>[]).entries()) {
+      const pieces = Number(sku.pcsQty);
+      if (!Number.isSafeInteger(pieces) || pieces <= 0)
+        throw new BadRequestException(`第 ${index + 1} 个 SKU 的基础件数换算系数必须为正整数`);
+      if (!Number.isSafeInteger(Number(sku.unitType)) || Number(sku.unitType) <= 0)
+        throw new BadRequestException(`第 ${index + 1} 个 SKU 的业务单位必填`);
+      const baseCost = Number(sku.costPrice ?? 0);
+      if (!Number.isFinite(baseCost) || baseCost < 0)
+        throw new BadRequestException(`第 ${index + 1} 个 SKU 的基础件成本必须为非负数`);
+    }
   }
   async save(id: string | null, body: Record<string, any>, userId: string) {
     await this.validate(body);
+    if (id) await this.assertPieceSettingsMutable(BigInt(id), body);
     const now = new Date();
     const data = {
       org_id: BigInt(String(body.orgId)),
@@ -507,6 +520,54 @@ export class GoodsService {
       });
       return { id: goods.goods_id, message: id ? '更新成功' : '创建成功' };
     });
+  }
+
+  private async assertPieceSettingsMutable(goodsId: bigint, body: Record<string, any>) {
+    const [goods, skus, inventoryCount, ledgerCount] = await Promise.all([
+      this.prisma.hspsi_goods_info.findFirst({
+        where: { goods_id: goodsId, deleted_at: null },
+        select: { unit_type: true },
+      }),
+      this.prisma.hspsi_goods_info_sku.findMany({
+        where: { good_id: goodsId, deleted_at: null },
+        select: { sku_id: true, unit_type: true, pcs_qty: true },
+      }),
+      this.prisma.hspsi_inventory_total.count({ where: { goods_id: goodsId, deleted_at: null } }),
+      this.prisma.hspsi_inventory_total_detail.count({ where: { goods_id: goodsId } }),
+    ]);
+    if (!goods) throw new NotFoundException('商品不存在');
+    const hasInventoryBusiness = inventoryCount > 0 || ledgerCount > 0;
+    if (hasInventoryBusiness && goods.unit_type !== Number(body.unitType))
+      throw new BadRequestException('商品已有库存业务记录，不能修改基础单位');
+
+    const incoming = new Map(
+      (body.skus as Record<string, any>[])
+        .filter((item) => item.id)
+        .map((item) => [String(item.id), item]),
+    );
+    const existingSkuIds = new Set(skus.map((sku) => String(sku.sku_id)));
+    if ([...incoming.keys()].some((skuId) => !existingSkuIds.has(skuId)))
+      throw new BadRequestException('提交的 SKU 不属于当前商品');
+    for (const sku of skus) {
+      const next = incoming.get(String(sku.sku_id));
+      const skuReferenced =
+        hasInventoryBusiness &&
+        ((await this.prisma.hspsi_inventory_total.count({
+          where: { goods_id: goodsId, sku_id: sku.sku_id, deleted_at: null },
+        })) > 0 ||
+          (await this.prisma.hspsi_inventory_total_detail.count({
+            where: { goods_id: goodsId, sku_id: sku.sku_id },
+          })) > 0);
+      if (!next) {
+        if (skuReferenced) throw new BadRequestException('已有库存业务记录的 SKU 不能删除');
+        continue;
+      }
+      if (
+        skuReferenced &&
+        (sku.pcs_qty !== Number(next.pcsQty) || sku.unit_type !== Number(next.unitType))
+      )
+        throw new BadRequestException('SKU 已有库存业务记录，不能修改业务单位或基础件数换算系数');
+    }
   }
   async remove(id: string, userId: string) {
     const goodsId = BigInt(id);

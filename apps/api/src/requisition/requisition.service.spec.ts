@@ -14,6 +14,7 @@ function aggregatePostingLines(lines: InventoryLine[]) {
     undefined as never,
     undefined as never,
     undefined as never,
+    undefined as never,
   );
   return (
     service as unknown as { aggregatePostingLines: AggregatePostingLines }
@@ -36,6 +37,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
       posting as never,
       { enrich: vi.fn() } as never,
       documentTrace as never,
+      { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
     ),
     prisma,
     posting,

@@ -5,12 +5,15 @@ coverage/
 .cache/
 .pnpm-store/
 .DS_Store
+._*
 .env
 .env.*.local
 apps/api/prisma/migrations/*/migration_lock.toml
 *.log
 
-docs/
+docs/*
+!docs/plan/
+!docs/plan/**
 CLAUDE.md
 HANDOFF.md
 database/

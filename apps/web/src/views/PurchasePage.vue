@@ -1787,7 +1787,9 @@ onMounted(async () => {
                   >确认退款</el-button
                 >
                 <template #more>
+                  <!-- 暂时隐藏“业务链路”入口，保留底层查询能力以便后续恢复。
                   <el-dropdown-item @click="openTrace(s.row)">业务链路</el-dropdown-item>
+                  -->
                   <el-dropdown-item v-if="canSubmit(s.row)" @click="submit(s.row)"
                     >提交</el-dropdown-item
                   >

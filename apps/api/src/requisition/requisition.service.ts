@@ -4,6 +4,8 @@ import { BusinessReferenceService } from '../database/business-reference.service
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import { BusinessNumberService } from '../business-number/business-number.service';
 import {
   InventoryPostingService,
   type InventoryLine,
@@ -26,6 +28,7 @@ export class RequisitionService {
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
   ) {}
 
   private decimal(value: unknown) {
@@ -37,14 +40,6 @@ export class RequisitionService {
       page: Math.max(1, Number(query.page) || 1),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize) || 20)),
     };
-  }
-
-  private documentNo(prefix: string, id: bigint) {
-    const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
-    const head = `${prefix}${date}`;
-    const capacity = 20 - head.length;
-    const encoded = id.toString(36).toUpperCase();
-    return `${head}${encoded.slice(-capacity).padStart(Math.min(4, capacity), '0')}`;
   }
 
   private positiveQuantity(value: unknown, label = '数量') {
@@ -614,23 +609,21 @@ export class RequisitionService {
         remark: String(body.remark ?? current?.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newApplicationNo =
+        requestedId === null
+          ? await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION)
+          : '';
       const header =
         requestedId !== null
           ? await tx.hspsi_draw_approve.update({ where: { draw_id: requestedId }, data })
           : await tx.hspsi_draw_approve.create({
               data: {
                 ...data,
-                draw_no: `TMP${Date.now()}`,
+                draw_no: newApplicationNo,
                 fact_draw_qty: 0,
                 created_by: BigInt(userId),
               },
             });
-      if (requestedId === null) {
-        await tx.hspsi_draw_approve.update({
-          where: { draw_id: header.draw_id },
-          data: { draw_no: this.documentNo('DR', header.draw_id) },
-        });
-      }
       await tx.hspsi_draw_approve_detail.deleteMany({ where: { draw_id: header.draw_id } });
       await tx.hspsi_draw_approve_detail.createMany({
         data: lines.map((line) => ({
@@ -684,9 +677,10 @@ export class RequisitionService {
       orderBy: { draw_detail_id: 'asc' },
     });
     if (!details.length) throw new BadRequestException('领用申请没有明细，不能生成出库单');
+    const outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT);
     const header = await tx.hspsi_draw_approve_output.create({
       data: {
-        draw_output_no: `TMP${Date.now()}`,
+        draw_output_no: outputNo,
         draw_id: drawId,
         generation_key: generationKey,
         auto_created: 1,
@@ -704,11 +698,6 @@ export class RequisitionService {
         created_by: BigInt(userId),
         updated_by: BigInt(userId),
       },
-    });
-    const outputNo = this.documentNo('DRO', header.draw_output_id);
-    await tx.hspsi_draw_approve_output.update({
-      where: { draw_output_id: header.draw_output_id },
-      data: { draw_output_no: outputNo },
     });
     await tx.hspsi_draw_approve_output_detail.createMany({
       data: details.map((detail) => ({
@@ -1144,6 +1133,9 @@ export class RequisitionService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newOutputNo = current
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT);
       const header = current
         ? await tx.hspsi_draw_approve_output.update({
             where: { draw_output_id: current.draw_output_id },
@@ -1152,7 +1144,7 @@ export class RequisitionService {
         : await tx.hspsi_draw_approve_output.create({
             data: {
               ...data,
-              draw_output_no: `TMP${Date.now()}`,
+              draw_output_no: newOutputNo,
               generation_key: null,
               auto_created: 0,
               comfirm_status: 0,
@@ -1161,15 +1153,7 @@ export class RequisitionService {
               created_by: BigInt(userId),
             },
           });
-      if (!current) {
-        await tx.hspsi_draw_approve_output.update({
-          where: { draw_output_id: header.draw_output_id },
-          data: { draw_output_no: this.documentNo('DRO', header.draw_output_id) },
-        });
-      }
-      const outputNo = current
-        ? (header.draw_output_no ?? this.documentNo('DRO', header.draw_output_id))
-        : this.documentNo('DRO', header.draw_output_id);
+      const outputNo = header.draw_output_no;
       await tx.hspsi_draw_approve_output_detail.deleteMany({
         where: { draw_output_id: header.draw_output_id },
       });
@@ -1586,6 +1570,9 @@ export class RequisitionService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newReturnNo = current
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_RETURN);
       const header = current
         ? await tx.hspsi_draw_approve_output_exit.update({
             where: { draw_exit_id: current.draw_exit_id },
@@ -1594,22 +1581,14 @@ export class RequisitionService {
         : await tx.hspsi_draw_approve_output_exit.create({
             data: {
               ...data,
-              draw_exit_no: `TMP${Date.now()}`,
+              draw_exit_no: newReturnNo,
               comfirm_status: 0,
               comfirm_by: 0n,
               posting_version: 0,
               created_by: BigInt(userId),
             },
           });
-      if (!current) {
-        await tx.hspsi_draw_approve_output_exit.update({
-          where: { draw_exit_id: header.draw_exit_id },
-          data: { draw_exit_no: this.documentNo('DRR', header.draw_exit_id) },
-        });
-      }
-      const returnNo = current
-        ? (header.draw_exit_no ?? this.documentNo('DRR', header.draw_exit_id))
-        : this.documentNo('DRR', header.draw_exit_id);
+      const returnNo = header.draw_exit_no;
       await tx.hspsi_draw_approve_output_exit_detail.deleteMany({
         where: { draw_exit_id: header.draw_exit_id },
       });

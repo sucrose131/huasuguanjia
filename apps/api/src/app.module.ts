@@ -14,12 +14,14 @@ import { SalesModule } from './sales/sales.module';
 import { RequisitionModule } from './requisition/requisition.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DocumentTraceModule } from './document-trace/document-trace.module';
+import { BusinessNumberModule } from './business-number/business-number.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     RedisModule,
+    BusinessNumberModule,
     AuthModule,
     BaseDataModule,
     GoodsModule,

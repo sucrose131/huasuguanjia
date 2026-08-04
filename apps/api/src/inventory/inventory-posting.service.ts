@@ -71,6 +71,14 @@ export class InventoryPostingService {
     const warehouseId = BigInt(String(input.warehouseId));
     const sourceId = BigInt(String(input.sourceId));
     const operationBy = BigInt(String(input.operationBy));
+    const results: Array<{
+      goodsId: bigint;
+      skuId: bigint;
+      batchNo: string;
+      quantity: number;
+      amount: number;
+      unitCost: number;
+    }> = [];
     for (const line of input.lines) {
       const goodsId = BigInt(String(line.goodsId));
       const skuId = BigInt(String(line.skuId));
@@ -200,6 +208,15 @@ export class InventoryPostingService {
           remark: input.remark,
         },
       });
+      results.push({
+        goodsId,
+        skuId,
+        batchNo,
+        quantity,
+        amount,
+        unitCost: quantity > 0 ? amount / quantity : 0,
+      });
     }
+    return results;
   }
 }

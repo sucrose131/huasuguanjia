@@ -2,6 +2,8 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import { BusinessNumberService } from '../business-number/business-number.service';
 import { InventoryLine, InventoryPostingService } from './inventory-posting.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import {
@@ -25,6 +27,7 @@ export class InventoryService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
   ) {}
   private page(query: Body) {
     return {
@@ -41,10 +44,6 @@ export class InventoryService {
       throw new BadRequestException(`${label}必须为${allowZero ? '非负' : '正'}整数`);
     }
     return quantity;
-  }
-  private no(prefix: string, id: bigint) {
-    const date = new Date();
-    return `${prefix}${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}${String(id).slice(-4).padStart(4, '0')}`;
   }
   private lines(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
@@ -629,21 +628,19 @@ export class InventoryService {
         updated_by: BigInt(userId),
         updated_at: new Date(),
       };
+      const newTransferNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_TRANSFER);
       const header = id
         ? await tx.hspsi_inventory_transfer.update({ where: { transfer_id: BigInt(id) }, data })
         : await tx.hspsi_inventory_transfer.create({
             data: {
               ...data,
-              transfer_no: `TMP${Date.now()}`,
+              transfer_no: newTransferNo,
               created_by: BigInt(userId),
               created_at: new Date(),
             },
           });
-      if (!id)
-        await tx.hspsi_inventory_transfer.update({
-          where: { transfer_id: header.transfer_id },
-          data: { transfer_no: this.no('IT', header.transfer_id) },
-        });
       await tx.hspsi_inventory_transfer_detail.deleteMany({
         where: { transfer_id: header.transfer_id },
       });
@@ -871,6 +868,9 @@ export class InventoryService {
         throw new BadRequestException('当前调整单不能编辑');
     }
     const result = await this.prisma.$transaction(async (tx) => {
+      const newAdjustmentNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_ADJUSTMENT);
       const header = id
         ? await tx.hspsi_inventory_adjust.update({
             where: { adjust_id: BigInt(id) },
@@ -885,7 +885,7 @@ export class InventoryService {
           })
         : await tx.hspsi_inventory_adjust.create({
             data: {
-              adjust_no: `TMP${Date.now()}`,
+              adjust_no: newAdjustmentNo,
               adjust_reason: String(body.reason),
               applicant_date: new Date(body.applicantDate ?? Date.now()),
               status: submit ? 1 : 0,
@@ -895,11 +895,6 @@ export class InventoryService {
               updated_by: BigInt(userId),
             },
           });
-      if (!id)
-        await tx.hspsi_inventory_adjust.update({
-          where: { adjust_id: header.adjust_id },
-          data: { adjust_no: this.no('IA', header.adjust_id) },
-        });
       await tx.hspsi_inventory_adjust_detail.deleteMany({ where: { adjust_id: header.adjust_id } });
       for (const l of lines) {
         const stock = await tx.hspsi_inventory_batch_total.findUnique({
@@ -1306,9 +1301,10 @@ export class InventoryService {
     });
     if (!stocks.length) throw new BadRequestException('所选仓库当前没有可盘点库存');
     const id = await this.prisma.$transaction(async (tx) => {
+      const checkNo = await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_CHECK);
       const header = await tx.hspsi_inventory_check.create({
         data: {
-          check_no: `TMP${Date.now()}`,
+          check_no: checkNo,
           check_type: Number(body.checkType),
           check_date: new Date(body.checkDate ?? Date.now()),
           check_state: 3,
@@ -1322,10 +1318,6 @@ export class InventoryService {
           created_by: BigInt(userId),
           updated_by: BigInt(userId),
         },
-      });
-      await tx.hspsi_inventory_check.update({
-        where: { check_id: header.check_id },
-        data: { check_no: this.no('IC', header.check_id) },
       });
       await tx.hspsi_inventory_check_detail.createMany({
         data: stocks.map((s) => ({
@@ -1436,9 +1428,12 @@ export class InventoryService {
         const { negative, positive, damaged } = partitionInventoryCheckDetails(item.details);
 
         if (negative.length) {
+          const shortageOutputNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT,
+          );
           const shortageOutput = await tx.hspsi_inventory_loss_output.create({
             data: {
-              loss_no: `TMP${Date.now()}`,
+              loss_no: shortageOutputNo,
               loss_type: 1,
               loss_reson: `盘点 ${item.check_no} 数量盘亏`,
               org_id: item.org_id,
@@ -1463,11 +1458,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const shortageOutputNo = this.no('ILO', shortageOutput.loss_id);
-          await tx.hspsi_inventory_loss_output.update({
-            where: { loss_id: shortageOutput.loss_id },
-            data: { loss_no: shortageOutputNo },
           });
           await tx.hspsi_inventory_loss_output_detail.createMany({
             data: negative.map((detail: Body) => ({
@@ -1501,9 +1491,12 @@ export class InventoryService {
         }
 
         for (const [detail] of splitInventoryDamageDetails(damaged)) {
+          const damageNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_DAMAGE_OUTPUT,
+          );
           const damage = await tx.hspsi_inventory_loss.create({
             data: {
-              loss_no: `TMP${Date.now()}`,
+              loss_no: damageNo,
               business_kind: 2,
               loss_type: 1,
               loss_reson: `盘点 ${item.check_no} 批次 ${String(detail.batchNo ?? '')} 物料损坏`,
@@ -1521,11 +1514,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const damageNo = this.no('ILD', damage.loss_id);
-          await tx.hspsi_inventory_loss.update({
-            where: { loss_id: damage.loss_id },
-            data: { loss_no: damageNo },
           });
           await tx.hspsi_inventory_loss_detail.create({
             data: {
@@ -1555,9 +1543,12 @@ export class InventoryService {
         }
 
         if (positive.length) {
+          const overflowNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_OVERFLOW_INPUT,
+          );
           const overflow = await tx.hspsi_inventory_overflow.create({
             data: {
-              overflow_no: `TMP${Date.now()}`,
+              overflow_no: overflowNo,
               overflow_type: 1,
               overflow_reson: `盘点 ${item.check_no} 数量盘盈`,
               org_id: item.org_id,
@@ -1581,11 +1572,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const overflowNo = this.no('IO', overflow.overflow_id);
-          await tx.hspsi_inventory_overflow.update({
-            where: { overflow_id: overflow.overflow_id },
-            data: { overflow_no: overflowNo },
           });
           await tx.hspsi_inventory_overflow_detail.createMany({
             data: positive.map((detail: Body) => ({
@@ -2133,6 +2119,15 @@ export class InventoryService {
               });
         if (duplicate) throw new BadRequestException('该盘点单已经生成同类差异单据');
       }
+      const newBusinessNo = id
+        ? ''
+        : await this.businessNumber.generate(
+            type === 'overflow'
+              ? BUSINESS_PREFIX.INVENTORY_OVERFLOW_INPUT
+              : businessKind === 1
+                ? BUSINESS_PREFIX.INVENTORY_SHORTAGE
+                : BUSINESS_PREFIX.INVENTORY_DAMAGE_OUTPUT,
+          );
       const header =
         type === 'loss'
           ? id
@@ -2140,7 +2135,7 @@ export class InventoryService {
             : await tx.hspsi_inventory_loss.create({
                 data: {
                   ...data,
-                  loss_no: `TMP${Date.now()}`,
+                  loss_no: newBusinessNo,
                   created_by: BigInt(userId),
                   created_at: new Date(),
                 },
@@ -2150,25 +2145,13 @@ export class InventoryService {
             : await tx.hspsi_inventory_overflow.create({
                 data: {
                   ...data,
-                  overflow_no: `TMP${Date.now()}`,
+                  overflow_no: newBusinessNo,
                   created_by: BigInt(userId),
                   created_at: new Date(),
                 },
               });
       const recordKey = type === 'loss' ? (header as Body).loss_id : (header as Body).overflow_id;
       if (!id) {
-        const prefix = type === 'overflow' ? 'IO' : businessKind === 1 ? 'ILS' : 'ILD';
-        const businessNo = this.no(prefix, recordKey);
-        if (type === 'loss')
-          await tx.hspsi_inventory_loss.update({
-            where: { loss_id: recordKey },
-            data: { loss_no: businessNo },
-          });
-        else
-          await tx.hspsi_inventory_overflow.update({
-            where: { overflow_id: recordKey },
-            data: { overflow_no: businessNo },
-          });
         if (sourceCheckId > 0n) {
           const sourceCheck = await tx.hspsi_inventory_check.findUnique({
             where: { check_id: sourceCheckId },
@@ -2186,7 +2169,7 @@ export class InventoryService {
                       ? 'inventory_shortage'
                       : 'inventory_loss',
                 downstreamId: recordKey,
-                downstreamNo: businessNo,
+                downstreamNo: newBusinessNo,
                 relationKind: 'generated',
                 createdBy: userId,
               },
@@ -2312,17 +2295,15 @@ export class InventoryService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newOutputNo = outputId
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT);
       const header = outputId
         ? await tx.hspsi_inventory_loss_output.update({ where: { loss_id: outputId }, data })
         : await tx.hspsi_inventory_loss_output.create({
-            data: { ...data, loss_no: `TMP${Date.now()}`, created_by: BigInt(userId) },
+            data: { ...data, loss_no: newOutputNo, created_by: BigInt(userId) },
           });
-      const outputNo = outputId ? header.loss_no : this.no('ILO', header.loss_id);
-      if (!outputId)
-        await tx.hspsi_inventory_loss_output.update({
-          where: { loss_id: header.loss_id },
-          data: { loss_no: outputNo },
-        });
+      const outputNo = header.loss_no;
       await tx.hspsi_inventory_loss_output_detail.deleteMany({
         where: { loss_id: header.loss_id },
       });
@@ -2585,9 +2566,12 @@ export class InventoryService {
           where: { source_loss_id: BigInt(id), deleted_at: null },
         });
         if (existing) throw new BadRequestException('该报亏单已经生成报亏出库单');
+        const outputNo = await this.businessNumber.generate(
+          BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT,
+        );
         const output = await tx.hspsi_inventory_loss_output.create({
           data: {
-            loss_no: `TMP${Date.now()}`,
+            loss_no: outputNo,
             loss_type: Number(item.documentType || 1),
             loss_reson: item.reason,
             org_id: item.org_id,
@@ -2607,11 +2591,6 @@ export class InventoryService {
             created_by: BigInt(userId),
             updated_by: BigInt(userId),
           },
-        });
-        const outputNo = this.no('ILO', output.loss_id);
-        await tx.hspsi_inventory_loss_output.update({
-          where: { loss_id: output.loss_id },
-          data: { loss_no: outputNo },
         });
         await tx.hspsi_inventory_loss_output_detail.createMany({
           data: item.details.map((line: Body) => ({
@@ -2732,11 +2711,12 @@ export class InventoryService {
             (sum: number, line: Body) => sum + Number(line.amount ?? 0),
             0,
           );
+          const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.DISCOUNT_SALES_ORDER);
           const order = await tx.hspsi_sale_order.create({
             data: {
               org_id: item.org_id,
               warehouse_id: item.warehouse_id,
-              so_no: `TMP${Date.now()}`,
+              so_no: orderNo,
               so_type: 1,
               so_source: 4,
               so_source_id: BigInt(id),
@@ -2764,11 +2744,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const orderNo = this.no('DS', order.so_id);
-          await tx.hspsi_sale_order.update({
-            where: { so_id: order.so_id },
-            data: { so_no: orderNo },
           });
           const groupedOrderLines = new Map<
             string,
