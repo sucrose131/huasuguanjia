@@ -16,8 +16,6 @@ docs/*
 !docs/plan/**
 CLAUDE.md
 HANDOFF.md
-database/
-!database/
 database/*
 !database/migrations/
 !database/migrations/*.sql
@@ -28,6 +26,7 @@ database/*
 .env.docker
 .idea/
 .vscode/
+*.tsbuildinfo
 
 
 
