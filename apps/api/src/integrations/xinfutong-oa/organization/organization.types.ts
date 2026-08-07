@@ -1,63 +1,9 @@
 /**
- * 薪福通 OA 对接的类型定义
- */
-
-/**
- * 薪福通接口标准响应格式
+ * 薪福通 OA 组织域类型定义
  *
- * 对应 PHP 版 assertSuccess 中校验的格式：
- *   - 标准格式：{ returnCode, errorMsg, body }
- *   - 网关错误格式：{ SYCOMRETZ: [{ ERRCOD, ERRMSG, ERRDTL, ERRPAM }] }
+ * 包含：组织 / 职位 / 岗位 / 企业成员 / 员工花名册
+ * 这些均围绕"组织架构"这一业务域，故统一放在 organization/ 目录。
  */
-export interface XinfutongResponse<T = unknown> {
-  /** 返回码（SUC0000 表示成功） */
-  returnCode?: string;
-  /** 错误信息 */
-  errorMsg?: string | null;
-  /** 业务数据 */
-  body?: T;
-  /** 网关错误时的错误信息集合 */
-  SYCOMRETZ?: XinfutongGatewayError[];
-}
-
-/**
- * 网关错误信息
- */
-export interface XinfutongGatewayError {
-  ERRCOD?: string;
-  ERRMSG?: string;
-  ERRDTL?: string;
-  ERRPAM?: string;
-}
-
-/**
- * 分页响应数据
- *
- * 对应 PHP 版各查询接口的 body 结构
- */
-export interface XinfutongPageBody<T = unknown> {
-  /** 当前页 */
-  currentPage?: number;
-  /** 每页大小 */
-  pageSize?: number;
-  /** 总记录数 */
-  totalSize?: number;
-  /** 记录集合 */
-  records?: T[];
-}
-
-/**
- * 请求选项（基础请求方法共用）
- */
-export interface XinfutongRequestOptions {
-  /** 额外的 query 参数 */
-  extraQuery?: Record<string, string>;
-  /** 请求超时时间（毫秒，默认 60000） */
-  timeout?: number;
-}
-
-/** 接口调用成功返回码 */
-export const RETURN_CODE_SUCCESS = 'SUC0000';
 
 // ==================== 接口路径与分页上限 ====================
 

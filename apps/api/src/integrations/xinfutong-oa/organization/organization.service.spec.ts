@@ -8,7 +8,7 @@
  * - 真实 HTTP 请求到薪福通 API
  *
  * 运行方式：
- *   pnpm --filter @hspsi/api test xinfutong-oa.service.spec
+ *   pnpm --filter @hspsi/api test organization.service.spec
  *
  * 前置条件：
  *   1. .env 中 DATABASE_URL 指向含有薪福通账套数据的数据库
@@ -23,9 +23,11 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
 import { resolve } from 'node:path';
-import { XinfutongOaService } from './xinfutong-oa.service';
-import { XinfutongOaCredentialService } from './xinfutong-oa-credential.service';
-import type { AccountSetCredential } from './xinfutong-oa-credential.service';
+import { XinfutongOaOrganizationService } from './organization.service';
+import {
+  XinfutongOaCredentialService,
+  type AccountSetCredential,
+} from '../core/credential.service';
 
 // 加载项目根目录 .env（指向远程开发库，含薪福通账套数据）
 // vitest 运行时 cwd 为 apps/api，往上一层即项目根目录
@@ -50,16 +52,16 @@ function loadEnvOverride(filePath: string) {
 // cwd 为 apps/api，项目根目录在 ../../
 loadEnvOverride(resolve(process.cwd(), '../../.env'));
 
-describe('XinfutongOaService 业务接口集成测试（真实请求）', () => {
+describe('XinfutongOaOrganizationService 业务接口集成测试（真实请求）', () => {
   let prisma: PrismaClient;
   let credentialService: XinfutongOaCredentialService;
-  let service: XinfutongOaService;
+  let service: XinfutongOaOrganizationService;
   let credential: AccountSetCredential;
 
   beforeAll(async () => {
     // 构造 ConfigService（从 process.env 读取）
     const config = new ConfigService();
-    service = new XinfutongOaService(config);
+    service = new XinfutongOaOrganizationService(config);
 
     // 连接真实数据库
     prisma = new PrismaClient();

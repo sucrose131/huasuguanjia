@@ -1,11 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
-import type { AccountSetCredential } from './xinfutong-oa-credential.service';
+import { PrismaService } from '../../../database/prisma.service';
+import type { AccountSetCredential } from '../core/credential.service';
 import type {
   MemberRecord,
   OrganizationRecord,
   PositionRecord,
-} from './xinfutong-oa.types';
+} from '../organization/organization.types';
 
 /**
  * 同步统计：组织/部门
