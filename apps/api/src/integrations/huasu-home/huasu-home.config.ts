@@ -3,11 +3,12 @@ import { ConfigService } from '@nestjs/config';
 /**
  * 华溯之家配置
  * 凭证走 .env 环境变量
+ *
+ * 注：华溯之家使用 RSA 公钥加密生成签名，不需要 app_id/app_secret
  */
 export const HUASU_HOME_CONFIG_KEYS = {
   BASE_URL: 'HUASU_HOME_BASE_URL',
-  APP_ID: 'HUASU_HOME_APP_ID',
-  APP_SECRET: 'HUASU_HOME_APP_SECRET',
+  PUBLIC_KEY: 'HUASU_HOME_APP_PUBLIC_KEY',
 } as const;
 
 export type HuasuHomeConfig = typeof HUASU_HOME_CONFIG_KEYS;
