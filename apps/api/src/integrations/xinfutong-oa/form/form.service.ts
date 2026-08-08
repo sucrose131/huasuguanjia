@@ -7,12 +7,15 @@ import {
   FORM_DATA_LIST_PATH,
   FORM_DATA_QUERY_MAX,
   FORM_LIST_PATH,
+  NEW_FORM_CONFIG_PATH,
   type FormCategory,
   type FormConfig,
   type FormConfigQueryParams,
   type FormDataListQueryParams,
   type FormDataRecord,
   type FormListQueryParams,
+  type NewFormConfig,
+  type NewFormConfigQueryParams,
 } from './form.types';
 
 /**
@@ -26,6 +29,7 @@ import {
  * - 获取表单列表：/xft-oa/openapi/xft-oaquery/form/query-list
  * - 获取表单数据：/xft-oa/openapi/xft-oaquery/form-data/query-list
  * - 获取表单配置信息：/xft-oa/openapi/xft-oaquery/form-config/query
+ * - 查询完整表单配置（新版中间格式）：/xft-oa/openapi/oa-gateway/api/open/form/inst/new-form-config-query
  */
 @Injectable()
 export class XinfutongOaFormService extends XinfutongOaClient {
@@ -130,6 +134,41 @@ export class XinfutongOaFormService extends XinfutongOaClient {
     });
 
     const response = await this.post<FormConfig>(FORM_CONFIG_PATH, credential, body);
+    this.assertSuccess(response);
+    return response;
+  }
+
+  // ==================== 完整表单配置查询（新版中间格式） ====================
+
+  /**
+   * 查询完整表单配置（新版中间格式）
+   *
+   * 适用于查询 1.0 以及 2.0 表单配置的场景，返回的表单配置为新版的中间格式配置。
+   * 与 getFormConfig 的区别在于返回的表单配置层级结构不同。
+   *
+   * - formKey 为必填（表单编码）
+   * - formId 为可选（表单 id，与表单版本一一对应；查询历史表单数据时必填）
+   * - 若 formId 和 formKey 同时存在，则根据 formId 查询表单实例
+   *
+   * @param credential 账套凭证
+   * @param params 查询条件（formKey 必填，formId 可选）
+   * @returns 接口响应数据（body 为新版中间格式表单配置）
+   * @throws formKey 为空时抛出
+   */
+  async getNewFormConfig(
+    credential: AccountSetCredential,
+    params: NewFormConfigQueryParams,
+  ): Promise<XinfutongResponse<NewFormConfig>> {
+    if (!params.formKey) {
+      throw new Error('formKey 不能为空');
+    }
+
+    const body = this.filterEmpty({
+      formKey: params.formKey,
+      formId: params.formId,
+    });
+
+    const response = await this.post<NewFormConfig>(NEW_FORM_CONFIG_PATH, credential, body);
     this.assertSuccess(response);
     return response;
   }

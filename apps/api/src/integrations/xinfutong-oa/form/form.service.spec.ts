@@ -75,9 +75,9 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
     credentialService = new XinfutongOaCredentialService(prisma as never);
 
     // 读取第一个启用的账套凭证
-    const credentials = await credentialService.getAllEnabled();
-    expect(credentials.length).toBeGreaterThan(0);
-    credential = credentials[0]!;
+    const credentials = await credentialService.getById(BigInt('2'));
+    expect(credentials).toBeDefined();
+    credential = credentials!;
   }, 30_000);
 
   afterAll(async () => {
@@ -94,6 +94,12 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
 
         // 校验返回码成功
         expect(response.returnCode).toBe('SUC0000');
+        // 结果写入文件
+        const fs = require('node:fs');
+        fs.writeFileSync(
+          resolve(process.cwd(), '../../docs/integrations/xinfutong-oa/return-result/form-list.json'),
+          JSON.stringify(response.body, null, 2),
+        );
 
         // 校验 body 为数组
         expect(Array.isArray(response.body)).toBe(true);
@@ -143,8 +149,8 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
         }
 
         const response = await service.getFormConfig(credential, {
-          // formKey: sharedFormKey,
-          formId: 'AAC15400_NFORM_379287135985270784:4',
+          formKey: sharedFormKey,
+          formId: '',
         });
 
         expect(response.returnCode).toBe('SUC0000');
@@ -168,6 +174,51 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
       await expect(
         service.getFormConfig(credential, {}),
       ).rejects.toThrow('formId 和 formKey 至少传一个');
+    });
+  });
+
+  // ==================== 完整表单配置查询（新版中间格式） ====================
+
+  describe('getNewFormConfig', () => {
+    it(
+      '能通过 formKey 查询完整表单配置（新版中间格式）',
+      async () => {
+        sharedFormKey = "AAC22502_NFORM_379451564510347266";
+        if (!sharedFormKey) {
+          console.warn('跳过：当前账套下没有可用的 formKey');
+          return;
+        }
+
+        const response = await service.getNewFormConfig(credential, {
+          formKey: sharedFormKey,
+        });
+
+        expect(response.returnCode).toBe('SUC0000');
+      
+        // 结果写入文件
+        const fs = require('node:fs');
+        fs.writeFileSync(
+          resolve(process.cwd(), '../../docs/integrations/xinfutong-oa/return-result/new-form-config.json'),
+          JSON.stringify(response.body, null, 2),
+        );
+
+        // 校验返回的表单配置结构
+        const body = response.body;
+        console.log(body);
+        expect(body).toBeDefined();
+
+        // formConfig 是 JSON 字符串（新版中间格式），验证可被 JSON.parse
+        if (body!.formConfig) {
+          expect(() => JSON.parse(body!.formConfig)).not.toThrow();
+        }
+      },
+      60_000,
+    );
+
+    it('formKey 为空时抛错', async () => {
+      await expect(
+        service.getNewFormConfig(credential, { formKey: '' }),
+      ).rejects.toThrow('formKey 不能为空');
     });
   });
 

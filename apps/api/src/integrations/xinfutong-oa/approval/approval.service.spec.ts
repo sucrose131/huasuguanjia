@@ -155,9 +155,9 @@ describe('XinfutongOaApprovalService', () => {
     await prisma.$connect();
     credentialService = new XinfutongOaCredentialService(prisma as never);
 
-    const credentials = await credentialService.getAllEnabled();
-    expect(credentials.length).toBeGreaterThan(0);
-    credential = credentials[0]!;
+    const credentials = await credentialService.getById(BigInt(2));
+    expect(credentials).toBeDefined();
+    credential = credentials!;
   }, 30_000);
 
   afterAll(async () => {
@@ -174,13 +174,19 @@ describe('XinfutongOaApprovalService', () => {
       // 前置：需要一个有效的 formKey 和 formData
       // formKey 可通过 getFormList 接口获取
       const response = await service.startFormProcess(credential, {
-        formKey: 'AAC15400_NFORM_379287135985270784',
-        procStartType: 'start',
-        formData: '{"jc32o22xm1v6":"测试文本"}',
-        starterId: '',
+        formKey: 'AAC22502_NFORM_379451564510347266',
+        procStartType: 'trialStart',
+        formData: '{"hxvvnrk6daq5":"测试文本22", "ud58jnh9xhwe":"10"}',
+        starterId: 'V001C',
       });
 
       console.log(response.body);
+      // 结果写入文件
+      const fs = require('node:fs');
+      fs.writeFileSync(
+        resolve(process.cwd(), '../../docs/integrations/xinfutong-oa/return-result/trial-start-form-process.json'),
+        JSON.stringify(response.body, null, 2),
+      );
 
       expect(response.returnCode).toBe('SUC0000');
       expect(response.body).toBeDefined();
