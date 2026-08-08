@@ -9,6 +9,24 @@
 /** 发起流程v2 接口路径 */
 export const FORM_START_PATH = '/xft-oa/openapi/xft-newform/open/form-start';
 
+/** 文件上传接口路径 */
+export const FILE_UPLOAD_PATH = '/xft-oa/openapi/xft-oa/file/upload';
+
+/** 文件上传最大大小（20MB） */
+export const FILE_UPLOAD_MAX_SIZE = 20 * 1024 * 1024;
+
+/** 允许上传的文件扩展名集合 */
+export const FILE_UPLOAD_ALLOWED_EXTENSIONS = new Set([
+  'BMP', 'DAT', 'DMG', 'DOC', 'DOCX', 'DPS', 'ET', 'GIF', 'JFIF', 'JPEG',
+  'JPG', 'MP3', 'MP4', 'P12', 'PDF', 'PEM', 'PNG', 'PPT', 'PPTX', 'RAR',
+  'TXT', 'WPS', 'XEC', 'XLS', 'XLSX', 'ZIP', 'DWG', 'MOV', 'BW', 'AI',
+  'CDR', 'COL', 'DXB', 'DXF', 'EPS', 'QT', 'AVI', 'MPEG', 'MPE', 'RM',
+  'ASF', 'STP', 'CSV', 'STEP',
+]);
+
+/** 文件名最大长度 */
+export const FILE_UPLOAD_FILENAME_MAX_LENGTH = 100;
+
 // ==================== 流程发起类型 ====================
 
 /** 流程发起类型 */
@@ -101,3 +119,33 @@ export interface ApprovalCallbackPayload {
 
 /** 事件编号：OA 审批流程结束事件 */
 export const EVENT_CODE_OA_PROCESS_FINISH = 'XFTOAFPS';
+
+// ==================== 文件上传 ====================
+
+/** 文件上传请求参数 */
+export interface FileUploadParams {
+  /** 文件名（含扩展名，长度不超过 100） */
+  fileName: string;
+  /** 文件内容（Buffer） */
+  fileBuffer: Buffer;
+  /** 文件 MIME 类型（可选，不传则根据扩展名自动推断） */
+  mimeType?: string;
+}
+
+/** 文件上传响应 body */
+export interface FileUploadResult {
+  /** 文件 id（可用于 /file/download 接口下载） */
+  fileId?: string;
+  /** 文件类型（扩展名） */
+  fileType?: string;
+  /** 文件名 */
+  fileName?: string;
+  /** 文件大小（字节） */
+  fileSize?: number;
+  /** 对象存储 key */
+  objectKey?: string;
+  /** 文件下载链接（7 天有效） */
+  fileUrl?: string;
+  /** 父级 id */
+  parentId?: string | null;
+}

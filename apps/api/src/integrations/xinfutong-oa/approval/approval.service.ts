@@ -3,7 +3,13 @@ import { XinfutongOaClient } from '../core/client';
 import type { AccountSetCredential } from '../core/credential.service';
 import type { XinfutongResponse } from '../core/types';
 import {
+  FILE_UPLOAD_ALLOWED_EXTENSIONS,
+  FILE_UPLOAD_FILENAME_MAX_LENGTH,
+  FILE_UPLOAD_MAX_SIZE,
+  FILE_UPLOAD_PATH,
   FORM_START_PATH,
+  type FileUploadParams,
+  type FileUploadResult,
   type FormStartParams,
   type FormStartResult,
 } from './approval.types';
@@ -60,6 +66,43 @@ export class XinfutongOaApprovalService extends XinfutongOaClient {
     return response;
   }
 
+  // ==================== 文件上传 ====================
+
+  /**
+   * 上传文件
+   *
+   * 通过薪福通 OA 文件上传接口上传文件，获取文件下载链接。
+   * 文件下载链接 7 天有效，过期后可通过 /file/download 接口使用 fileId 下载。
+   *
+   * 限制：
+   * - 文件大小不超过 20MB
+   * - 文件名长度不超过 100
+   * - 仅支持指定格式（BMP, DOC, DOCX, PDF, PNG, JPG, XLS, XLSX, ZIP 等）
+   *
+   * @param credential 账套凭证
+   * @param params 文件上传参数（fileName + fileBuffer 必填）
+   * @returns 接口响应数据（body 含 fileId、fileUrl 等）
+   * @throws 文件校验失败或接口返回错误时抛出
+   */
+  async uploadFile(
+    credential: AccountSetCredential,
+    params: FileUploadParams,
+  ): Promise<XinfutongResponse<FileUploadResult>> {
+    this.validateFileUploadParams(params);
+
+    // 构建 FormData
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(params.fileBuffer)]), params.fileName);
+
+    const response = await this.postMultipart<FileUploadResult>(
+      FILE_UPLOAD_PATH,
+      credential,
+      formData,
+    );
+    this.assertSuccess(response);
+    return response;
+  }
+
   // ==================== 参数校验 ====================
 
   /**
@@ -90,6 +133,51 @@ export class XinfutongOaApprovalService extends XinfutongOaClient {
 
     if (params.procStartType === 'restart' && !params.busKey) {
       throw new Error('restart 类型发起时，busKey 为必填项');
+    }
+  }
+
+  /**
+   * 校验文件上传请求参数
+   *
+   * 校验规则：
+   * - fileName 必填且长度不超过 100
+   * - fileBuffer 必填且大小不超过 20MB
+   * - 文件扩展名必须在允许列表中
+   *
+   * @param params 文件上传参数
+   * @throws 参数校验失败时抛出
+   */
+  private validateFileUploadParams(params: FileUploadParams): void {
+    if (!params.fileName) {
+      throw new Error('fileName 为必填项');
+    }
+
+    if (params.fileName.length > FILE_UPLOAD_FILENAME_MAX_LENGTH) {
+      throw new Error(
+        `附件名称长度不能超过 ${FILE_UPLOAD_FILENAME_MAX_LENGTH}，当前长度：${params.fileName.length}`,
+      );
+    }
+
+    if (!params.fileBuffer || params.fileBuffer.length === 0) {
+      throw new Error('fileBuffer 为必填项且不能为空');
+    }
+
+    if (params.fileBuffer.length > FILE_UPLOAD_MAX_SIZE) {
+      throw new Error(
+        `文件大小不能超过 20MB，当前大小：${(params.fileBuffer.length / 1024 / 1024).toFixed(2)}MB`,
+      );
+    }
+
+    // 提取扩展名（不区分大小写）
+    const lastDotIdx = params.fileName.lastIndexOf('.');
+    if (lastDotIdx === -1) {
+      throw new Error('文件名必须包含扩展名');
+    }
+    const ext = params.fileName.slice(lastDotIdx + 1).toUpperCase();
+    if (!FILE_UPLOAD_ALLOWED_EXTENSIONS.has(ext)) {
+      throw new Error(
+        `不允许的文件类型：${ext}，允许的类型：${[...FILE_UPLOAD_ALLOWED_EXTENSIONS].sort().join('、')}`,
+      );
     }
   }
 }

@@ -183,6 +183,64 @@ export class XinfutongOaClient {
     return this.parseResponse<T>(decrypted, url, credential);
   }
 
+  // ==================== Multipart 上传 ====================
+
+  /**
+   * 发送 Multipart/Form-Data POST 请求（文件上传专用）
+   *
+   * 与标准 post() 的区别：
+   * - Content-Type 为 multipart/form-data（自动生成 boundary）
+   * - 请求体为 FormData（二进制文件流），不进行 SM4 加密
+   * - 签名串不包含 x-alb-digest 行（与 GET 类似，因二进制 body 无法直接参与签名串）
+   *
+   * @param path 接口路径
+   * @param credential 账套凭证
+   * @param formData FormData 实例（已附加文件和字段）
+   * @param options 请求选项
+   * @returns 接口返回的 JSON 数据
+   * @throws 请求或解密失败时抛出
+   */
+  async postMultipart<T = unknown>(
+    path: string,
+    credential: AccountSetCredential,
+    formData: FormData,
+    options?: XinfutongRequestOptions,
+  ): Promise<XinfutongResponse<T>> {
+    // 1. 构建公共 query 参数
+    const queryParams = this.buildCommonQueryParams(credential, options?.extraQuery);
+    const queryString = this.buildQueryString(queryParams);
+
+    // 2. 序列化 FormData 为 Buffer，同时提取 boundary
+    const { body: formBuffer, boundary } = await this.buildMultipartRequest(formData);
+
+    // 3. 时间戳与 body 摘要
+    const timestamp = this.getSecondTimestamp();
+    const digest = sm3Digest(Buffer.from(formBuffer));
+
+    // 4. 构建请求头
+    const headers: Record<string, string> = {
+      appid: credential.appId,
+      'x-alb-timestamp': String(timestamp),
+      'x-alb-verify': VERIFY_ALGORITHM,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'x-alb-digest': digest,
+    };
+
+    // 5. 生成 apisign
+    // multipart 上传时，签名串不包含 x-alb-digest 行（与 GET 类似，因二进制 body 无法直接参与签名串）
+    const signStr = `POST ${path}?${queryString}\nx-alb-timestamp: ${timestamp}`;
+    headers['apisign'] = sm2Sign(signStr, credential.appSecret);
+
+    // 6. 发送请求
+    const url = `${this.baseUrl}${path}?${queryString}`;
+    const response = await this.sendRequest('POST', url, headers, formBuffer, options?.timeout);
+
+    // 7. 解密响应体并解析
+    const responseBody = await response.text();
+    const decrypted = this.encrypted ? decryptBody(responseBody, credential.appSecret) : responseBody;
+    return this.parseResponse<T>(decrypted, url, credential);
+  }
+
   // ==================== 公共参数 ====================
 
   /**
@@ -312,7 +370,7 @@ export class XinfutongOaClient {
     method: 'GET' | 'POST',
     url: string,
     headers: Record<string, string>,
-    body?: string,
+    body?: string | Uint8Array,
     timeoutMs?: number,
   ): Promise<Response> {
     const timeout = timeoutMs ?? XinfutongOaClient.DEFAULT_TIMEOUT_MS;
@@ -322,7 +380,7 @@ export class XinfutongOaClient {
       const response = await fetch(url, {
         method,
         headers,
-        body,
+        body: body as BodyInit | undefined,
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -359,5 +417,37 @@ export class XinfutongOaClient {
       );
     }
     return data;
+  }
+
+  /**
+   * 序列化 FormData 为 Buffer 并提取 boundary
+   *
+   * 利用 Request 构造函数自动完成 FormData → multipart 编码，
+   * 同时从 Content-Type 头中提取 boundary 用于手动设置请求头。
+   *
+   * @param formData FormData 实例
+   * @returns 序列化后的 body Buffer 和 boundary 字符串
+   */
+  private async buildMultipartRequest(
+    formData: FormData,
+  ): Promise<{ body: Uint8Array; boundary: string }> {
+    const request = new Request('http://localhost', {
+      method: 'POST',
+      body: formData,
+    });
+
+    // 从 Request 的 Content-Type 头中提取 boundary
+    const contentType = request.headers.get('Content-Type') ?? '';
+    const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
+    if (!boundaryMatch?.[1]) {
+      throw new Error('无法从 FormData 中提取 boundary');
+    }
+    const boundary = boundaryMatch[1];
+
+    // 序列化 body 为 Uint8Array（兼容 fetch BodyInit 类型）
+    const arrayBuffer = await request.arrayBuffer();
+    const body = new Uint8Array(arrayBuffer);
+
+    return { body, boundary };
   }
 }
