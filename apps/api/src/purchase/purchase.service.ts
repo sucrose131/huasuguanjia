@@ -768,7 +768,7 @@ export class PurchaseService {
       const itemLines = lines.filter((line) => line.pur_id === item.pur_id);
       return {
         id: item.pur_id,
-        applicationNo: `PA${item.pur_id}`,
+        applicationNo: item.pur_no,
         orgId: item.org_id,
         deptId: item.dept_id,
         reason: item.pur_reson,
@@ -800,7 +800,7 @@ export class PurchaseService {
     });
     return {
       id: header.pur_id,
-      applicationNo: `PA${header.pur_id}`,
+      applicationNo: header.pur_no,
       orgId: header.org_id,
       deptId: header.dept_id,
       reason: header.pur_reson,
@@ -1160,7 +1160,7 @@ export class PurchaseService {
     const details = await this.prisma.hspsi_purchase_order_detail.findMany({
       where: { po_id: header.po_id },
     });
-    const [goods, receiptHeads] = await Promise.all([
+    const [goods, receiptHeads, sourceApplication] = await Promise.all([
       details.length
         ? this.prisma.hspsi_goods_info.findMany({
             where: { goods_id: { in: details.map((line) => line.goods_id) } },
@@ -1170,6 +1170,12 @@ export class PurchaseService {
         where: { po_id: header.po_id, comfirm_status: { in: [0, 1] }, deleted_at: null },
         select: { po_input_id: true, comfirm_status: true },
       }),
+      header.pur_id > 0n
+        ? this.prisma.hspsi_purchase_approve.findFirst({
+            where: { pur_id: header.pur_id, deleted_at: null },
+            select: { pur_no: true },
+          })
+        : null,
     ]);
     const [categories, receiptDetails] = await Promise.all([
       goods.length
@@ -1201,9 +1207,9 @@ export class PurchaseService {
     const position = await this.purchaseMoneyPosition(this.prisma, header.po_id);
     return {
       ...header,
-      orderNo: header.po_no || `PO${header.po_id}`,
+      orderNo: header.po_no,
       applicationId: header.pur_id || null,
-      applicationNo: header.pur_id ? `PA${header.pur_id}` : null,
+      applicationNo: sourceApplication?.pur_no ?? null,
       totalAmount: detailAmount,
       payableAmount: Number(position.originalPayable),
       returnAmount: Number(position.returnAmount),
@@ -1877,15 +1883,23 @@ export class PurchaseService {
           select: { po_id: true, po_no: true, pur_id: true },
         })
       : [];
+    const purIds = [...new Set(orders.map((item) => item.pur_id).filter((id) => id > 0n))];
+    const applications = purIds.length
+      ? await this.prisma.hspsi_purchase_approve.findMany({
+          where: { pur_id: { in: purIds } },
+          select: { pur_id: true, pur_no: true },
+        })
+      : [];
     return {
       items: items.map((item) => {
         const ord = orders.find((o) => o.po_id === item.po_id);
         return {
           id: item.po_input_id,
-          receiptNo: `GA${item.po_input_id}`,
+          receiptNo: item.po_input_no,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
-          applicationNo: ord?.pur_id ? `PA${ord.pur_id}` : null,
+          applicationNo:
+            applications.find((application) => application.pur_id === ord?.pur_id)?.pur_no ?? null,
           orgId: item.org_id,
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
@@ -1916,7 +1930,7 @@ export class PurchaseService {
     return {
       ...header,
       id: header.po_input_id,
-      receiptNo: header.po_input_no || `GA${header.po_input_id}`,
+      receiptNo: header.po_input_no,
       orderId: header.po_id,
       orderNo: order.orderNo,
       applicationNo: order.applicationNo,
@@ -2552,7 +2566,7 @@ export class PurchaseService {
         const fromReceipt = item.po_input_id > 0n;
         return {
           id: item.po_exit_id,
-          returnNo: item.po_exit_no || `CGTH${item.po_exit_id}`,
+          returnNo: item.po_exit_no,
           receiptId: item.po_input_id,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
@@ -2590,7 +2604,7 @@ export class PurchaseService {
     const fromReceipt = header.po_input_id > 0n;
     return {
       ...header,
-      returnNo: header.po_exit_no || `CGTH${header.po_exit_id}`,
+      returnNo: header.po_exit_no,
       sourceType: fromReceipt ? 'receipt' : 'order',
       sourceTypeLabel: fromReceipt ? '已入库退货' : '未入库退货',
       affectsInventory: fromReceipt,
@@ -2754,7 +2768,7 @@ export class PurchaseService {
       });
       if (!item || !item.status || item.approve_status !== 0)
         throw new BadRequestException('仅待审批退货可操作');
-      const returnNo = item.po_exit_no || `CGTH${item.po_exit_id}`;
+      const returnNo = item.po_exit_no;
       if (approved) {
         await tx.$queryRaw`SELECT po_input_id FROM hspsi_purchase_order_input WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
         await tx.$queryRaw`SELECT id FROM hspsi_purchase_order_input_detail WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
@@ -2960,11 +2974,9 @@ export class PurchaseService {
         id: item.refund_id,
         refundNo: item.refund_no,
         returnId: item.po_exit_id,
-        returnNo:
-          returns.find((row) => row.po_exit_id === item.po_exit_id)?.po_exit_no ??
-          `CGTH${item.po_exit_id}`,
+        returnNo: returns.find((row) => row.po_exit_id === item.po_exit_id)?.po_exit_no ?? '',
         orderId: item.po_id,
-        orderNo: orders.find((row) => row.po_id === item.po_id)?.po_no ?? `PO${item.po_id}`,
+        orderNo: orders.find((row) => row.po_id === item.po_id)?.po_no ?? '',
         receiptId: item.po_input_id || null,
         orgId: item.org_id,
         deptId: item.dept_id,
@@ -3499,7 +3511,7 @@ export class PurchaseService {
         where: { pur_id: documentId, deleted_at: null },
       });
       if (!row) throw new NotFoundException('采购申请不存在');
-      documentNo = `PA${row.pur_id}`;
+      documentNo = row.pur_no;
       add('created', '创建采购申请', '创建成功', row.created_by, row.created_at);
       if (row.status) {
         add(
@@ -3527,7 +3539,7 @@ export class PurchaseService {
         where: { po_id: documentId, deleted_at: null },
       });
       if (!row) throw new NotFoundException('采购订单不存在');
-      documentNo = row.po_no || `PO${row.po_id}`;
+      documentNo = row.po_no;
       add('created', '创建采购订单', '创建成功', row.created_by, row.created_at);
       const [receipts, returns, payments] = await Promise.all([
         this.prisma.hspsi_purchase_order_input.findMany({
@@ -3553,7 +3565,7 @@ export class PurchaseService {
         add(
           `receipt-${item.po_input_id}`,
           '生成采购入库单',
-          item.po_input_no || `ID ${item.po_input_id}`,
+          item.po_input_no,
           item.created_by,
           item.created_at,
         ),
@@ -3562,7 +3574,7 @@ export class PurchaseService {
         add(
           `return-${item.po_exit_id}`,
           '生成采购退货单',
-          item.po_exit_no || `ID ${item.po_exit_id}`,
+          item.po_exit_no,
           item.created_by,
           item.created_at,
         ),
@@ -3571,7 +3583,7 @@ export class PurchaseService {
         add(
           `payment-${item.pay_id}`,
           '登记采购付款',
-          item.pay_no || `ID ${item.pay_id}`,
+          item.pay_no,
           item.created_by,
           item.created_at,
           `付款金额 ¥${Number(item.fact_pay_amount).toFixed(2)}`,
@@ -3582,7 +3594,7 @@ export class PurchaseService {
         where: { po_input_id: documentId, deleted_at: null },
       });
       if (!row) throw new NotFoundException('采购入库单不存在');
-      documentNo = row.po_input_no || `CGRK${row.po_input_id}`;
+      documentNo = row.po_input_no;
       add('created', '创建采购入库单', '创建成功', row.created_by, row.created_at);
       if ([1, 2].includes(row.comfirm_status)) {
         add(
@@ -3602,7 +3614,7 @@ export class PurchaseService {
         add(
           `return-${item.po_exit_id}`,
           '发起采购退货',
-          item.po_exit_no || `ID ${item.po_exit_id}`,
+          item.po_exit_no,
           item.created_by,
           item.created_at,
         ),
@@ -3612,7 +3624,7 @@ export class PurchaseService {
         where: { po_exit_id: documentId, deleted_at: null },
       });
       if (!row) throw new NotFoundException('采购退货单不存在');
-      documentNo = row.po_exit_no || `CGTH${row.po_exit_id}`;
+      documentNo = row.po_exit_no;
       add('created', '创建采购退货单', '创建成功', row.created_by, row.created_at);
       if (row.status) {
         add(

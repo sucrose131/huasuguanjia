@@ -11,7 +11,7 @@ function serviceWith(
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
-    { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+    { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
   );
 }
 
@@ -263,7 +263,7 @@ describe('PurchaseService production-shortage guards', () => {
     const refundCreate = vi.fn().mockResolvedValue({
       refund_id: 77n,
       po_exit_id: 30n,
-      refund_no: 'PRF20260804000001',
+      refund_no: 'PRF202608040001',
     });
     const refundUpdate = vi.fn().mockResolvedValue({ refund_id: 77n, refund_no: 'CGTK77' });
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
@@ -325,7 +325,7 @@ describe('PurchaseService production-shortage guards', () => {
     const created = refundCreate.mock.calls[0]![0].data;
     expect(Number(created.return_amount)).toBe(30);
     expect(Number(created.refundable_amount)).toBe(30);
-    expect(created.refund_no).toBe('PRF20260804000001');
+    expect(created.refund_no).toBe('PRF202608040001');
     expect(refundUpdate).not.toHaveBeenCalled();
     expect(trace.link).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -334,7 +334,7 @@ describe('PurchaseService production-shortage guards', () => {
       }),
       tx,
     );
-    expect(result.refund_no).toBe('PRF20260804000001');
+    expect(result.refund_no).toBe('PRF202608040001');
   });
 
   it('does not create a refund task when payment does not exceed the effective payable', async () => {
