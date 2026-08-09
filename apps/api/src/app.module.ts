@@ -15,6 +15,7 @@ import { RequisitionModule } from './requisition/requisition.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DocumentTraceModule } from './document-trace/document-trace.module';
 import { BusinessNumberModule } from './business-number/business-number.module';
+import { AttachmentsModule } from './attachments/attachments.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { BusinessNumberModule } from './business-number/business-number.module';
     DatabaseModule,
     RedisModule,
     BusinessNumberModule,
+    AttachmentsModule,
     AuthModule,
     BaseDataModule,
     GoodsModule,

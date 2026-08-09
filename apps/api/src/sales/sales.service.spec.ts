@@ -25,6 +25,115 @@ function createService(
   };
 }
 
+describe('SalesService after-sales progress', () => {
+  it('creates an independent progress and updates the main service status with an audit log', async () => {
+    const createProgress = vi.fn().mockResolvedValue({
+      progress_id: 31n,
+      service_id: 8n,
+      progress_content: '已联系客户确认处理方案',
+      progress_status: 1,
+    });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_sale_order_service: {
+        findFirst: vi.fn().mockResolvedValue({ service_id: 8n, so_id: 5n }),
+        count: vi.fn().mockResolvedValue(1),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      hspsi_sale_order_service_progress: { create: createProgress },
+      hspsi_sale_order: { update: vi.fn().mockResolvedValue({}) },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 2 }),
+      },
+      hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_id: 3 }) },
+      hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.saveServiceProgress(
+      '8',
+      null,
+      { content: '已联系客户确认处理方案', status: 1, handlerId: 9 },
+      '9',
+    );
+
+    expect(result.id).toBe(31n);
+    expect(createProgress).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        service_id: 8n,
+        progress_content: '已联系客户确认处理方案',
+        progress_status: 1,
+        source_type: 1,
+      }),
+    });
+    expect(tx.hspsi_sale_order_service.update).toHaveBeenCalledWith({
+      where: { service_id: 8n },
+      data: expect.objectContaining({ event_status: 1, handler_id: 9n }),
+    });
+    expect(tx.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SalesService external after-sales webhook', () => {
+  it('stores the immutable original payload when receiving a new request', async () => {
+    const payload = {
+      externalRequestId: 'HSZJ-1001',
+      externalRequestNo: 'AS-20260807-01',
+      eventContent: '客户反馈设备无法启动',
+      customer: { name: '测试客户', mobile: '13800000000' },
+    };
+    const create = vi.fn().mockResolvedValue({ service_id: 81n, service_no: 'AS20260807000001' });
+    const tx = {
+      hspsi_sale_order_service: { create },
+      hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      hspsi_sale_order_service: { findFirst: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.receiveExternalAfterSales('huashu_home', payload);
+
+    expect(result).toMatchObject({ id: 81n, duplicate: false });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        source_system: 'huashu_home',
+        external_request_id: 'HSZJ-1001',
+        external_request_no: 'AS-20260807-01',
+        external_payload: payload,
+        event_content: '客户反馈设备无法启动',
+      }),
+    });
+    expect(tx.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+
+  it('returns the existing service without overwriting it on a repeated request', async () => {
+    const existing = { service_id: 81n, service_no: 'AS20260807000001' };
+    const prisma = {
+      hspsi_sale_order_service: { findFirst: vi.fn().mockResolvedValue(existing) },
+      $transaction: vi.fn(),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.receiveExternalAfterSales('huashu_home', {
+      externalRequestId: 'HSZJ-1001',
+      eventContent: '重复推送不应覆盖',
+    });
+
+    expect(result).toEqual({
+      id: 81n,
+      businessNo: 'AS20260807000001',
+      duplicate: true,
+      message: '该外部售后申请已接收',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('SalesService ordinary-order P0 guards', () => {
   it('ignores client propertyType and approveStatus when saving an ordinary order', async () => {
     const createOrder = vi.fn().mockResolvedValue({ so_id: 10n });

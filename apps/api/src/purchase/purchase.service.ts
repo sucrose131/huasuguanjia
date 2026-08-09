@@ -12,6 +12,7 @@ import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 
 type Body = Record<string, any>;
@@ -80,6 +81,107 @@ export class PurchaseService {
   private lineGoodsId(line: Body) {
     return BigInt(String(line.goodsId ?? line.goods_id ?? 0));
   }
+  private async materializeQuickCatalog(
+    tx: Prisma.TransactionClient,
+    lines: Body[],
+    userId: string,
+  ) {
+    for (const [index, line] of lines.entries()) {
+      if (line.newGoods) {
+        const input = line.newGoods as Body;
+        const goodsName = String(input.goodsName ?? '').trim();
+        if (!goodsName) throw new BadRequestException(`第 ${index + 1} 行新商品名称必填`);
+        const existing = await tx.hspsi_goods_info.findFirst({
+          where: { goods_name: goodsName },
+          select: { goods_id: true },
+        });
+        if (existing)
+          throw new BadRequestException(
+            `商品“${goodsName}”已存在，请取消快捷新建并选择已有商品档案`,
+          );
+        const categoryId = BigInt(String(input.categoryId ?? 0));
+        const category = await tx.hspsi_goods_info_category.findFirst({
+          where: { goods_catg_id: categoryId, status: 1, deleted_at: null },
+        });
+        if (!category || category.warehouse_type <= 0)
+          throw new BadRequestException(`第 ${index + 1} 行新商品分类无效或未绑定仓库类型`);
+        const childCount = await tx.hspsi_goods_info_category.count({
+          where: { parent_goods_catg_id: categoryId, status: 1, deleted_at: null },
+        });
+        if (childCount) throw new BadRequestException('快捷新建商品必须选择叶级分类');
+        const unitType = Number(input.unitType);
+        if (!Number.isSafeInteger(unitType) || unitType <= 0)
+          throw new BadRequestException(`第 ${index + 1} 行新商品基础单位必填`);
+        const goods = await tx.hspsi_goods_info.create({
+          data: {
+            org_id: 0n,
+            query_code: String(input.queryCode ?? ''),
+            goods_name: goodsName,
+            short_name: String(input.shortName ?? ''),
+            brand_name: String(input.brandName ?? ''),
+            spec_models: String(input.specModels ?? ''),
+            unit_type: unitType,
+            goods_catg_id: categoryId,
+            supply_type: Number(input.supplyType ?? 2),
+            goods_type: Number(input.goodsType ?? 1),
+            const_price: new Prisma.Decimal(String(input.costPrice ?? 0)),
+            sale_price: new Prisma.Decimal(String(input.salePrice ?? 0)),
+            vendor_id: 0n,
+            warehouse_id: null,
+            status: 1,
+            created_by: BigInt(userId),
+            updated_by: BigInt(userId),
+          },
+        });
+        line.goodsId = goods.goods_id;
+        line.newSku = line.newSku ?? {
+          specModels: String(input.specModels ?? '').trim() || '默认规格',
+          unitType,
+          pcsQty: 1,
+          costPrice: Number(input.costPrice ?? 0),
+          salePrice: Number(input.salePrice ?? 0),
+        };
+      }
+      if (line.newSku) {
+        const input = line.newSku as Body;
+        const goodsId = BigInt(String(line.goodsId ?? 0));
+        const specModels = String(input.specModels ?? '').trim() || '默认规格';
+        const duplicate = await tx.hspsi_goods_info_sku.findFirst({
+          where: { good_id: goodsId, spec_models: specModels },
+          select: { sku_id: true },
+        });
+        if (duplicate)
+          throw new BadRequestException(
+            `第 ${index + 1} 行 SKU“${specModels}”已存在，请选择已有 SKU`,
+          );
+        const unitType = Number(input.unitType ?? line.unitType);
+        const pcsQty = Number(input.pcsQty ?? 1);
+        if (!Number.isSafeInteger(unitType) || unitType <= 0)
+          throw new BadRequestException(`第 ${index + 1} 行新 SKU 单位必填`);
+        if (!Number.isSafeInteger(pcsQty) || pcsQty <= 0)
+          throw new BadRequestException(`第 ${index + 1} 行新 SKU 基础件数必须为正整数`);
+        const existingDefault = await tx.hspsi_goods_info_sku.count({
+          where: { good_id: goodsId, is_default: 1, deleted_at: null },
+        });
+        const sku = await tx.hspsi_goods_info_sku.create({
+          data: {
+            good_id: goodsId,
+            spec_models: specModels,
+            pcs_qty: pcsQty,
+            unit_type: unitType,
+            const_price: new Prisma.Decimal(String(input.costPrice ?? 0)),
+            sale_price: new Prisma.Decimal(String(input.salePrice ?? 0)),
+            is_default: existingDefault ? 0 : 1,
+            status: 1,
+            created_by: BigInt(userId),
+            updated_by: BigInt(userId),
+          },
+        });
+        line.skuId = sku.sku_id;
+        line.unitType = unitType;
+      }
+    }
+  }
   private async requiredWarehouseType(db: PurchaseDb, orgId: bigint, lines: Body[]) {
     const goodsIds = [
       ...new Set(lines.map((line) => this.lineGoodsId(line)).filter((id) => id > 0n)),
@@ -90,11 +192,11 @@ export class PurchaseService {
     )
       throw new BadRequestException('采购明细商品无效');
     const goods = await db.hspsi_goods_info.findMany({
-      where: { goods_id: { in: goodsIds }, org_id: orgId, status: 1, deleted_at: null },
+      where: { goods_id: { in: goodsIds }, status: 1, deleted_at: null },
       select: { goods_id: true, goods_name: true, goods_catg_id: true },
     });
     if (goods.length !== goodsIds.length)
-      throw new BadRequestException('采购明细包含非当前组织商品，或商品已停用');
+      throw new BadRequestException('采购明细包含无效或已停用商品');
     const categories = await db.hspsi_goods_info_category.findMany({
       where: {
         goods_catg_id: { in: [...new Set(goods.map((item) => item.goods_catg_id))] },
@@ -167,33 +269,6 @@ export class PurchaseService {
       if (preferred) return preferred.warehouse_id;
       if (strictPreferred)
         throw new BadRequestException('所选仓库不属于当前组织、已停用，或仓库属性与商品分类不一致');
-    }
-    const goodsIds = [
-      ...new Set(lines.map((line) => this.lineGoodsId(line)).filter((id) => id > 0n)),
-    ];
-    const goods = await tx.hspsi_goods_info.findMany({
-      where: { goods_id: { in: goodsIds }, org_id: orgId, deleted_at: null },
-      select: { warehouse_id: true },
-    });
-    const defaultWarehouseIds = [
-      ...new Set(
-        goods
-          .map((item) => item.warehouse_id)
-          .filter((id): id is bigint => typeof id === 'bigint' && id > 0n),
-      ),
-    ];
-    if (defaultWarehouseIds.length === 1) {
-      const defaultWarehouse = await tx.hspsi_basic_warehouse.findFirst({
-        where: {
-          warehouse_id: defaultWarehouseIds[0]!,
-          org_id: orgId,
-          warehouse_type: requiredType,
-          status: 1,
-          deleted_at: null,
-        },
-        select: { warehouse_id: true },
-      });
-      if (defaultWarehouse) return defaultWarehouse.warehouse_id;
     }
     const fallback = await tx.hspsi_basic_warehouse.findFirst({
       where: { org_id: orgId, warehouse_type: requiredType, status: 1, deleted_at: null },
@@ -762,6 +837,7 @@ export class PurchaseService {
       updated_at: new Date(),
     };
     return this.guardedTransaction(async (tx) => {
+      await this.materializeQuickCatalog(tx, lines, userId);
       if (id) {
         await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
         const existing = await tx.hspsi_purchase_approve.findFirst({
@@ -1255,6 +1331,7 @@ export class PurchaseService {
       updated_at: new Date(),
     };
     return this.guardedTransaction(async (tx) => {
+      await this.materializeQuickCatalog(tx, effectiveLines, userId);
       await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
       await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, effectiveLines);
       await this.assertDictionaryValue(tx, 'purchase_settlement_type', data.pay_type, '结算方式');
@@ -1912,7 +1989,7 @@ export class PurchaseService {
       }
     }
     for (const line of lines)
-      if (!String(line.batchNo ?? '').trim()) throw new BadRequestException('批次号必填');
+      if (!String(line.batchNo ?? '').trim()) line.batchNo = generateBatchNo();
     const qty = lines.reduce((sum, line) => sum + Number(line.inputQuantity), 0);
     return this.guardedTransaction(async (tx) => {
       let finalPoId = BigInt(0);
@@ -2464,7 +2541,7 @@ export class PurchaseService {
         const fromReceipt = item.po_input_id > 0n;
         return {
           id: item.po_exit_id,
-          returnNo: `CGTH${item.po_exit_id}`,
+          returnNo: item.po_exit_no || `CGTH${item.po_exit_id}`,
           receiptId: item.po_input_id,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
@@ -2479,6 +2556,9 @@ export class PurchaseService {
           approveStatus: item.approve_status,
           confirmStatus: item.approve_status,
           approveComment: item.approve_comment,
+          autoCreated: item.auto_created === 1,
+          sourceDocumentType: item.source_document_type,
+          sourceDocumentId: item.source_document_id,
           createdBy: item.created_by,
           createdAt: item.created_at,
         };
@@ -2499,10 +2579,13 @@ export class PurchaseService {
     const fromReceipt = header.po_input_id > 0n;
     return {
       ...header,
-      returnNo: `CGTH${header.po_exit_id}`,
+      returnNo: header.po_exit_no || `CGTH${header.po_exit_id}`,
       sourceType: fromReceipt ? 'receipt' : 'order',
       sourceTypeLabel: fromReceipt ? '已入库退货' : '未入库退货',
       affectsInventory: fromReceipt,
+      autoCreated: header.auto_created === 1,
+      sourceDocumentType: header.source_document_type,
+      sourceDocumentId: header.source_document_id,
       details: details.map((line) => ({
         id: line.serial_number,
         goodsId: line.goods_id,
@@ -2789,6 +2872,22 @@ export class PurchaseService {
           updated_by: BigInt(userId),
         },
       });
+      if (
+        !approved &&
+        item.auto_created === 1 &&
+        item.source_document_type === 'inventory_loss' &&
+        item.source_document_id
+      ) {
+        await tx.hspsi_inventory_loss.updateMany({
+          where: { loss_id: item.source_document_id, deleted_at: null },
+          data: {
+            status: 1,
+            approve_status: 0,
+            approve_comment: `自动采购退货单${returnNo}被驳回，已恢复待审批`,
+            updated_by: BigInt(userId),
+          },
+        });
+      }
       if (approved) {
         await this.recalcOrderStatus(tx, item.po_id);
         await this.createRefundTask(tx, item.po_exit_id, userId);
@@ -2801,9 +2900,30 @@ export class PurchaseService {
     if (item.approve_status === 1 || (item.status && item.approve_status === 0))
       throw new BadRequestException('仅草稿或已驳回退货单可删除');
     await this.prisma.$transaction(async (tx) => {
+      if (
+        item.auto_created === 1 &&
+        item.source_document_type === 'inventory_loss' &&
+        item.source_document_id
+      ) {
+        await tx.$queryRaw`SELECT loss_id FROM hspsi_inventory_loss WHERE loss_id=${item.source_document_id} FOR UPDATE`;
+        await tx.hspsi_inventory_loss.updateMany({
+          where: { loss_id: item.source_document_id, deleted_at: null },
+          data: {
+            status: 1,
+            approve_status: 0,
+            approve_comment: `自动采购退货草稿${item.po_exit_no}已删除，已恢复待审批`,
+            updated_by: BigInt(userId),
+          },
+        });
+      }
       await tx.hspsi_purchase_order_input_exit.update({
         where: { po_exit_id: item.po_exit_id },
-        data: { deleted_at: new Date(), updated_by: BigInt(userId), updated_at: new Date() },
+        data: {
+          deleted_at: new Date(),
+          generation_key: null,
+          updated_by: BigInt(userId),
+          updated_at: new Date(),
+        },
       });
       await this.documentTrace.removeForDocument('purchase_return', item.po_exit_id, tx);
     });

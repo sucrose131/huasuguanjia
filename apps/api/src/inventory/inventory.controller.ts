@@ -40,11 +40,23 @@ export class InventoryController {
     return this.service.approvedLossOptions();
   }
 
+  @Get('losses/purchase-source-options')
+  @RequirePermissions('inventory')
+  lossPurchaseSourceOptions(@Query() query: any) {
+    return this.service.lossPurchaseSourceOptions(query);
+  }
+
   // ── stocks ──
   @Get('stocks')
   @RequirePermissions('inventory')
   stocks(@Query() q: any) {
     return this.service.stocks(q);
+  }
+
+  @Get('requisition-history')
+  @RequirePermissions('inventory')
+  requisitionHistory(@Query() q: any) {
+    return this.service.requisitionHistory(q);
   }
 
   @Get('ledger')

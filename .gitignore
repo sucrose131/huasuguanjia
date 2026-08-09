@@ -14,13 +14,10 @@ apps/api/prisma/migrations/*/migration_lock.toml
 docs/*
 !docs/plan/
 !docs/plan/**
+!docs/用户操作指引/
+!docs/用户操作指引/**
 CLAUDE.md
 HANDOFF.md
-database/
-!database/
-database/*
-!database/migrations/
-!database/migrations/*.sql
 */.env
 */node_modules/
 .nvmrc
@@ -28,6 +25,5 @@ database/*
 .env.docker
 .idea/
 .vscode/
-
 
 

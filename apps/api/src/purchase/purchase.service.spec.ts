@@ -15,6 +15,62 @@ function serviceWith(
   );
 }
 
+describe('PurchaseService quick catalog materialization', () => {
+  it('creates the formal goods and default SKU only inside the document transaction', async () => {
+    const goodsCreate = vi.fn().mockResolvedValue({ goods_id: 101n });
+    const skuCreate = vi.fn().mockResolvedValue({ sku_id: 202n });
+    const tx = {
+      hspsi_goods_info: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: goodsCreate,
+      },
+      hspsi_goods_info_category: {
+        findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      hspsi_goods_info_sku: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        create: skuCreate,
+      },
+    };
+    const line: Record<string, any> = {
+      goodsId: 'quick-goods',
+      skuId: 'quick-sku',
+      unitType: 5,
+      newGoods: {
+        goodsName: '快捷补充商品',
+        categoryId: 3,
+        unitType: 5,
+        specModels: '盒装',
+      },
+      newSku: { specModels: '盒装', unitType: 5, pcsQty: 12, costPrice: 2 },
+    };
+
+    await (serviceWith({}) as any).materializeQuickCatalog(tx, [line], '9');
+
+    expect(goodsCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        goods_name: '快捷补充商品',
+        goods_catg_id: 3n,
+        org_id: 0n,
+        vendor_id: 0n,
+        warehouse_id: null,
+      }),
+    });
+    expect(skuCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        good_id: 101n,
+        spec_models: '盒装',
+        pcs_qty: 12,
+        is_default: 1,
+      }),
+    });
+    expect(line.goodsId).toBe(101n);
+    expect(line.skuId).toBe(202n);
+  });
+});
+
 describe('PurchaseService production-shortage guards', () => {
   it('creates one pending purchase-refund task for an effective paid return', async () => {
     const refundCreate = vi.fn().mockResolvedValue({

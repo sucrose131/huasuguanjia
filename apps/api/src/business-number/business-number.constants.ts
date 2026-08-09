@@ -30,6 +30,8 @@ export const BUSINESS_PREFIX = {
   PRODUCTION_MATERIAL_OUTPUT: 'PMO',
   /** 生产成品入库单；hspsi_production_plan_input.input_no。 */
   PRODUCTION_PRODUCT_INPUT: 'PPI',
+  /** BOM物料退库单；hspsi_production_material_return.return_no。 */
+  PRODUCTION_MATERIAL_RETURN: 'PMR',
 
   /** 普通销售订单；hspsi_sale_order.so_no，so_property_type=1。 */
   SALES_ORDER: 'SO',

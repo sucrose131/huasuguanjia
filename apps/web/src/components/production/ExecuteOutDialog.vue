@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { dateText, moneyText } from '@/utils/format';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
 type B = Record<string, any>;
 
@@ -178,6 +179,11 @@ watch(visible, (v) => {
       </div>
       <div v-if="displayedError" class="eo-error">{{ displayedError }}</div>
       <BatchMaterialTable :rows="rows" :stocks="allStocks" :editable="true" mode="execute" />
+      <DocumentAttachments
+        v-if="outDoc.id"
+        document-type="production_material_output"
+        :document-id="outDoc.id"
+      />
     </template>
     <template #footer>
       <el-button @click="visible = false" :disabled="saving">关闭</el-button>

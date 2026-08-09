@@ -333,3 +333,105 @@ describe('RequisitionService locked requisition mutations', () => {
     expect(tx.hspsi_draw_approve_output_exit.create).not.toHaveBeenCalled();
   });
 });
+
+describe('RequisitionService direct output reverse workflow', () => {
+  it('posts inventory and creates an approved reverse application atomically', async () => {
+    const tx = {
+      hspsi_draw_approve_output: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ draw_output_id: 12n }),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        create: vi.fn().mockResolvedValue({ draw_id: 7n }),
+      },
+      hspsi_draw_approve_detail: {
+        create: vi.fn().mockResolvedValue({ draw_detail_id: 70n }),
+      },
+      hspsi_draw_approve_output_detail: { createMany: vi.fn() },
+    };
+    const { service, posting, documentTrace } = serviceWithTransaction(tx);
+    vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
+
+    const result = await service.saveOutput(
+      null,
+      {
+        directOutput: true,
+        requestKey: 'direct-test-0001',
+        orgId: 1,
+        warehouseId: 2,
+        deptId: 3,
+        receiverId: 4,
+        details: [{ goodsId: 5, skuId: 6, batchNo: 'PH20260807', unitType: 1, quantity: 2 }],
+      },
+      '9',
+    );
+
+    expect(result).toMatchObject({ id: 12n, applicationId: 7n });
+    expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ approve_status: 1, fact_draw_qty: 2, draw_type: 2 }),
+      }),
+    );
+    expect(posting.post).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: -1, sourceType: 'requisition_output' }),
+      tx,
+    );
+    expect(documentTrace.link).toHaveBeenCalledWith(
+      expect.objectContaining({ relationKind: 'reverse_generated' }),
+      tx,
+    );
+  });
+
+  it('rejects only the reverse application and idempotently creates a draft return', async () => {
+    const application = { draw_id: 7n, draw_no: 'RA1', approve_status: 1, status: 1 };
+    const output = {
+      draw_output_id: 12n,
+      draw_output_no: 'RO1',
+      draw_id: 7n,
+      org_id: 1n,
+      warehouse_id: 2n,
+      dept_id: 3n,
+      receiver_id: 4n,
+      comfirm_status: 1,
+    };
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(output) },
+      hspsi_draw_approve_output_exit: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ draw_exit_id: 20n }),
+      },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            output_detail_id: 120n,
+            goods_id: 5n,
+            sku_id: 6n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            fact_draw_qty: 2,
+            is_returnable: 1,
+          },
+        ]),
+      },
+      hspsi_draw_approve_output_exit_detail: { createMany: vi.fn() },
+    };
+    const { service, posting } = serviceWithTransaction(tx);
+
+    const result = await service.approve('7', false, 'OA否决', '9');
+
+    expect(result).toMatchObject({ outputId: 12n, returnId: 20n });
+    expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ approve_status: 2, status: 0 }) }),
+    );
+    expect(tx.hspsi_draw_approve_output_exit.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ comfirm_status: 0, exit_qty: 2 }) }),
+    );
+    expect(posting.post).not.toHaveBeenCalled();
+  });
+});

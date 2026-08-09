@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { dateText } from '@/utils/format';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
 type B = Record<string, any>;
 
@@ -135,6 +136,11 @@ watch(visible, (value) => {
         :stocks="stocks"
         :editable="false"
         :mode="tableMode"
+      />
+      <DocumentAttachments
+        v-if="detail.id || outRow.id"
+        document-type="production_material_output"
+        :document-id="detail.id || outRow.id"
       />
     </template>
     <template #footer>

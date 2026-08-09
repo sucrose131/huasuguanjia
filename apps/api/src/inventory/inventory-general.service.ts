@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { generateBatchNo } from '../common/batch-number';
 import { PrismaService } from '../database/prisma.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import { InventoryPostingService } from './inventory-posting.service';
@@ -61,7 +62,7 @@ export class InventoryGeneralService {
     });
     if (!warehouse) return [];
     const goods = await this.prisma.hspsi_goods_info.findMany({
-      where: { org_id: orgId, status: 1, deleted_at: null },
+      where: { status: 1, deleted_at: null },
     });
     const categories = await this.prisma.hspsi_goods_info_category.findMany({
       where: {
@@ -292,7 +293,7 @@ export class InventoryGeneralService {
     ];
     const [goodsRows, skuRows] = await Promise.all([
       this.prisma.hspsi_goods_info.findMany({
-        where: { goods_id: { in: goodsIds }, org_id: orgId, status: 1, deleted_at: null },
+        where: { goods_id: { in: goodsIds }, status: 1, deleted_at: null },
       }),
       this.prisma.hspsi_goods_info_sku.findMany({
         where: { sku_id: { in: skuIds }, status: 1, deleted_at: null },
@@ -317,7 +318,8 @@ export class InventoryGeneralService {
       return {
         goods,
         sku,
-        batchNo: String(input.batchNo ?? '').trim(),
+        batchNo:
+          String(input.batchNo ?? '').trim() || (direction > 0 ? generateBatchNo() : ''),
         documentQuantity,
         piecesPerUnit,
         piecesQuantity,

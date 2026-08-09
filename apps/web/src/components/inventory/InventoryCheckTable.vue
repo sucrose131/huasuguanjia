@@ -61,6 +61,7 @@ const differenceClass = (column: InventoryCheckColumn, row: Row) => {
     empty-text="暂无盘点单，可点击右上角新增盘点"
   >
     <el-table-column type="index" label="序号" width="62" fixed="left" align="center" />
+    <el-table-column prop="id" label="ID" width="100" fixed="left" />
     <el-table-column
       v-for="column in inventoryCheckTableSchema.columns"
       :key="column.key"

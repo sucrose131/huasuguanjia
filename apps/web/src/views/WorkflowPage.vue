@@ -5,9 +5,11 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
+import { generateBatchNo } from '@/utils/batch-number';
 import { workflowDocumentType } from '@/utils/document-type';
 import { businessConfigs } from './business-config';
 import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import SignaturePad from '@/components/requisition/SignaturePad.vue';
 import ExecuteOutDialog from '@/components/production/ExecuteOutDialog.vue';
@@ -17,6 +19,7 @@ import ViewOutboundDialog from '@/components/production/ViewOutboundDialog.vue';
 import LabOutboundDialog from '@/components/production/LabOutboundDialog.vue';
 import BatchMaterialTable from '@/components/production/BatchMaterialTable.vue';
 import InputDialog from '@/components/production/InputDialog.vue';
+import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
 type B = Record<string, any>;
 const route = useRoute(),
   router = useRouter(),
@@ -57,6 +60,19 @@ const key = computed(() => `${group.value}/${resource.value}`),
     dictionaries: {},
   });
 const temporaryCreateMode = ref(false);
+const attachmentType = computed(() => workflowDocumentType(group.value, resource.value, form));
+const serviceProgresses = ref<B[]>([]);
+const progressSaving = ref(false);
+const progressForm = reactive<B>({ id: '', content: '', status: 1, occurredAt: new Date() });
+
+function resetProgressForm() {
+  Object.assign(progressForm, {
+    id: '',
+    content: '',
+    status: form.eventStatus || 1,
+    occurredAt: new Date(),
+  });
+}
 const isMoney = computed(() => ['payments', 'refunds'].includes(resource.value)),
   isService = computed(() => resource.value === 'services'),
   isBom = computed(() => key.value === 'production/boms'),
@@ -88,7 +104,7 @@ function blank(): B {
     goodsId: '',
     skuId: '',
     unitType: 0,
-    batchNo: '',
+    batchNo: isInput.value ? generateBatchNo() : '',
     quantity: 1,
     price: 0,
     factAmount: null,
@@ -124,6 +140,7 @@ function reset() {
     planId: '',
     orderId: '',
     applicationId: '',
+    directOutput: false,
     outputId: '',
     sourceId: '',
     sourceOutputId: '',
@@ -135,9 +152,10 @@ function reset() {
     planQty: 1,
     maxPlanQty: 0,
     quantity: 1,
-    batchNo: '',
+    batchNo: isInput.value ? generateBatchNo() : '',
     drawType: 1,
     outType: 1,
+    destinationType: 1,
     status: 1,
     orderType: 1,
     sourceType: 4,
@@ -174,6 +192,8 @@ function reset() {
   }
   if (isMoney.value) form.requestKey = crypto.randomUUID();
   if (key.value === 'sales/discount-orders') form.propertyType = 2;
+  serviceProgresses.value = [];
+  resetProgressForm();
 }
 const moneyLimit = computed(() =>
   Math.max(
@@ -749,6 +769,8 @@ async function open(row?: B, view = false) {
     else if (isService.value) {
       const detail: any = await api.get(`/sales/services/${row.id}`);
       Object.assign(form, detail);
+      serviceProgresses.value = detail.progresses ?? [];
+      resetProgressForm();
       form.orderSummary = detail.order;
       await loadServiceOutputOptions();
       if (
@@ -807,6 +829,51 @@ async function open(row?: B, view = false) {
   if (group.value === 'requisitions') await loadRequisitionFormOptions(form.orgId);
   refreshAvailableStocks();
   dialog.value = true;
+}
+function editServiceProgress(row: B) {
+  Object.assign(progressForm, {
+    id: row.id,
+    content: row.content,
+    status: Number(row.status),
+    occurredAt: new Date(row.occurredAt),
+  });
+}
+async function reloadServiceProgresses() {
+  serviceProgresses.value = (await api.get(`/sales/services/${form.id}/progress`)) as B[];
+}
+async function saveServiceProgress() {
+  if (!String(progressForm.content ?? '').trim()) {
+    ElMessage.warning('请填写本次处理进展');
+    return;
+  }
+  progressSaving.value = true;
+  try {
+    const payload = {
+      content: String(progressForm.content).trim(),
+      status: Number(progressForm.status),
+      occurredAt: progressForm.occurredAt,
+      handlerId: auth.user?.id,
+    };
+    const result: any = progressForm.id
+      ? await api.patch(`/sales/services/${form.id}/progress/${progressForm.id}`, payload)
+      : await api.post(`/sales/services/${form.id}/progress`, payload);
+    form.eventStatus = payload.status;
+    ElMessage.success(result.message);
+    await reloadServiceProgresses();
+    resetProgressForm();
+    await load();
+  } finally {
+    progressSaving.value = false;
+  }
+}
+async function deleteServiceProgress(row: B) {
+  await ElMessageBox.confirm('确认删除这条售后进展？删除后仍保留审计记录。', '删除进展', {
+    type: 'warning',
+  });
+  const result: any = await api.delete(`/sales/services/${form.id}/progress/${row.id}`);
+  ElMessage.success(result.message);
+  await reloadServiceProgresses();
+  if (String(progressForm.id) === String(row.id)) resetProgressForm();
 }
 function applicantChanged(value: unknown) {
   if (key.value !== 'requisitions/applications') return;
@@ -890,6 +957,21 @@ async function save(submit = true) {
       form.signedAt = form.signedAt || new Date().toISOString();
     }
   }
+  if (key.value === 'requisitions/outputs' && form.directOutput) {
+    if (!form.orgId || !form.warehouseId || !form.deptId || !form.receiverId) {
+      ElMessage.warning('请选择所属组织、领用部门、领用仓库和接收人');
+      return;
+    }
+    if (
+      !(form.details ?? []).some(
+        (line: B) => line.goodsId && line.skuId && line.batchNo && Number(line.quantity) > 0,
+      )
+    ) {
+      ElMessage.warning('请至少选择一条完整的库存批次并填写出库数量');
+      return;
+    }
+    form.requestKey = form.requestKey || crypto.randomUUID();
+  }
   if (serviceNeedsBatch.value) {
     const selected = (form.details ?? []).filter((line: B) => Number(line.quantity) > 0);
     if (!form.sourceOutputId || !selected.length) {
@@ -906,6 +988,13 @@ async function save(submit = true) {
           ? '收款保存后立即生效且不可直接编辑，是否继续？'
           : '退款只处理资金，不执行商品返库，是否继续？';
       await ElMessageBox.confirm(msg, '确认', { type: 'warning' });
+    }
+    if (key.value === 'requisitions/outputs' && form.directOutput) {
+      await ElMessageBox.confirm(
+        '保存后将立即扣减库存，并自动生成一张已通过的领用申请单。是否继续？',
+        '确认直接领用出库',
+        { type: 'warning' },
+      );
     }
     const url = `/${group.value}/${resource.value}`,
       payload: B = { ...form };
@@ -1047,6 +1136,10 @@ async function remove(row: B) {
 const canApprove = (r: B) =>
   Number(r.approveStatus ?? r.approve_status) === 0 &&
   (Number(r.status) === 1 || Number(r.planStatus) === 1 || group.value === 'sales');
+const canRejectReverseGeneratedApplication = (r: B) =>
+  key.value === 'requisitions/applications' &&
+  Boolean(r.reverseGenerated) &&
+  Number(r.approveStatus ?? r.approve_status) === 1;
 const canConfirmSourcedDiscount = (r: B) =>
   key.value === 'sales/discount-orders' &&
   Number(r.businessSourceId ?? r.business_source_id) > 0 &&
@@ -1054,28 +1147,35 @@ const canConfirmSourcedDiscount = (r: B) =>
   Number(r.deliveryStatus ?? r.delivery_status) !== 3;
 const canEdit = (r: B) =>
   !isMoney.value &&
+  !(isService.value && r.sourceSystem) &&
   key.value !== 'production/inputs' &&
   Number(r.confirmStatus ?? r.comfirm_status) !== 1 &&
   Number(r.approveStatus ?? r.approve_status) !== 1 &&
   (key.value !== 'production/plans' || [0, 1].includes(Number(r.planStatus)));
 const canRemove = (r: B) =>
-  key.value === 'sales/discount-orders' && Number(r.businessSourceId ?? r.business_source_id) > 0
+  isService.value && r.sourceSystem
     ? false
-    : isMoney.value ||
-      (isService.value && Number(r.eventStatus) !== 2) ||
-      (key.value === 'production/inputs' && Number(r.confirmStatus ?? r.status) !== 1) ||
-      key.value === 'production/outputs' ||
-      (['sales/outputs', 'sales/returns', 'requisitions/outputs', 'requisitions/returns'].includes(
-        key.value,
-      ) &&
-        Number(r.confirmStatus) !== 1) ||
-      [
-        'sales/orders',
-        'sales/discount-orders',
-        'production/plans',
-        'production/boms',
-        'requisitions/applications',
-      ].includes(key.value);
+    : key.value === 'sales/discount-orders' &&
+        Number(r.businessSourceId ?? r.business_source_id) > 0
+      ? false
+      : isMoney.value ||
+        (isService.value && Number(r.eventStatus) !== 2) ||
+        (key.value === 'production/inputs' && Number(r.confirmStatus ?? r.status) !== 1) ||
+        key.value === 'production/outputs' ||
+        ([
+          'sales/outputs',
+          'sales/returns',
+          'requisitions/outputs',
+          'requisitions/returns',
+        ].includes(key.value) &&
+          Number(r.confirmStatus) !== 1) ||
+        [
+          'sales/orders',
+          'sales/discount-orders',
+          'production/plans',
+          'production/boms',
+          'requisitions/applications',
+        ].includes(key.value);
 const approvedOrder = (r: B) => Number(r.approveStatus ?? r.approve_status) === 1;
 const orderNetReceived = (r: B) =>
   Number(r.netAmount ?? Number(r.receivedAmount || 0) - Number(r.refundedAmount || 0));
@@ -1138,6 +1238,7 @@ const executeOutVisible = ref(false),
   tempSupplVisible = ref(false),
   editOutVisible = ref(false),
   viewOutVisible = ref(false),
+  bomReturnVisible = ref(false),
   labOutVisible = ref(false),
   selectedOutRow = ref<B>({});
 const inputVisible = ref(false),
@@ -1171,8 +1272,22 @@ function openTempSuppl(row: B) {
   selectedOutRow.value = row;
   tempSupplVisible.value = true;
 }
+function openBomReturn(row: B) {
+  selectedOutRow.value = row;
+  bomReturnVisible.value = true;
+}
 function openTemporaryOutputCreate() {
   labOutVisible.value = true;
+}
+async function openDirectRequisitionOutput() {
+  reset();
+  mode.value = 'create';
+  form.directOutput = true;
+  form.requestKey = crypto.randomUUID();
+  form.drawType = 2;
+  form.details = [{ ...blank(), returnable: true }];
+  await loadRequisitionFormOptions(form.orgId);
+  dialog.value = true;
 }
 function openWorkflowView(row: B) {
   if (key.value === 'production/inputs') {
@@ -1364,6 +1479,12 @@ watch(key, async () => {
         >新增临时出库</el-button
       >
       <el-button
+        v-if="key === 'requisitions/outputs'"
+        type="primary"
+        @click="openDirectRequisitionOutput"
+        >直接领用出库</el-button
+      >
+      <el-button
         v-if="key === 'production/inputs'"
         type="primary"
         @click="
@@ -1466,6 +1587,7 @@ watch(key, async () => {
         @expand-change="handleOutputExpand"
       >
         <el-table-column type="index" label="序号" width="65" />
+        <el-table-column prop="id" label="ID" width="100" />
         <el-table-column
           v-for="column in current.columns"
           :key="column.prop"
@@ -1568,7 +1690,7 @@ watch(key, async () => {
                       dateText(d.row.outDate ?? d.row.createdAt)
                     }}</template></el-table-column
                   >
-                  <el-table-column label="操作" width="96" align="center"
+                  <el-table-column label="操作" width="120" align="center"
                     ><template #default="d"
                       ><el-button
                         v-if="Number(d.row.confirmStatus) === 0"
@@ -1576,7 +1698,13 @@ watch(key, async () => {
                         type="primary"
                         @click="confirmPendingSupplement(d.row)"
                         >确认出库</el-button
-                      ><span v-else>—</span></template
+                      ><el-button
+                        v-else
+                        link
+                        type="success"
+                        @click="openBomReturn(d.row)"
+                        >BOM退库</el-button
+                      ></template
                     ></el-table-column
                   >
                 </el-table>
@@ -1625,7 +1753,11 @@ watch(key, async () => {
                   }}</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="canApprove(s.row) || canConfirmSourcedDiscount(s.row)"
+                  v-if="
+                    canApprove(s.row) ||
+                    canConfirmSourcedDiscount(s.row) ||
+                    canRejectReverseGeneratedApplication(s.row)
+                  "
                   class="table-action-danger"
                   @click="action(s.row, 'approve', false)"
                   >{{
@@ -1813,6 +1945,16 @@ watch(key, async () => {
                   >临时补料</el-dropdown-item
                 >
                 <el-dropdown-item
+                  v-if="
+                    key === 'production/outputs' &&
+                    Number(s.row.outType) === 1 &&
+                    Number(s.row.confirmStatus) === 1
+                  "
+                  class="table-action-success"
+                  @click="openBomReturn(s.row)"
+                  >BOM退库</el-dropdown-item
+                >
+                <el-dropdown-item
                   v-if="key === 'production/outputs' && Number(s.row.outType) === 1"
                   @click="toggleOutputDetails(s.row)"
                   >{{
@@ -1844,11 +1986,25 @@ watch(key, async () => {
                   >撤销确认</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'requisitions/applications' && Number(s.row.approveStatus) === 1"
+                  v-if="
+                    key === 'requisitions/applications' &&
+                    (Number(s.row.approveStatus) === 1 || Boolean(s.row.reverseGenerated)) &&
+                    s.row.autoOutputId
+                  "
                   @click="openAutomaticRequisitionOutput(s.row)"
                   >{{
                     Number(s.row.autoOutputConfirmStatus) === 1 ? '查看出库' : '办理出库'
                   }}</el-dropdown-item
+                >
+                <el-dropdown-item
+                  v-if="key === 'requisitions/outputs' && s.row.applicationId"
+                  @click="
+                    router.push({
+                      path: '/requisitions/applications',
+                      query: { documentId: String(s.row.applicationId), view: '1' },
+                    })
+                  "
+                  >查看领用申请</el-dropdown-item
                 >
                 <el-dropdown-item
                   v-if="
@@ -2121,7 +2277,10 @@ watch(key, async () => {
                 :value="Number(item.value)"
             /></el-select>
           </el-form-item>
-          <el-form-item v-if="isOutput && group === 'requisitions'" label="领用申请">
+          <el-form-item
+            v-if="isOutput && group === 'requisitions' && !form.directOutput"
+            label="领用申请"
+          >
             <el-select
               v-model="form.applicationId"
               :disabled="mode !== 'create' || Boolean(form.autoCreated)"
@@ -2154,7 +2313,7 @@ watch(key, async () => {
               v-model="form.warehouseId"
               :disabled="
                 mode === 'view' ||
-                (group === 'requisitions' && (isOutput || isReturn)) ||
+                (group === 'requisitions' && isOutput && !form.directOutput) ||
                 discountOrderSourceLocked ||
                 discountOutputSourceLocked
               "
@@ -2188,6 +2347,20 @@ watch(key, async () => {
                 :label="item.label"
                 :value="Number(item.value)" /></el-select
           ></el-form-item>
+          <el-form-item
+            v-if="isOutput && group === 'production' && Number(form.outType) === 3"
+            label="出库去向"
+            required
+          >
+            <el-select v-model="form.destinationType" :disabled="mode === 'view'">
+              <el-option
+                v-for="item in options.dictionaries.temporary_outbound_destination || []"
+                :key="item.value"
+                :label="item.label"
+                :value="Number(item.value)"
+              />
+            </el-select>
+          </el-form-item>
           <el-form-item v-if="isService" label="事件类型">
             <el-select v-model="form.eventType" @change="serviceEventTypeChanged"
               ><el-option
@@ -2197,6 +2370,25 @@ watch(key, async () => {
                 :value="Number(item.value)"
             /></el-select>
           </el-form-item>
+          <template v-if="isService && form.sourceSystem">
+            <el-form-item label="售后来源">
+              <el-input :model-value="form.sourceSystemName || form.sourceSystem" readonly />
+            </el-form-item>
+            <el-form-item label="外部申请号">
+              <el-input :model-value="form.externalRequestNo || form.externalRequestId" readonly />
+            </el-form-item>
+            <el-form-item label="接收时间">
+              <el-input :model-value="dateText(form.receivedAt, true)" readonly />
+            </el-form-item>
+            <el-form-item label="外部原始申请（只读）" class="full-field">
+              <el-input
+                :model-value="JSON.stringify(form.externalPayload || {}, null, 2)"
+                type="textarea"
+                :rows="8"
+                readonly
+              />
+            </el-form-item>
+          </template>
           <el-form-item v-if="isService && form.orderId" label="订单号"
             ><el-input
               :model-value="form.orderNo || form.orderSummary?.orderNo || form.orderId"
@@ -2343,7 +2535,7 @@ watch(key, async () => {
           <el-form-item v-if="(isOutput || isReturn) && group !== 'production'" label="部门"
             ><el-select
               v-model="form.deptId"
-              :disabled="mode === 'view' || group === 'requisitions'"
+              :disabled="mode === 'view' || (group === 'requisitions' && !form.directOutput)"
               ><el-option
                 v-for="x in requisitionDepartmentOptions"
                 :key="x.value"
@@ -2362,7 +2554,7 @@ watch(key, async () => {
             ><el-select
               v-model="form.receiverId"
               filterable
-              :disabled="mode === 'view' || group === 'requisitions'"
+              :disabled="mode === 'view' || (group === 'requisitions' && !form.directOutput)"
               ><el-option
                 v-for="item in group === 'requisitions' ? options.employees : options.users"
                 :key="item.value"
@@ -2642,7 +2834,8 @@ watch(key, async () => {
               <el-select
                 v-if="
                   (!isOutput && !isReturn && !isPlan && !isService) ||
-                  (isOutput && group === 'production' && form.outType === 3)
+                  (isOutput && group === 'production' && form.outType === 3) ||
+                  (isOutput && group === 'requisitions' && form.directOutput)
                 "
                 v-model="s.row.goodsId"
                 filterable
@@ -2854,6 +3047,20 @@ watch(key, async () => {
               </el-select>
             </template>
           </el-table-column>
+          <el-table-column
+            v-if="isReturn && group === 'requisitions'"
+            label="退回库位"
+            min-width="160"
+          >
+            <template #default="s">
+              <el-input
+                v-model="s.row.storageLocation"
+                maxlength="100"
+                :disabled="mode === 'view'"
+                placeholder="自定义库位文字"
+              />
+            </template>
+          </el-table-column>
           <el-table-column label="数量" width="155">
             <template #default="s">
               <el-input-number
@@ -2985,13 +3192,74 @@ watch(key, async () => {
             mode !== 'view' &&
             !discountOrderSourceLocked &&
             ((!isOutput && !isReturn && !isPlan && !isService) ||
-              (isOutput && group === 'production' && form.outType === 3))
+              (isOutput && group === 'production' && form.outType === 3) ||
+              (isOutput && group === 'requisitions' && form.directOutput))
           "
           class="add-line"
           @click="addDetailLine"
           >添加明细</el-button
         >
       </el-form>
+      <section v-if="isService && mode !== 'create' && form.id" class="service-progress-panel">
+        <div class="service-progress-title">
+          <div><strong>售后处理进展</strong><span>多次记录，原始售后申请不会被覆盖</span></div>
+          <el-button v-if="progressForm.id" link type="primary" @click="resetProgressForm">
+            取消编辑
+          </el-button>
+        </div>
+        <div class="service-progress-editor">
+          <el-input
+            v-model="progressForm.content"
+            type="textarea"
+            :rows="3"
+            maxlength="10000"
+            show-word-limit
+            placeholder="记录本次沟通、处理动作和下一步安排"
+          />
+          <el-select v-model="progressForm.status" placeholder="处理后状态">
+            <el-option
+              v-for="item in options.dictionaries.after_sale_event_status || []"
+              :key="item.value"
+              :label="item.label"
+              :value="Number(item.value)"
+            />
+          </el-select>
+          <el-date-picker
+            v-model="progressForm.occurredAt"
+            type="datetime"
+            placeholder="实际处理时间"
+            style="width: 100%"
+          />
+          <el-button type="primary" :loading="progressSaving" @click="saveServiceProgress">
+            {{ progressForm.id ? '保存进展修改' : '添加进展' }}
+          </el-button>
+        </div>
+        <el-empty v-if="!serviceProgresses.length" description="暂无处理进展" :image-size="48" />
+        <el-timeline v-else class="service-progress-list">
+          <el-timeline-item
+            v-for="item in serviceProgresses"
+            :key="item.id"
+            :timestamp="`${dateText(item.occurredAt, true)} · ${item.handlerIdName || item.createdByName || '未知操作人'}`"
+            placement="top"
+          >
+            <div class="service-progress-card">
+              <div>
+                <el-tag size="small" effect="plain">{{ item.statusName || item.status }}</el-tag>
+              </div>
+              <p>{{ item.content }}</p>
+              <div class="service-progress-actions">
+                <el-button link type="primary" @click="editServiceProgress(item)">编辑</el-button>
+                <el-button link type="danger" @click="deleteServiceProgress(item)">删除</el-button>
+              </div>
+            </div>
+          </el-timeline-item>
+        </el-timeline>
+      </section>
+      <DocumentAttachments
+        v-if="mode !== 'create' && attachmentType && form.id"
+        :document-type="attachmentType"
+        :document-id="form.id"
+      />
       <template #footer>
         <el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button>
         <el-button
@@ -3032,6 +3300,7 @@ watch(key, async () => {
     />
     <EditOutboundDialog v-model="editOutVisible" :outRow="selectedOutRow" @done="onDialogDone" />
     <ViewOutboundDialog v-model="viewOutVisible" :outRow="selectedOutRow" />
+    <BomReturnDialog v-model="bomReturnVisible" :outRow="selectedOutRow" @done="onDialogDone" />
     <LabOutboundDialog v-model="labOutVisible" @done="onDialogDone" />
     <InputDialog
       v-model="inputVisible"
@@ -3132,6 +3401,57 @@ watch(key, async () => {
 }
 .add-line {
   margin-top: 12px;
+}
+.service-progress-panel {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+}
+.service-progress-title,
+.service-progress-editor,
+.service-progress-card {
+  display: flex;
+  gap: 10px;
+}
+.service-progress-title {
+  align-items: center;
+  justify-content: space-between;
+}
+.service-progress-title span {
+  margin-left: 10px;
+  color: #909399;
+  font-size: 12px;
+}
+.service-progress-editor {
+  align-items: flex-start;
+  margin: 12px 0 18px;
+}
+.service-progress-editor .el-textarea {
+  flex: 1;
+}
+.service-progress-editor .el-select,
+.service-progress-editor .el-date-editor {
+  width: 180px;
+}
+.service-progress-list {
+  padding-left: 6px;
+}
+.service-progress-card {
+  position: relative;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: #f7f9fc;
+  border-radius: 5px;
+}
+.service-progress-card p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.service-progress-actions {
+  position: absolute;
+  top: 8px;
+  right: 10px;
 }
 .funds-section {
   margin-bottom: 8px;
