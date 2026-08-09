@@ -12,8 +12,11 @@ apps/api/prisma/migrations/*/migration_lock.toml
 *.log
 
 docs/*
-!docs/plan/
-!docs/plan/**
+!docs/README.md
+!docs/global/
+!docs/global/**
+!docs/daily/
+!docs/daily/**
 !docs/用户操作指引/
 !docs/用户操作指引/**
 CLAUDE.md
@@ -25,5 +28,4 @@ HANDOFF.md
 .env.docker
 .idea/
 .vscode/
-
 
