@@ -238,6 +238,7 @@ const goodsName = (id: unknown) => byId('goods', id)?.goodsName ?? '—';
 const goodsCode = (line: any) => line.goodsCode ?? byId('goods', line.goodsId)?.queryCode ?? '—';
 const goodsCategory = (line: any) =>
   line.categoryName ?? byId('goods', line.goodsId)?.categoryName ?? '—';
+const unitName = (value: unknown) => lookup('units', value);
 const skuText = (line: any) =>
   line.skuLabel ?? line.skuName ?? (line.skuId ? `规格 ${line.skuId}` : '—');
 const creator = (row: any) =>
@@ -579,6 +580,7 @@ async function enrichLine(line: any) {
   const selected = line.skuOptions.find((item: any) => String(item.value) === String(line.skuId));
   line.skuLabel = selected?.label;
   if (selected?.unitType) line.unitType = selected.unitType;
+  else if (!Number(line.unitType) && product.unitType) line.unitType = product.unitType;
   if (
     (resource.value === 'orders' || (resource.value === 'receipts' && form.directReceipt)) &&
     !Number(line.unitPrice)
@@ -2658,6 +2660,7 @@ onMounted(async () => {
           <PurchaseReceiptDetails
             v-if="resource === 'receipts' && !form.directReceipt"
             :details="form.details ?? []"
+            :units="options.units"
             :readonly="mode === 'view'"
           />
           <template v-else-if="resource === 'receipts' && form.directReceipt">
@@ -2960,7 +2963,7 @@ onMounted(async () => {
                 ></el-table-column
               >
               <el-table-column label="单位" width="72"
-                ><template #default="s">{{ display(s.row.unitType) }}</template></el-table-column
+                ><template #default="s">{{ unitName(s.row.unitType) }}</template></el-table-column
               >
               <el-table-column
                 v-if="resource === 'applications' || resource === 'orders'"

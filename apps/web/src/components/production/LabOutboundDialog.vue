@@ -16,8 +16,13 @@ const saving = ref(false);
 const error = ref('');
 const rows = ref<B[]>([]);
 const allStocks = ref<B[]>([]);
-const form = ref<B>({ orgId: auth.user?.orgId ?? '', warehouseId: '', remark: '' });
-const options = ref<B>({ orgs: [], warehouses: [], goods: [] });
+const form = ref<B>({
+  orgId: auth.user?.orgId ?? '',
+  warehouseId: '',
+  destinationType: 1,
+  remark: '',
+});
+const options = ref<B>({ orgs: [], warehouses: [], goods: [], destinations: [] });
 
 const visible = computed({ get: () => props.modelValue, set: (v) => emit('update:modelValue', v) });
 
@@ -25,13 +30,14 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [o, w, g, s] = (await Promise.all([
+    const [o, w, g, s, destinations] = (await Promise.all([
       api.get('/base-data/organizations/options'),
       api.get('/base-data/warehouses/options'),
       api.get('/goods', { params: { pageSize: 100, status: 1 } }),
       api.get('/inventory/stocks', { params: { pageSize: 200 } }),
+      api.get('/dictionaries/temporary_outbound_destination'),
     ])) as any[];
-    options.value = { orgs: o, warehouses: w, goods: g.items };
+    options.value = { orgs: o, warehouses: w, goods: g.items, destinations };
     allStocks.value = s.items ?? [];
     form.value.orgId = auth.user?.orgId ?? '';
     if (!rows.value.length)
@@ -69,8 +75,8 @@ async function onGoodsChanged(row: B) {
 }
 
 async function submit() {
-  if (!form.value.orgId || !form.value.warehouseId) {
-    ElMessage.warning('请选择所属组织和仓库');
+  if (!form.value.orgId || !form.value.warehouseId || !form.value.destinationType) {
+    ElMessage.warning('请选择所属组织、仓库和出库去向');
     return;
   }
   const lines: B[] = [];
@@ -99,14 +105,15 @@ async function submit() {
       outDate: new Date().toISOString().slice(0, 10),
       orgId: form.value.orgId,
       warehouseId: form.value.warehouseId,
+      destinationType: Number(form.value.destinationType),
       remark: form.value.remark,
       details: lines,
     });
     await api.post(`/production/outputs/${result.id}/confirm`, {
-      comment: form.value.remark || '实验室领料',
+      comment: form.value.remark || '临时出库',
       details: lines,
     });
-    ElMessage.success('实验室领料已确认出库');
+    ElMessage.success('临时出库已确认出库');
     visible.value = false;
     emit('done');
   } catch (e: any) {
@@ -125,6 +132,7 @@ async function reloadStocks() {
 }
 watch(visible, (v) => {
   if (v) {
+    form.value.destinationType = 1;
     rows.value = [
       {
         goodsId: '',
@@ -175,7 +183,15 @@ watch(() => form.value.warehouseId, reloadStocks);
           ><span class="lab-fld-vl">{{ auth.user?.username || '—' }}</span>
         </div>
         <div class="lab-fld">
-          <span class="lab-fld-lb">出库去向</span><span class="lab-fld-vl">实验出库</span>
+          <span class="lab-fld-lb">出库去向</span
+          ><el-select v-model="form.destinationType" size="small">
+            <el-option
+              v-for="x in options.destinations"
+              :key="x.value"
+              :label="x.label"
+              :value="Number(x.value)"
+            />
+          </el-select>
         </div>
       </div>
       <div class="lab-remark">
