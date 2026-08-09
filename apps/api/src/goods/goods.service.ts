@@ -572,7 +572,7 @@ export class GoodsService {
       const_price: new Prisma.Decimal(String(body.costPrice ?? 0)),
       sale_price: new Prisma.Decimal(String(body.salePrice ?? 0)),
       vendor_id: 0n,
-      warehouse_id: null,
+      warehouse_id: 0n,
       status: Number(body.status ?? 1),
       sort: Number(body.sort ?? 0),
       remark: String(body.remark ?? ''),

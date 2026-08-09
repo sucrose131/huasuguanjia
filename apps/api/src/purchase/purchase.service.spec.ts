@@ -55,7 +55,7 @@ describe('PurchaseService quick catalog materialization', () => {
         goods_catg_id: 3n,
         org_id: 0n,
         vendor_id: 0n,
-        warehouse_id: null,
+        warehouse_id: 0n,
       }),
     });
     expect(skuCreate).toHaveBeenCalledWith({

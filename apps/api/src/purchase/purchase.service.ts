@@ -137,7 +137,7 @@ export class PurchaseService {
             const_price: new Prisma.Decimal(String(input.costPrice ?? 0)),
             sale_price: new Prisma.Decimal(String(input.salePrice ?? 0)),
             vendor_id: 0n,
-            warehouse_id: null,
+            warehouse_id: 0n,
             status: 1,
             created_by: BigInt(userId),
             updated_by: BigInt(userId),
