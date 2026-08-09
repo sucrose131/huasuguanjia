@@ -711,8 +711,12 @@ export class SalesService {
         service_status: 3,
         shipper: '',
         status: 1,
-        approve_status: 0,
-        approve_comment: '',
+        // 普通销售订单来自已在线上完成的订单，不进入本系统/OA审批。
+        // 折价销售单仍保留独立的处置确认流程。
+        approve_status: propertyType === 1 ? 1 : 0,
+        approve_comment: propertyType === 1 ? '销售订单无需审批' : '',
+        approve_by: propertyType === 1 ? BigInt(u) : 0n,
+        approve_date: propertyType === 1 ? new Date() : null,
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
@@ -743,166 +747,11 @@ export class SalesService {
     });
     return { id: idv, message: '销售订单已保存' };
   }
-  private async allocateApprovedOrdinaryOrder(t: Prisma.TransactionClient, order: B, u: string) {
-    const details = await t.hspsi_sale_order_detail.findMany({ where: { so_id: order.so_id } });
-    const goodsIds = [...new Set(details.map((line) => line.goods_id))];
-    const batches = goodsIds.length
-      ? await t.hspsi_inventory_batch_total.findMany({
-          where: {
-            org_id: order.org_id,
-            warehouse_id: order.warehouse_id,
-            goods_id: { in: goodsIds },
-            inventory_qty: { gt: 0 },
-          },
-          orderBy: [{ batch_no: 'asc' }],
-        })
-      : [];
-    for (const batch of batches)
-      await t.$queryRaw`SELECT goods_id FROM hspsi_inventory_batch_total WHERE warehouse_id=${batch.warehouse_id} AND goods_id=${batch.goods_id} AND sku_id=${batch.sku_id} AND batch_no=${batch.batch_no} FOR UPDATE`;
-    const pendingHeads = await t.hspsi_sale_order_output.findMany({
-      where: {
-        org_id: order.org_id,
-        warehouse_id: order.warehouse_id,
-        comfirm_status: 0,
-        deleted_at: null,
-      },
-      select: { so_output_id: true },
-    });
-    const pendingDetails = pendingHeads.length
-      ? await t.hspsi_sale_order_output_detail.findMany({
-          where: { so_output_id: { in: pendingHeads.map((item) => item.so_output_id) } },
-        })
-      : [];
-    const reserved = new Map<string, number>();
-    for (const line of pendingDetails) {
-      const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
-      reserved.set(key, (reserved.get(key) ?? 0) + Number(line.output_qty));
-    }
-    const outputLines: B[] = [],
-      shortages: B[] = [];
-    for (const line of details) {
-      let remaining = Number(line.sale_qty);
-      for (const batch of batches.filter(
-        (item) => item.goods_id === line.goods_id && item.sku_id === line.sku_id,
-      )) {
-        if (remaining <= 0.000001) break;
-        const key = `${batch.goods_id}:${batch.sku_id}:${batch.batch_no}`,
-          available = Math.max(0, Number(batch.inventory_qty) - (reserved.get(key) ?? 0));
-        const quantity = Math.min(remaining, available);
-        if (quantity <= 0.000001) continue;
-        outputLines.push({
-          goodsId: line.goods_id,
-          skuId: line.sku_id,
-          batchNo: batch.batch_no,
-          unitType: line.unit_type,
-          orderQty: line.sale_qty,
-          quantity,
-        });
-        reserved.set(key, (reserved.get(key) ?? 0) + quantity);
-        remaining -= quantity;
-      }
-      if (remaining > 0.000001)
-        shortages.push({
-          goodsId: line.goods_id,
-          skuId: line.sku_id,
-          unitType: line.unit_type,
-          quantity: remaining,
-        });
-    }
-    let outputId: bigint | undefined, outputNo: string | undefined;
-    if (outputLines.length) {
-      outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_OUTPUT);
-      const output = await t.hspsi_sale_order_output.create({
-        data: {
-          so_output_no: outputNo,
-          so_id: order.so_id,
-          org_id: order.org_id,
-          warehouse_id: order.warehouse_id,
-          output_date: new Date(),
-          go_where: 1,
-          dept_id: 0n,
-          receiver_id: BigInt(u),
-          output_sku_qty: new Set(outputLines.map((line) => `${line.goodsId}:${line.skuId}`)).size,
-          status: true,
-          comfirm_status: 0,
-          comfirm_comment: '',
-          comfirm_by: 0n,
-          posting_version: 0,
-          remark: `销售订单 ${order.so_no} 审核后按可用库存自动生成`,
-          created_by: BigInt(u),
-          updated_by: BigInt(u),
-        },
-      });
-      outputId = output.so_output_id;
-      await t.hspsi_sale_order_output_detail.createMany({
-        data: outputLines.map((line) => ({
-          so_output_id: output.so_output_id,
-          so_id: order.so_id,
-          goods_id: line.goodsId,
-          sku_id: line.skuId,
-          batch_no: String(line.batchNo),
-          unit_type: Number(line.unitType),
-          sale_qty: Number(line.orderQty),
-          output_qty: Number(line.quantity),
-        })),
-      });
-      await this.documentTrace.link(
-        {
-          upstreamType: 'sales_order',
-          upstreamId: order.so_id,
-          upstreamNo: order.so_no,
-          downstreamType: 'sales_output',
-          downstreamId: output.so_output_id,
-          downstreamNo: outputNo,
-          relationKind: 'fulfillment',
-          createdBy: u,
-        },
-        t,
-      );
-    }
-    const plans: B[] = [];
-    for (const shortage of shortages) {
-      const goods = await t.hspsi_goods_info.findUnique({ where: { goods_id: shortage.goodsId } });
-      if (!goods) throw new BadRequestException('销售订单存在无效成品，不能生成生产计划');
-      const bom = await t.hspsi_production_bom.findFirst({
-        where: {
-          org_id: order.org_id,
-          goods_id: shortage.goodsId,
-          sku_id: shortage.skuId,
-          status: 1,
-          deleted_at: null,
-        },
-      });
-      if (!bom)
-        throw new BadRequestException(
-          `${goods.goods_name} 没有当前订单组织下启用的BOM，不能生成生产计划`,
-        );
-      const result = await this.production.createPlanFromSalesGap(
-        t,
-        {
-          bomId: bom.bom_id,
-          orgId: order.org_id,
-          warehouseId: bom.warehouse_id,
-          productWarehouseId: order.warehouse_id,
-          planQty: shortage.quantity,
-          sourceType: 'sales_order',
-          sourceId: order.so_id,
-          sourceNo: order.so_no,
-        },
-        u,
-      );
-      if (result.created !== false) plans.push(result);
-    }
-    return {
-      outputId,
-      outputNo,
-      outputQty: outputLines.reduce((sum, line) => sum + Number(line.quantity), 0),
-      plans,
-    };
-  }
   async approveOrder(id: string, approved: boolean, comment: string, u: string) {
     const orderId = BigInt(id),
       snapshot = await this.order(id);
+    if (Number(snapshot.propertyType) === 1)
+      throw new BadRequestException('销售订单无需审批，请直接办理后续业务');
     const isTrustedDiscount =
       Number(snapshot.propertyType) === 2 &&
       this.trustedDiscountSource(snapshot.businessSourceType) &&
@@ -915,47 +764,18 @@ export class SalesService {
     )
       throw new BadRequestException('该折价销售单已经完成处置，请勿重复操作');
     if (!isTrustedDiscount) {
-      const isDiscount = Number(snapshot.propertyType) === 2;
-      if (isDiscount || !approved) {
-        await this.p.hspsi_sale_order.update({
-          where: { so_id: orderId },
-          data: {
-            approve_status: approved ? 1 : 2,
-            approve_comment: comment,
-            approve_by: BigInt(u),
-            approve_date: new Date(),
-            order_status: approved ? 1 : 3,
-            updated_by: BigInt(u),
-          },
-        });
-        return { id, message: approved ? '折价销售已通过，待生成折价销售出库' : '已驳回并关闭' };
-      }
-      const allocation = await this.guardedTransaction(async (t) => {
-        await t.$queryRaw`SELECT so_id FROM hspsi_sale_order WHERE so_id=${orderId} FOR UPDATE`;
-        const locked = await t.hspsi_sale_order.findFirst({
-          where: { so_id: orderId, so_property_type: 1, deleted_at: null },
-        });
-        if (!locked) throw new NotFoundException('销售订单不存在');
-        if (locked.approve_status !== 0)
-          throw new BadRequestException('该销售订单已经处理，请勿重复审核');
-        await t.hspsi_sale_order.update({
-          where: { so_id: orderId },
-          data: {
-            approve_status: 1,
-            approve_comment: comment,
-            approve_by: BigInt(u),
-            approve_date: new Date(),
-            order_status: 1,
-            updated_by: BigInt(u),
-          },
-        });
-        return this.allocateApprovedOrdinaryOrder(t, locked, u);
+      await this.p.hspsi_sale_order.update({
+        where: { so_id: orderId },
+        data: {
+          approve_status: approved ? 1 : 2,
+          approve_comment: comment,
+          approve_by: BigInt(u),
+          approve_date: new Date(),
+          order_status: approved ? 1 : 3,
+          updated_by: BigInt(u),
+        },
       });
-      return {
-        id,
-        ...allocation,
-        message: `审批通过${allocation.outputId ? `，已生成待出库销售出库单 ${allocation.outputNo}` : ''}${allocation.plans.length ? `，已生成 ${allocation.plans.length} 张缺口生产计划` : ''}`,
-      };
+      return { id, message: approved ? '折价销售已通过，待生成折价销售出库' : '已驳回并关闭' };
     }
 
     let outputNo = '';

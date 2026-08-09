@@ -1312,28 +1312,6 @@ export class ProductionService {
     );
     return { items, total, page, pageSize };
   }
-  async approveShortages(planId: string, u: string) {
-    return this.guardedTransaction(async (t) => {
-      const id = BigInt(planId);
-      await t.$queryRaw`SELECT plan_id FROM hspsi_production_plan WHERE plan_id=${id} FOR UPDATE`;
-      const plan = await t.hspsi_production_plan.findFirst({
-        where: { plan_id: id, deleted_at: null },
-      });
-      if (!plan) throw new NotFoundException('生产计划不存在');
-      if (
-        plan.plan_status !== PRODUCTION_PLAN_STATUS.SHORTAGE ||
-        plan.approve_status !== 0 ||
-        ![2, 3].includes(plan.material_status) ||
-        plan.outbound_status !== PRODUCTION_OUTBOUND_STATUS.NOT_STARTED
-      )
-        throw new BadRequestException('仅尚未审批且处于缺料状态的计划可生成采购申请');
-      const application = await this.createShortagePurchaseApplication(t, plan, u);
-      return {
-        id: application.id,
-        message: application.created ? '已生成采购申请' : '采购申请已生成',
-      };
-    });
-  }
   async outputs(q: B) {
     const { page, pageSize } = this.pg(q),
       hasOutType = q.outType !== undefined && q.outType !== '',

@@ -17,6 +17,16 @@ import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
+type OperationHistoryItem = {
+  key: string;
+  action: string;
+  result: string;
+  operatorId: string;
+  operatorName?: string;
+  occurredAt: Date | null;
+  detail?: string;
+  timeNote?: string;
+};
 @Injectable()
 export class PurchaseService {
   constructor(
@@ -1992,6 +2002,7 @@ export class PurchaseService {
       if (!String(line.batchNo ?? '').trim()) line.batchNo = generateBatchNo();
     const qty = lines.reduce((sum, line) => sum + Number(line.inputQuantity), 0);
     return this.guardedTransaction(async (tx) => {
+      if (isDirect) await this.materializeQuickCatalog(tx, lines, userId);
       let finalPoId = BigInt(0);
       let finalOrgId = BigInt(0);
       let finalWhId = BigInt(0);
@@ -2599,7 +2610,7 @@ export class PurchaseService {
       })),
     };
   }
-  async saveReturn(id: string | null, body: Body, userId: string, submit = false, execute = false) {
+  async saveReturn(id: string | null, body: Body, userId: string, submit = false) {
     const lines = this.details(body.details);
     const receipt = await this.receipt(String(body.receiptId));
     if (receipt.comfirm_status !== 1) throw new BadRequestException('仅已确认入库单可退货');
@@ -2672,11 +2683,11 @@ export class PurchaseService {
         exit_reson: String(body.reason ?? ''),
         exit_date: body.returnDate ? new Date(String(body.returnDate)) : new Date(),
         exit_type: Number(body.returnType),
-        status: submit || execute,
-        approve_status: execute ? 1 : 0,
-        approve_comment: execute ? '从已入库单发起并完成退货' : '',
-        approve_by: execute ? BigInt(userId) : 0n,
-        approve_date: execute ? new Date() : null,
+        status: submit,
+        approve_status: 0,
+        approve_comment: '',
+        approve_by: 0n,
+        approve_date: null,
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
         updated_at: new Date(),
@@ -2727,37 +2738,10 @@ export class PurchaseService {
         },
         tx,
       );
-      if (execute) {
-        await this.inventoryPosting.post(
-          {
-            orgId: sourceHeader.org_id,
-            warehouseId: sourceHeader.warehouse_id,
-            direction: -1,
-            operationType: 2,
-            inventoryMode: INVENTORY_BUSINESS_MODE.PURCHASE_RETURN,
-            sourceId: header.po_exit_id,
-            sourceType: 'purchase_return',
-            sourceNo: businessNo,
-            operationBy: userId,
-            idempotencyKey: `purchase-return:${header.po_exit_id}`,
-            remark: '采购入库单发起退货',
-            lines: lines.map((line) => ({
-              goodsId: BigInt(String(line.goodsId)),
-              skuId: BigInt(String(line.skuId)),
-              batchNo: String(line.batchNo ?? ''),
-              unitType: Number(line.unitType),
-              quantity: String(line.returnQuantity),
-            })),
-          },
-          tx,
-        );
-        await this.recalcOrderStatus(tx, receipt.po_id);
-        await this.createRefundTask(tx, header.po_exit_id, userId);
-      }
       return {
         id: header.po_exit_id,
         businessNo,
-        message: execute ? '采购退货已完成，库存已扣减' : submit ? '已提交审批' : '退货草稿已保存',
+        message: submit ? '已提交审批' : '退货草稿已保存',
       };
     });
   }
@@ -3486,6 +3470,250 @@ export class PurchaseService {
       await this.documentTrace.removeForDocument('purchase_payment', payment.pay_id, tx);
     });
     return { id, message: '付款已撤销，订单累计已付已重算' };
+  }
+  async operationHistory(resource: string, id: string) {
+    const documentId = BigInt(id);
+    const items: OperationHistoryItem[] = [];
+    let documentNo = '';
+    const add = (
+      key: string,
+      action: string,
+      result: string,
+      operatorId: bigint | number | null | undefined,
+      occurredAt: Date | null | undefined,
+      detail = '',
+      timeNote = '',
+    ) =>
+      items.push({
+        key,
+        action,
+        result,
+        operatorId: String(operatorId ?? 0),
+        occurredAt: occurredAt ?? null,
+        ...(detail ? { detail } : {}),
+        ...(timeNote ? { timeNote } : {}),
+      });
+
+    if (resource === 'applications') {
+      const row = await this.prisma.hspsi_purchase_approve.findFirst({
+        where: { pur_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购申请不存在');
+      documentNo = `PA${row.pur_id}`;
+      add('created', '创建采购申请', '创建成功', row.created_by, row.created_at);
+      if (row.status) {
+        add(
+          'submitted',
+          '提交审批',
+          row.approve_status === 0 ? '等待审批' : '已提交',
+          row.updated_by,
+          row.approve_status === 0 ? row.updated_at : null,
+          '',
+          row.approve_status === 0 ? '' : '历史表未单独保存提交时间',
+        );
+      }
+      if ([1, 2].includes(row.approve_status)) {
+        add(
+          'approved',
+          '审批采购申请',
+          row.approve_status === 1 ? '审批通过' : '审批驳回',
+          row.approve_by,
+          row.approve_date,
+          row.approve_comment ?? '',
+        );
+      }
+    } else if (resource === 'orders') {
+      const row = await this.prisma.hspsi_purchase_order.findFirst({
+        where: { po_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购订单不存在');
+      documentNo = row.po_no || `PO${row.po_id}`;
+      add('created', '创建采购订单', '创建成功', row.created_by, row.created_at);
+      const [receipts, returns, payments] = await Promise.all([
+        this.prisma.hspsi_purchase_order_input.findMany({
+          where: { po_id: row.po_id, deleted_at: null },
+          select: { po_input_id: true, po_input_no: true, created_by: true, created_at: true },
+        }),
+        this.prisma.hspsi_purchase_order_input_exit.findMany({
+          where: { po_id: row.po_id, deleted_at: null },
+          select: { po_exit_id: true, po_exit_no: true, created_by: true, created_at: true },
+        }),
+        this.prisma.hspsi_purchase_order_payment.findMany({
+          where: { po_id: row.po_id, deleted_at: null },
+          select: {
+            pay_id: true,
+            pay_no: true,
+            fact_pay_amount: true,
+            created_by: true,
+            created_at: true,
+          },
+        }),
+      ]);
+      receipts.forEach((item) =>
+        add(
+          `receipt-${item.po_input_id}`,
+          '生成采购入库单',
+          item.po_input_no || `ID ${item.po_input_id}`,
+          item.created_by,
+          item.created_at,
+        ),
+      );
+      returns.forEach((item) =>
+        add(
+          `return-${item.po_exit_id}`,
+          '生成采购退货单',
+          item.po_exit_no || `ID ${item.po_exit_id}`,
+          item.created_by,
+          item.created_at,
+        ),
+      );
+      payments.forEach((item) =>
+        add(
+          `payment-${item.pay_id}`,
+          '登记采购付款',
+          item.pay_no || `ID ${item.pay_id}`,
+          item.created_by,
+          item.created_at,
+          `付款金额 ¥${Number(item.fact_pay_amount).toFixed(2)}`,
+        ),
+      );
+    } else if (resource === 'receipts') {
+      const row = await this.prisma.hspsi_purchase_order_input.findFirst({
+        where: { po_input_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购入库单不存在');
+      documentNo = row.po_input_no || `CGRK${row.po_input_id}`;
+      add('created', '创建采购入库单', '创建成功', row.created_by, row.created_at);
+      if ([1, 2].includes(row.comfirm_status)) {
+        add(
+          'confirmed',
+          row.comfirm_status === 1 ? '确认采购入库' : '撤销待入库单',
+          row.comfirm_status === 1 ? '库存已增加' : '待入库单已撤销',
+          row.updated_by,
+          row.updated_at,
+          row.comfirm_comment ?? '',
+        );
+      }
+      const returns = await this.prisma.hspsi_purchase_order_input_exit.findMany({
+        where: { po_input_id: row.po_input_id, deleted_at: null },
+        select: { po_exit_id: true, po_exit_no: true, created_by: true, created_at: true },
+      });
+      returns.forEach((item) =>
+        add(
+          `return-${item.po_exit_id}`,
+          '发起采购退货',
+          item.po_exit_no || `ID ${item.po_exit_id}`,
+          item.created_by,
+          item.created_at,
+        ),
+      );
+    } else if (resource === 'returns') {
+      const row = await this.prisma.hspsi_purchase_order_input_exit.findFirst({
+        where: { po_exit_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购退货单不存在');
+      documentNo = row.po_exit_no || `CGTH${row.po_exit_id}`;
+      add('created', '创建采购退货单', '创建成功', row.created_by, row.created_at);
+      if (row.status) {
+        add(
+          'submitted',
+          '提交退货审批',
+          row.approve_status === 0 ? '等待审批' : '已提交',
+          row.updated_by,
+          row.approve_status === 0 ? row.updated_at : null,
+          '',
+          row.approve_status === 0 ? '' : '历史表未单独保存提交时间',
+        );
+      }
+      if ([1, 2].includes(row.approve_status)) {
+        add(
+          'approved',
+          '审批采购退货',
+          row.approve_status === 1 ? '审批通过，库存已扣减' : '审批驳回',
+          row.approve_by,
+          row.approve_date,
+          row.approve_comment ?? '',
+        );
+      }
+      const refund = await this.prisma.hspsi_purchase_refund.findFirst({
+        where: { po_exit_id: row.po_exit_id, deleted_at: null },
+        select: { refund_id: true, refund_no: true, created_by: true, created_at: true },
+      });
+      if (refund)
+        add(
+          `refund-${refund.refund_id}`,
+          '生成采购退款任务',
+          refund.refund_no,
+          refund.created_by,
+          refund.created_at,
+        );
+    } else if (resource === 'payments') {
+      const row = await this.prisma.hspsi_purchase_order_payment.findFirst({
+        where: { pay_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购付款记录不存在');
+      documentNo = row.pay_no;
+      add(
+        'created',
+        '登记采购付款',
+        '付款已生效',
+        row.created_by,
+        row.created_at,
+        `付款金额 ¥${Number(row.fact_pay_amount).toFixed(2)}`,
+      );
+    } else if (resource === 'refunds') {
+      const row = await this.prisma.hspsi_purchase_refund.findFirst({
+        where: { refund_id: documentId, deleted_at: null },
+      });
+      if (!row) throw new NotFoundException('采购退款任务不存在');
+      documentNo = row.refund_no;
+      add('created', '生成采购退款任务', '创建成功', row.created_by, row.created_at);
+      const flows = await this.prisma.hspsi_purchase_refund_flow.findMany({
+        where: { refund_id: row.refund_id, deleted_at: null },
+        orderBy: { flow_id: 'asc' },
+      });
+      flows.forEach((flow) =>
+        add(
+          `flow-${flow.flow_id}`,
+          '登记采购退款',
+          flow.flow_no,
+          flow.created_by,
+          flow.created_at,
+          `退款金额 ¥${Number(flow.refund_amount).toFixed(2)}`,
+        ),
+      );
+      if (row.refund_status === 3) {
+        add('closed', '关闭采购退款任务', '已关闭', row.updated_by, row.updated_at, row.remark);
+      }
+    } else {
+      throw new BadRequestException('不支持的采购单据类型');
+    }
+
+    const userIds = [
+      ...new Set(items.map((item) => item.operatorId).filter((userId) => userId !== '0')),
+    ].map(BigInt);
+    const users = userIds.length
+      ? await this.prisma.hspsi_sys_user.findMany({
+          where: { id: { in: userIds }, deleted_at: null },
+          select: { id: true, username: true, nickname: true },
+        })
+      : [];
+    const userMap = new Map(
+      users.map((user) => [String(user.id), user.nickname || user.username] as const),
+    );
+    items.forEach((item) => {
+      item.operatorName =
+        item.operatorId === '0'
+          ? '系统'
+          : (userMap.get(item.operatorId) ?? `用户ID ${item.operatorId}`);
+    });
+    items.sort((left, right) => {
+      if (!left.occurredAt && !right.occurredAt) return 0;
+      if (!left.occurredAt) return 1;
+      if (!right.occurredAt) return -1;
+      return left.occurredAt.getTime() - right.occurredAt.getTime();
+    });
+    return { resource, documentId: id, documentNo, items };
   }
   async submitReturn(id: string, userId: string) {
     const item = await this.returnDetail(id);

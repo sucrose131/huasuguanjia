@@ -23,8 +23,8 @@ export class GoodsController {
   constructor(@Inject(GoodsService) private service: GoodsService) {}
   @RequirePermissions('goods')
   @Get('categories')
-  categories(@Query() query: Record<string, string | undefined>) {
-    return this.service.categories(query);
+  categories(@Query() query: Record<string, string | undefined>, @CurrentUser() user: AuthUser) {
+    return this.service.categories(query, user);
   }
   @RequirePermissions('goods')
   @Post('categories')
@@ -60,19 +60,24 @@ export class GoodsController {
     return this.service.properties(query);
   }
   @RequirePermissions('goods')
+  @Get('name-availability')
+  nameAvailability(@Query('name') name: string, @CurrentUser() user: AuthUser) {
+    return this.service.nameAvailability(name, user);
+  }
+  @RequirePermissions('goods')
   @Get()
-  list(@Query() query: Record<string, string | undefined>) {
-    return this.service.list(query);
+  list(@Query() query: Record<string, string | undefined>, @CurrentUser() user: AuthUser) {
+    return this.service.list(query, user);
   }
   @RequirePermissions('goods')
   @Get(':id')
-  detail(@Param('id') id: string) {
-    return this.service.detail(id);
+  detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.detail(id, user);
   }
   @RequirePermissions('goods')
   @Post()
   create(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
-    return this.service.save(null, body, user.id);
+    return this.service.save(null, body, user);
   }
   @RequirePermissions('goods')
   @Patch(':id')
@@ -81,7 +86,7 @@ export class GoodsController {
     @Body() body: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.save(id, body, user.id);
+    return this.service.save(id, body, user);
   }
   @RequirePermissions('goods')
   @Patch(':id/status')
@@ -90,11 +95,11 @@ export class GoodsController {
     @Body('status') status: number,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.setStatus(id, Number(status), user.id);
+    return this.service.setStatus(id, Number(status), user);
   }
   @RequirePermissions('goods')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.service.remove(id, user.id);
+    return this.service.remove(id, user);
   }
 }

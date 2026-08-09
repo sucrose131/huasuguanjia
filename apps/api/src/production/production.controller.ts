@@ -112,11 +112,6 @@ export class ProductionController {
     return this.s.shortages(q);
   }
   @RequirePermissions('production')
-  @Post('shortages/plan/:id/approve')
-  approveShortages(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.approveShortages(id, u.id);
-  }
-  @RequirePermissions('production')
   @Get('outputs')
   outputs(@Query() q: any) {
     return this.s.outputs(q);

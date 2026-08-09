@@ -1046,7 +1046,6 @@ async function action(
     | 'process'
     | 'recheck'
     | 'terminate'
-    | 'shortage'
     | 'toggle-bom',
   approved = true,
 ) {
@@ -1058,9 +1057,7 @@ async function action(
     return;
   }
   const url =
-    type === 'shortage'
-      ? `/production/shortages/plan/${row.planId ?? row.id}/approve`
-      : type === 'terminate' && key.value === 'production/shortages'
+    type === 'terminate' && key.value === 'production/shortages'
         ? `/production/plans/${row.planId}/terminate`
         : type === 'undo-confirm'
           ? `/${group.value}/${resource.value}/${row.id}/undo-confirm`
@@ -1134,6 +1131,7 @@ async function remove(row: B) {
   load();
 }
 const canApprove = (r: B) =>
+  key.value !== 'sales/orders' &&
   Number(r.approveStatus ?? r.approve_status) === 0 &&
   (Number(r.status) === 1 || Number(r.planStatus) === 1 || group.value === 'sales');
 const canRejectReverseGeneratedApplication = (r: B) =>
@@ -1176,7 +1174,8 @@ const canRemove = (r: B) =>
           'production/boms',
           'requisitions/applications',
         ].includes(key.value);
-const approvedOrder = (r: B) => Number(r.approveStatus ?? r.approve_status) === 1;
+const approvedOrder = (r: B) =>
+  key.value === 'sales/orders' || Number(r.approveStatus ?? r.approve_status) === 1;
 const orderNetReceived = (r: B) =>
   Number(r.netAmount ?? Number(r.receivedAmount || 0) - Number(r.refundedAmount || 0));
 const discountSaleOutputCompleted = (r: B) =>
@@ -1960,12 +1959,6 @@ watch(key, async () => {
                   >{{
                     expandedOutputRows.has(String(s.row.id)) ? '收起补料明细' : '补料明细'
                   }}</el-dropdown-item
-                >
-                <el-dropdown-item
-                  v-if="key === 'production/shortages' && Number(s.row.status) === 0"
-                  class="table-action-success"
-                  @click="action(s.row, 'shortage')"
-                  >审核</el-dropdown-item
                 >
                 <el-dropdown-item
                   v-if="key === 'production/shortages' && Number(s.row.status) === 0"
@@ -3285,8 +3278,10 @@ watch(key, async () => {
                   ? '保存成交信息'
                   : isPlan
                     ? '保存生产计划'
-                    : key === 'requisitions/applications' || isOrder
+                    : key === 'requisitions/applications'
                       ? '保存并提交审核'
+                      : key === 'sales/orders'
+                        ? '保存销售订单'
                       : '保存'
           }}</el-button
         >

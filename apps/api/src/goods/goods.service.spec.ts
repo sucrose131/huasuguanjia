@@ -45,6 +45,170 @@ describe('GoodsService categories', () => {
     expect(result).not.toHaveProperty('page');
     expect(result).not.toHaveProperty('pageSize');
   });
+
+  it('limits ordinary users to category warehouse types enabled for their organization', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_type: 2 }, { warehouse_type: 2 }]),
+      },
+      hspsi_goods_info_category: {
+        findMany,
+        count: vi.fn().mockResolvedValue(0),
+        groupBy: vi.fn().mockResolvedValue([]),
+      },
+      hspsi_goods_info_category_property: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_goods_property: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_goods_info: { groupBy: vi.fn().mockResolvedValue([]) },
+      $transaction: vi.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
+    };
+    const service = new GoodsService(prisma as never);
+
+    await service.categories(
+      { status: '1' },
+      { id: '9', username: 'buyer', orgId: '6', deptId: '8', permissions: ['goods'] },
+    );
+
+    expect(prisma.hspsi_basic_warehouse.findMany).toHaveBeenCalledWith({
+      where: { org_id: 6n, status: 1, deleted_at: null },
+      distinct: ['warehouse_type'],
+      select: { warehouse_type: true },
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        deleted_at: null,
+        status: 1,
+        AND: [{ warehouse_type: { in: [2] } }],
+      },
+      orderBy: [{ sort: 'asc' }, { goods_catg_id: 'desc' }],
+    });
+  });
+});
+
+describe('GoodsService organization visibility', () => {
+  it('keeps administrators on the global goods scope', async () => {
+    const warehouseFindMany = vi.fn();
+    const service = new GoodsService({
+      hspsi_basic_warehouse: { findMany: warehouseFindMany },
+    } as never);
+
+    await expect(
+      (service as any).visibleWarehouseTypes({
+        id: '1',
+        username: 'admin',
+        orgId: '6',
+        deptId: null,
+        permissions: ['*'],
+      }),
+    ).resolves.toBeNull();
+    expect(warehouseFindMany).not.toHaveBeenCalled();
+  });
+
+  it('returns no visible warehouse type when an ordinary user has no organization', async () => {
+    const warehouseFindMany = vi.fn();
+    const service = new GoodsService({
+      hspsi_basic_warehouse: { findMany: warehouseFindMany },
+    } as never);
+
+    await expect(
+      (service as any).visibleWarehouseTypes({
+        id: '9',
+        username: 'buyer',
+        orgId: null,
+        deptId: null,
+        permissions: ['goods'],
+      }),
+    ).resolves.toEqual([]);
+    expect(warehouseFindMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct detail access when the goods category is outside the user organization scope', async () => {
+    const skuFindMany = vi.fn();
+    const service = new GoodsService({
+      hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue([{ warehouse_type: 2 }]) },
+      hspsi_goods_info: {
+        findFirst: vi.fn().mockResolvedValue({ goods_id: 11n, goods_catg_id: 30n }),
+      },
+      hspsi_goods_info_category: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_goods_info_sku: { findMany: skuFindMany },
+    } as never);
+
+    await expect(
+      service.detail('11', {
+        id: '9',
+        username: 'buyer',
+        orgId: '6',
+        deptId: '8',
+        permissions: ['goods'],
+      }),
+    ).rejects.toThrow('商品不存在或不在当前组织可用范围内');
+    expect(skuFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('GoodsService global name availability', () => {
+  it('allows quick creation only when no global goods name exists', async () => {
+    const service = new GoodsService({
+      hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as never);
+
+    await expect(
+      service.nameAvailability('全局不存在商品', {
+        id: '9',
+        username: 'buyer',
+        orgId: '6',
+        deptId: '8',
+        permissions: ['goods'],
+      }),
+    ).resolves.toEqual({ exists: false, usable: false, reason: 'not_found' });
+  });
+
+  it('reports an existing global name as unusable when its warehouse type is unavailable', async () => {
+    const service = new GoodsService({
+      hspsi_goods_info: {
+        findFirst: vi.fn().mockResolvedValue({
+          goods_id: 11n,
+          goods_name: '全局已有商品',
+          query_code: 'QJYY',
+          short_name: '',
+          unit_type: 1,
+          goods_catg_id: 30n,
+          const_price: 0,
+          status: 1,
+          deleted_at: null,
+        }),
+      },
+      hspsi_goods_info_category: {
+        findUnique: vi.fn().mockResolvedValue({
+          goods_catg_id: 30n,
+          goods_name: '特殊耗材',
+          warehouse_type: 9,
+          status: 1,
+          deleted_at: null,
+        }),
+      },
+      hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue([{ warehouse_type: 2 }]) },
+    } as never);
+
+    const result = await service.nameAvailability('全局已有商品', {
+      id: '9',
+      username: 'buyer',
+      orgId: '6',
+      deptId: '8',
+      permissions: ['goods'],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        exists: true,
+        usable: false,
+        reason: 'warehouse_type_unavailable',
+        categoryName: '特殊耗材',
+        warehouseType: 9,
+        goods: null,
+      }),
+    );
+  });
 });
 
 describe('GoodsService default SKU preparation', () => {
