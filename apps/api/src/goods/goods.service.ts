@@ -513,11 +513,6 @@ export class GoodsService {
       throw new BadRequestException('所选商品分类不在当前组织可用仓库类型范围内');
     if (!Number.isSafeInteger(category.warehouse_type) || category.warehouse_type <= 0)
       throw new BadRequestException('所选商品分类尚未绑定有效仓库类型，不能保存商品');
-    const childCategoryCount = await this.prisma.hspsi_goods_info_category.count({
-      where: { parent_goods_catg_id: category.goods_catg_id, deleted_at: null, status: 1 },
-    });
-    if (childCategoryCount)
-      throw new BadRequestException('商品必须选择叶级分类，不能直接选择包含下级分类的父分类');
     const duplicateGoods = await this.prisma.hspsi_goods_info.findFirst({
       where: {
         goods_name: String(body.goodsName).trim(),

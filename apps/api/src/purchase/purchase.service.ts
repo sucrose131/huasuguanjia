@@ -115,10 +115,6 @@ export class PurchaseService {
         });
         if (!category || category.warehouse_type <= 0)
           throw new BadRequestException(`第 ${index + 1} 行新商品分类无效或未绑定仓库类型`);
-        const childCount = await tx.hspsi_goods_info_category.count({
-          where: { parent_goods_catg_id: categoryId, status: 1, deleted_at: null },
-        });
-        if (childCount) throw new BadRequestException('快捷新建商品必须选择叶级分类');
         const unitType = Number(input.unitType);
         if (!Number.isSafeInteger(unitType) || unitType <= 0)
           throw new BadRequestException(`第 ${index + 1} 行新商品基础单位必填`);

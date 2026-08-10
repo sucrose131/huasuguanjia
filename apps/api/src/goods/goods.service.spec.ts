@@ -211,6 +211,46 @@ describe('GoodsService global name availability', () => {
   });
 });
 
+describe('GoodsService category selection', () => {
+  it('allows an enabled parent category with a valid warehouse type', async () => {
+    const childCount = vi.fn().mockResolvedValue(2);
+    const service = new GoodsService({
+      hspsi_goods_info_category: {
+        findFirst: vi.fn().mockResolvedValue({
+          goods_catg_id: 30n,
+          warehouse_type: 2,
+          status: 1,
+          deleted_at: null,
+        }),
+        count: childCount,
+      },
+      hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as never);
+
+    await expect(
+      (service as any).validate(
+        null,
+        {
+          goodsName: '父分类商品',
+          categoryId: '30',
+          unitType: 1,
+          skus: [
+            {
+              specModels: '默认规格',
+              pcsQty: 1,
+              unitType: 1,
+              costPrice: 0,
+              isDefault: 1,
+            },
+          ],
+        },
+        { id: '1', username: 'admin', orgId: null, deptId: null, permissions: ['*'] },
+      ),
+    ).resolves.toBeUndefined();
+    expect(childCount).not.toHaveBeenCalled();
+  });
+});
+
 describe('GoodsService default SKU preparation', () => {
   it('maps goods fields to a default SKU when no SKU was filled', () => {
     const service = new GoodsService({} as never);

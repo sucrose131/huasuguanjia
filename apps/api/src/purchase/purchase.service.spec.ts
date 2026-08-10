@@ -16,9 +16,10 @@ function serviceWith(
 }
 
 describe('PurchaseService quick catalog materialization', () => {
-  it('creates the formal goods and default SKU only inside the document transaction', async () => {
+  it('creates goods under an enabled parent category inside the document transaction', async () => {
     const goodsCreate = vi.fn().mockResolvedValue({ goods_id: 101n });
     const skuCreate = vi.fn().mockResolvedValue({ sku_id: 202n });
+    const childCount = vi.fn().mockResolvedValue(2);
     const tx = {
       hspsi_goods_info: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -26,7 +27,7 @@ describe('PurchaseService quick catalog materialization', () => {
       },
       hspsi_goods_info_category: {
         findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
-        count: vi.fn().mockResolvedValue(0),
+        count: childCount,
       },
       hspsi_goods_info_sku: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -68,6 +69,7 @@ describe('PurchaseService quick catalog materialization', () => {
     });
     expect(line.goodsId).toBe(101n);
     expect(line.skuId).toBe(202n);
+    expect(childCount).not.toHaveBeenCalled();
   });
 
   it('materializes staged goods before a direct receipt writes its generated documents', async () => {
