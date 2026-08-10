@@ -51,7 +51,12 @@ export class InventoryPostingService {
       const goodsId = BigInt(String(line.goodsId));
       const skuId = BigInt(String(line.skuId));
       const goods = await db.hspsi_goods_info.findFirst({
-        where: { goods_id: goodsId, org_id: orgId, status: 1, deleted_at: null },
+        where: {
+          goods_id: goodsId,
+          org_id: { in: [0n, orgId] },
+          status: 1,
+          deleted_at: null,
+        },
       });
       const sku = await db.hspsi_goods_info_sku.findFirst({
         where: { sku_id: skuId, good_id: goodsId, status: 1, deleted_at: null },

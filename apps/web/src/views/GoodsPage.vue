@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { api } from '@/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import SummaryStrip from '@/components/SummaryStrip.vue';
@@ -16,9 +16,6 @@ const rows = ref<any[]>([]),
   editing = ref(''),
   saving = ref(false);
 const categories = ref<any[]>([]),
-  orgs = ref<any[]>([]),
-  warehouses = ref<any[]>([]),
-  vendors = ref<any[]>([]),
   units = ref<any[]>([]),
   properties = ref<any[]>([]),
   supplyTypes = ref<any[]>([]),
@@ -32,8 +29,6 @@ const summary = reactive({ total: 0, active: 0, inactive: 0 }),
     categoryId: '',
     supplyType: '',
     goodsType: '',
-    vendorId: '',
-    orgId: '',
     status: '',
   }),
   form = reactive<any>({});
@@ -53,26 +48,18 @@ const leafCategories = computed(() =>
       ),
   ),
 );
-const availableWarehouses = computed(() =>
-  warehouses.value.filter(
-    (item) =>
-      (!form.orgId || String(item.raw?.orgId) === String(form.orgId)) &&
-      (!selectedCategory.value ||
-        Number(item.raw?.warehouseType) === Number(selectedCategory.value.warehouseType)),
-  ),
-);
 const inheritedProperties = computed(() =>
   properties.value.filter((item) =>
     selectedCategory.value?.propertyIds?.some((id: any) => String(id) === String(item.id)),
   ),
 );
-const skuLine = () => ({
+const skuLine = (isDefault = false) => ({
   specModels: '',
   pcsQty: 1,
   costPrice: 0,
   salePrice: 0,
   unitType: form.unitType || '',
-  isDefault: 0,
+  isDefault: isDefault ? 1 : 0,
   status: 1,
   sort: form.skus?.length ?? 0,
   remark: '',
@@ -84,10 +71,7 @@ const dict = (items: any[], value: any) =>
   items.find((item) => String(item.value) === String(value))?.label ?? '—';
 async function loadOptions() {
   const result = (await Promise.all([
-    api.get('/goods/categories', { params: { pageSize: 100 } }),
-    api.get('/base-data/organizations/options'),
-    api.get('/base-data/warehouses/options'),
-    api.get('/base-data/vendors/options'),
+    api.get('/goods/categories'),
     api.get('/base-data/units/options'),
     api.get('/goods/properties', { params: { pageSize: 100 } }),
     api.get('/dictionaries/product_supply_type'),
@@ -95,14 +79,11 @@ async function loadOptions() {
     api.get('/dictionaries/enabled_status'),
   ])) as any[];
   categories.value = result[0].items;
-  orgs.value = result[1];
-  warehouses.value = result[2];
-  vendors.value = result[3];
-  units.value = result[4];
-  properties.value = result[5].items;
-  supplyTypes.value = result[6];
-  goodsTypes.value = result[7];
-  statuses.value = result[8];
+  units.value = result[1];
+  properties.value = result[2].items;
+  supplyTypes.value = result[3];
+  goodsTypes.value = result[4];
+  statuses.value = result[5];
 }
 async function load() {
   loading.value = true;
@@ -121,7 +102,6 @@ async function load() {
 }
 function resetForm() {
   Object.assign(form, {
-    orgId: '',
     queryCode: '',
     goodsName: '',
     shortName: '',
@@ -133,15 +113,13 @@ function resetForm() {
     goodsType: 1,
     costPrice: 0,
     salePrice: 0,
-    vendorId: '',
-    warehouseId: '',
     status: 1,
     sort: 0,
     remark: '',
     propertyIds: [],
     skus: [],
   });
-  form.skus = [skuLine()];
+  form.skus = [skuLine(true)];
 }
 async function open(next: 'create' | 'edit' | 'view', row?: any) {
   mode.value = next;
@@ -160,8 +138,6 @@ async function open(next: 'create' | 'edit' | 'view', row?: any) {
 function selectCategory() {
   const validIds = inheritedProperties.value.map((item) => String(item.id));
   form.propertyIds = (form.propertyIds ?? []).filter((id: any) => validIds.includes(String(id)));
-  if (!availableWarehouses.value.some((item) => String(item.value) === String(form.warehouseId)))
-    form.warehouseId = '';
 }
 function setDefault(index: number) {
   form.skus.forEach((sku: any, i: number) => (sku.isDefault = i === index ? 1 : 0));
@@ -174,18 +150,8 @@ function removeSku(index: number) {
   form.skus.splice(index, 1);
 }
 async function save() {
-  if (
-    !form.goodsName.trim() ||
-    !form.categoryId ||
-    !form.unitType ||
-    !form.orgId ||
-    !form.warehouseId
-  ) {
-    ElMessage.warning('请完整填写商品名称、分类、单位、组织和默认仓库');
-    return;
-  }
-  if (Number(form.supplyType) === 2 && !form.vendorId) {
-    ElMessage.warning('外购商品必须选择供应商');
+  if (!form.goodsName.trim() || !form.categoryId || !form.unitType) {
+    ElMessage.warning('请完整填写商品名称、分类和基础单位');
     return;
   }
   if (form.skus.filter((sku: any) => sku.isDefault === 1).length !== 1) {
@@ -237,25 +203,10 @@ function reset() {
     categoryId: '',
     supplyType: '',
     goodsType: '',
-    vendorId: '',
-    orgId: '',
     status: '',
   });
   load();
 }
-watch(
-  () => form.supplyType,
-  (value) => {
-    if (Number(value) !== 2) form.vendorId = '';
-  },
-);
-watch(
-  () => form.orgId,
-  () => {
-    if (!availableWarehouses.value.some((item) => String(item.value) === String(form.warehouseId)))
-      form.warehouseId = '';
-  },
-);
 onMounted(async () => {
   await loadOptions();
   await load();
@@ -304,17 +255,6 @@ onMounted(async () => {
             :key="item.value"
             :label="item.label"
             :value="item.value" /></el-select
-        ><el-select
-          v-model="query.orgId"
-          class="query-field"
-          clearable
-          filterable
-          placeholder="所属组织"
-          ><el-option
-            v-for="item in orgs"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value" /></el-select
         ><el-select v-model="query.status" class="query-field" clearable placeholder="状态"
           ><el-option
             v-for="item in statuses"
@@ -340,6 +280,11 @@ onMounted(async () => {
       <div v-else class="table-wrap">
         <el-table :data="rows" v-loading="loading"
           ><el-table-column type="index" label="序号" width="65" fixed="left" /><el-table-column
+            prop="id"
+            label="ID"
+            width="100"
+            fixed="left"
+          /><el-table-column
             prop="queryCode"
             label="速查码"
             width="110"
@@ -368,11 +313,7 @@ onMounted(async () => {
             ><template #default="s">{{ moneyText(s.row.costPrice) }}</template></el-table-column
           ><el-table-column label="销售价" width="105" align="right"
             ><template #default="s">{{ moneyText(s.row.salePrice) }}</template></el-table-column
-          ><el-table-column prop="vendorName" label="供应商" min-width="140" /><el-table-column
-            prop="warehouseName"
-            label="默认仓库"
-            min-width="120"
-          /><el-table-column prop="skuCount" label="SKU数" width="80" /><el-table-column
+          ><el-table-column prop="skuCount" label="SKU数" width="80" /><el-table-column
             label="状态"
             width="90"
             ><template #default="s"><StatusTag :value="s.row.status" /></template></el-table-column
@@ -431,9 +372,6 @@ onMounted(async () => {
               { l: '商品形态', v: dict(goodsTypes, form.goodsType) },
               { l: '品牌', v: form.brandName },
               { l: '规格型号', v: form.specModels },
-              { l: '供应商', v: form.vendorName },
-              { l: '所属组织', v: form.organizationName },
-              { l: '默认仓库', v: form.warehouseName },
               { l: '状态', v: dict(statuses, form.status) },
               { l: '参考基础件成本', v: moneyText(form.costPrice) },
               { l: '销售价', v: moneyText(form.salePrice) },
@@ -527,36 +465,6 @@ onMounted(async () => {
                 :value="Number(item.value)" /></el-select></el-form-item
           ><el-form-item label="品牌"><el-input v-model="form.brandName" /></el-form-item
           ><el-form-item label="规格型号"><el-input v-model="form.specModels" /></el-form-item
-          ><el-form-item label="供应商" :required="Number(form.supplyType) === 2"
-            ><el-select
-              v-model="form.vendorId"
-              filterable
-              clearable
-              :disabled="mode === 'view' || Number(form.supplyType) !== 2"
-              style="width: 100%"
-              ><el-option
-                v-for="item in vendors"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value" /></el-select></el-form-item
-          ><el-form-item label="所属组织" required
-            ><el-select v-model="form.orgId" filterable style="width: 100%"
-              ><el-option
-                v-for="item in orgs"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value" /></el-select></el-form-item
-          ><el-form-item label="默认仓库" required
-            ><el-select v-model="form.warehouseId" filterable style="width: 100%"
-              ><el-option
-                v-for="item in availableWarehouses"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-            /></el-select>
-            <div v-if="form.categoryId && !availableWarehouses.length" class="el-form-item__error">
-              当前分类没有类型匹配的启用仓库
-            </div></el-form-item
           ><el-form-item label="状态"
             ><el-select v-model="form.status" style="width: 100%"
               ><el-option
@@ -684,7 +592,7 @@ onMounted(async () => {
           v-if="mode !== 'view'"
           type="primary"
           :loading="saving"
-          :disabled="saving || !availableWarehouses.length"
+          :disabled="saving"
           @click="save"
           >{{ mode === 'edit' ? '保存修改' : '保存商品' }}</el-button
         ></template

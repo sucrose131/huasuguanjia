@@ -18,6 +18,8 @@ export const INVENTORY_BUSINESS_MODE = {
   DAMAGE_SCRAP_OUTPUT: 13,
   GENERIC_INPUT: 14,
   DIRECT_OUTPUT: 15,
+  /** BOM出库物料退回原仓库。 */
+  BOM_RETURN: 16,
 } as const;
 
 /** 生产出库状态以 production_outbound_status 数据字典为准。 */

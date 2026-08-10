@@ -10,7 +10,7 @@
  *   pnpm --filter @hspsi/api test product-sync.service.spec
  *
  * 前置条件：
- *   1. 项目根目录 .env 已配置 DATABASE_URL
+ *   1. apps/api/.env 已配置 DATABASE_URL
  *   2. .env 已配置 HUASU_HOME_BASE_URL、HUASU_HOME_APP_PUBLIC_KEY
  *   3. 平台单位表建议存在「套」（套餐 unit_type），分类常量见 huasu-home.constants.ts
  */
@@ -65,10 +65,13 @@ function loadEnvOverride(filePath: string) {
   }
 }
 
-// cwd 为 apps/api，项目根目录在 ../../
-loadEnvOverride(resolve(process.cwd(), '../../.env'));
+// pnpm workspace 运行本测试时 cwd 为 apps/api，配置读取当前包目录的 .env
+loadEnvOverride(resolve(process.cwd(), '.env'));
 
-describe('HuasuHomeProductSyncService 商品同步集成测试（真实请求）', () => {
+const describeExternal =
+  process.env.RUN_EXTERNAL_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
+
+describeExternal('HuasuHomeProductSyncService 商品同步集成测试（真实请求）', () => {
   let prisma: PrismaClient;
   let huasuHome: HuasuHomeService;
   let service: HuasuHomeProductSyncService;

@@ -112,11 +112,6 @@ export class ProductionController {
     return this.s.shortages(q);
   }
   @RequirePermissions('production')
-  @Post('shortages/plan/:id/approve')
-  approveShortages(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.approveShortages(id, u.id);
-  }
-  @RequirePermissions('production')
   @Get('outputs')
   outputs(@Query() q: any) {
     return this.s.outputs(q);
@@ -145,6 +140,50 @@ export class ProductionController {
   @Post('outputs/:id/confirm')
   confirmOutput(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.confirmOutput(id, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns/source/:outId/available')
+  materialReturnAvailable(@Param('outId') outId: string) {
+    return this.s.materialReturnAvailable(outId);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns')
+  materialReturns(@Query() q: any) {
+    return this.s.materialReturns(q);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns/:id')
+  materialReturn(@Param('id') id: string) {
+    return this.s.materialReturn(id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns')
+  createMaterialReturn(@Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveMaterialReturn(null, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Patch('material-returns/:id')
+  updateMaterialReturn(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveMaterialReturn(id, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/confirm')
+  confirmMaterialReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.s.confirmMaterialReturn(id, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/void')
+  voidMaterialReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.s.voidMaterialReturn(id, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/reverse')
+  reverseMaterialReturn(
+    @Param('id') id: string,
+    @Body() b: any,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.s.reverseMaterialReturn(id, b, u.id);
   }
   @RequirePermissions('production')
   @Get('inputs')

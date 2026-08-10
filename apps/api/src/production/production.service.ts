@@ -11,6 +11,7 @@ import { BusinessReferenceService } from '../database/business-reference.service
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { generateBatchNo } from '../common/batch-number';
 type B = Record<string, any>;
 const PRODUCTION_PLAN_STATUS = {
   DRAFT: 0,
@@ -1311,28 +1312,6 @@ export class ProductionService {
     );
     return { items, total, page, pageSize };
   }
-  async approveShortages(planId: string, u: string) {
-    return this.guardedTransaction(async (t) => {
-      const id = BigInt(planId);
-      await t.$queryRaw`SELECT plan_id FROM hspsi_production_plan WHERE plan_id=${id} FOR UPDATE`;
-      const plan = await t.hspsi_production_plan.findFirst({
-        where: { plan_id: id, deleted_at: null },
-      });
-      if (!plan) throw new NotFoundException('生产计划不存在');
-      if (
-        plan.plan_status !== PRODUCTION_PLAN_STATUS.SHORTAGE ||
-        plan.approve_status !== 0 ||
-        ![2, 3].includes(plan.material_status) ||
-        plan.outbound_status !== PRODUCTION_OUTBOUND_STATUS.NOT_STARTED
-      )
-        throw new BadRequestException('仅尚未审批且处于缺料状态的计划可生成采购申请');
-      const application = await this.createShortagePurchaseApplication(t, plan, u);
-      return {
-        id: application.id,
-        message: application.created ? '已生成采购申请' : '采购申请已生成',
-      };
-    });
-  }
   async outputs(q: B) {
     const { page, pageSize } = this.pg(q),
       hasOutType = q.outType !== undefined && q.outType !== '',
@@ -1410,6 +1389,8 @@ export class ProductionService {
           orgId: i.org_id,
           outDate: i.out_date,
           outType: i.out_type,
+          destinationType: i.destination_type,
+          destinationTypeName: '',
           outTypeName: '',
           materialCount: summary?._count ?? 0,
           totalQty: summary?._sum.out_qty ?? 0,
@@ -1424,6 +1405,7 @@ export class ProductionService {
       }),
       {
         outType: 'production_material_out_type',
+        destinationType: 'temporary_outbound_destination',
         confirmStatus: 'confirm_status',
         status: 'confirm_status',
       },
@@ -1547,6 +1529,7 @@ export class ProductionService {
       orgId: i.org_id,
       outDate: i.out_date,
       outType: i.out_type,
+      destinationType: i.destination_type,
       confirmStatus: i.confirm_tag,
       details: details.map(enrichLine),
       supplements,
@@ -1567,6 +1550,7 @@ export class ProductionService {
             org_id: Number(b.orgId ?? 1),
             out_date: new Date(b.outDate ?? Date.now()),
             out_type: 3,
+            destination_type: Number(b.destinationType),
             confirm_tag: 0,
             remark: String(b.remark ?? ''),
             created_by: Number(u),
@@ -1911,7 +1895,7 @@ export class ProductionService {
         data: {
           input_no: no,
           plan_id: plan.plan_id,
-          batch_no: String(b.batchNo),
+          batch_no: String(b.batchNo ?? '').trim() || generateBatchNo(),
           org_id: plan.org_id,
           goods_id: plan.goods_id,
           sku_id: plan.sku_id,
@@ -2334,6 +2318,8 @@ export class ProductionService {
     if (outType !== 3 && !b.planId)
       throw new BadRequestException('BOM出库和临时补料必须关联生产计划');
     if (outType === 3 && b.planId) throw new BadRequestException('实验室出库不得关联生产计划');
+    if (outType === 3 && ![1, 2].includes(Number(b.destinationType)))
+      throw new BadRequestException('临时出库必须选择有效的出库去向');
     let plan: any = null;
     if (b.planId) {
       plan = await this.plan(String(b.planId));
@@ -2451,6 +2437,7 @@ export class ProductionService {
         where: { out_id: outId },
         data: {
           out_date: new Date(b.outDate ?? Date.now()),
+          destination_type: outType === 3 ? Number(b.destinationType) : null,
           remark: String(b.remark ?? ''),
           updated_by: Number(u),
           updated_date: new Date(),
@@ -2560,6 +2547,543 @@ export class ProductionService {
     return { id, message: '出库草稿已删除' };
   }
 
+  private async materialReturnQty(
+    db: Prisma.TransactionClient | PrismaService,
+    sourceOutId: number,
+    statuses: number[] = [1],
+    excludeReturnId?: bigint,
+  ) {
+    const returns = await db.hspsi_production_material_return.findMany({
+      where: {
+        source_out_id: sourceOutId,
+        status: { in: statuses },
+        deleted_at: null,
+        ...(excludeReturnId ? { return_id: { not: excludeReturnId } } : {}),
+      },
+      select: { return_id: true },
+    });
+    if (!returns.length) return new Map<number, number>();
+    const totals = await db.hspsi_production_material_return_detail.groupBy({
+      by: ['source_out_detail_id'],
+      where: { return_id: { in: returns.map((item) => item.return_id) } },
+      _sum: { return_qty: true },
+    });
+    return new Map(
+      totals.map((item) => [item.source_out_detail_id, Number(item._sum.return_qty ?? 0)]),
+    );
+  }
+
+  private assertMaterialReturnSource(output: {
+    out_type: number;
+    confirm_tag: number;
+    warehouse_id: number | null;
+    org_id: number | null;
+  }) {
+    if (![1, 2].includes(output.out_type))
+      throw new BadRequestException('仅正式BOM整单出库或临时补料出库可以退库');
+    if (output.confirm_tag !== 1) throw new BadRequestException('原BOM出库尚未确认，不能退库');
+    if (!output.warehouse_id || !output.org_id)
+      throw new BadRequestException('原BOM出库缺少组织或仓库，不能退库');
+  }
+
+  async materialReturnAvailable(outId: string) {
+    const sourceOutId = Number(outId);
+    if (!Number.isSafeInteger(sourceOutId) || sourceOutId <= 0)
+      throw new BadRequestException('原BOM出库单ID无效');
+    const output = await this.p.hspsi_production_material_out.findFirst({
+      where: { out_id: sourceOutId, deleted_at: null },
+    });
+    if (!output) throw new NotFoundException('原BOM出库单不存在');
+    this.assertMaterialReturnSource(output);
+    const [details, returned, occupied, warehouse, histories] = await Promise.all([
+      this.p.hspsi_production_material_out_detail.findMany({
+        where: { out_id: sourceOutId },
+        orderBy: { serial_number: 'asc' },
+      }),
+      this.materialReturnQty(this.p, sourceOutId, [1]),
+      this.materialReturnQty(this.p, sourceOutId, [0]),
+      this.p.hspsi_basic_warehouse.findFirst({
+        where: { warehouse_id: BigInt(output.warehouse_id!) },
+      }),
+      this.p.hspsi_production_material_return.findMany({
+        where: { source_out_id: sourceOutId, deleted_at: null },
+        orderBy: { return_id: 'desc' },
+      }),
+    ]);
+    const enriched = await this.refs.enrich(
+      details.map((line) => {
+        const returnedQty = returned.get(line.serial_number) ?? 0;
+        const occupiedQty = occupied.get(line.serial_number) ?? 0;
+        return {
+          id: line.serial_number,
+          sourceOutDetailId: line.serial_number,
+          goodsId: line.goods_id,
+          skuId: line.sku_id,
+          unitType: line.unit_type,
+          batchNo: line.batch_no,
+          sourceOutputQty: Number(line.out_qty ?? 0),
+          returnedQty,
+          occupiedQty,
+          remainingQty: Math.max(0, Number(line.out_qty ?? 0) - returnedQty - occupiedQty),
+          remark: line.remark,
+        };
+      }),
+    );
+    return {
+      id: output.out_id,
+      outNo: output.out_no,
+      planId: output.plan_id,
+      orgId: output.org_id,
+      warehouseId: output.warehouse_id,
+      warehouseName: warehouse?.name ?? '',
+      outDate: output.out_date,
+      details: enriched,
+      returnableQty: enriched.reduce((sum, line) => sum + Number(line.remainingQty), 0),
+      histories: await this.refs.enrich(
+        histories.map((item) => ({
+          id: item.return_id,
+          returnNo: item.return_no,
+          returnDate: item.return_date,
+          totalQty: item.total_qty,
+          returnReason: item.return_reason,
+          reversalReason: item.reversal_reason,
+          status: item.status,
+          reversedBy: item.reversed_by,
+          reversedAt: item.reversed_at,
+          createdBy: item.created_by,
+          createdAt: item.created_at,
+        })),
+        { status: 'bom_return_status' },
+      ),
+    };
+  }
+
+  async materialReturns(q: B) {
+    const { page, pageSize } = this.pg(q);
+    const where: Prisma.hspsi_production_material_returnWhereInput = { deleted_at: null };
+    if (q.sourceOutId) where.source_out_id = Number(q.sourceOutId);
+    if (q.status !== undefined && q.status !== '') where.status = Number(q.status);
+    const [records, total] = await this.p.$transaction([
+      this.p.hspsi_production_material_return.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { return_id: 'desc' },
+      }),
+      this.p.hspsi_production_material_return.count({ where }),
+    ]);
+    const sourceIds = [...new Set(records.map((item) => item.source_out_id))];
+    const outputs = sourceIds.length
+      ? await this.p.hspsi_production_material_out.findMany({
+          where: { out_id: { in: sourceIds } },
+          select: { out_id: true, out_no: true },
+        })
+      : [];
+    const outputNo = new Map(outputs.map((item) => [item.out_id, item.out_no]));
+    const items = await this.refs.enrich(
+      records.map((item) => ({
+        id: item.return_id,
+        returnNo: item.return_no,
+        sourceOutId: item.source_out_id,
+        sourceOutNo: outputNo.get(item.source_out_id) ?? '',
+        planId: item.plan_id,
+        orgId: item.org_id,
+        warehouseId: item.warehouse_id,
+        returnDate: item.return_date,
+        totalQty: item.total_qty,
+        returnReason: item.return_reason,
+        remark: item.remark,
+        status: item.status,
+        reversalReason: item.reversal_reason,
+        reversedBy: item.reversed_by,
+        reversedAt: item.reversed_at,
+        createdBy: item.created_by,
+        updatedBy: item.updated_by,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+      })),
+      { status: 'bom_return_status' },
+    );
+    return { items, total, page, pageSize };
+  }
+
+  async materialReturn(id: string) {
+    const returnId = BigInt(id);
+    const item = await this.p.hspsi_production_material_return.findFirst({
+      where: { return_id: returnId, deleted_at: null },
+    });
+    if (!item) throw new NotFoundException('BOM退库单不存在');
+    const [details, source, returned] = await Promise.all([
+      this.p.hspsi_production_material_return_detail.findMany({
+        where: { return_id: returnId },
+        orderBy: { detail_id: 'asc' },
+      }),
+      this.p.hspsi_production_material_out.findFirst({ where: { out_id: item.source_out_id } }),
+      this.materialReturnQty(this.p, item.source_out_id, [1]),
+    ]);
+    const [header] = await this.refs.enrich(
+      [
+        {
+          id: item.return_id,
+          returnNo: item.return_no,
+          sourceOutId: item.source_out_id,
+          sourceOutNo: source?.out_no ?? '',
+          planId: item.plan_id,
+          orgId: item.org_id,
+          warehouseId: item.warehouse_id,
+          returnDate: item.return_date,
+          totalQty: item.total_qty,
+          returnReason: item.return_reason,
+          remark: item.remark,
+          status: item.status,
+          reversalReason: item.reversal_reason,
+          reversedBy: item.reversed_by,
+          reversedAt: item.reversed_at,
+          createdBy: item.created_by,
+          updatedBy: item.updated_by,
+          createdAt: item.created_at,
+          updatedAt: item.updated_at,
+        },
+      ],
+      { status: 'bom_return_status' },
+    );
+    return {
+      ...header,
+      details: await this.refs.enrich(
+        details.map((line) => ({
+          id: line.detail_id,
+          sourceOutDetailId: line.source_out_detail_id,
+          goodsId: line.goods_id,
+          skuId: line.sku_id,
+          batchNo: line.batch_no,
+          unitType: line.unit_type,
+          sourceOutputQty: line.source_output_qty,
+          returnQty: line.return_qty,
+          completedReturnedQty: returned.get(line.source_out_detail_id) ?? 0,
+          storageLocation: line.storage_location,
+          remark: line.remark,
+        })),
+      ),
+    };
+  }
+
+  async saveMaterialReturn(id: string | null, b: B, u: string) {
+    const requestKey = String(b.requestKey ?? '').trim();
+    if (!id && (requestKey.length < 8 || requestKey.length > 64))
+      throw new BadRequestException('请求幂等键长度必须为8至64位');
+    const sourceOutId = Number(b.sourceOutId);
+    if (!Number.isSafeInteger(sourceOutId) || sourceOutId <= 0)
+      throw new BadRequestException('原BOM出库单ID无效');
+    const returnReason = String(b.returnReason ?? '').trim();
+    if (!returnReason) throw new BadRequestException('退库原因必填');
+    const rawLines = Array.isArray(b.details) ? b.details : [];
+    const lines = rawLines.filter((line: B) => Number(line.returnQty) > 0);
+    if (!lines.length) throw new BadRequestException('至少填写一条退库数量');
+    const lineIds = lines.map((line: B) => Number(line.sourceOutDetailId));
+    if (lineIds.some((value) => !Number.isSafeInteger(value) || value <= 0))
+      throw new BadRequestException('退库明细来源无效');
+    if (new Set(lineIds).size !== lineIds.length) throw new BadRequestException('退库明细不能重复');
+    for (const line of lines) this.qty(line.returnQty, '退库数量');
+
+    return this.guardedTransaction(async (t) => {
+      await t.$queryRaw`SELECT out_id FROM hspsi_production_material_out WHERE out_id=${sourceOutId} FOR UPDATE`;
+      const output = await t.hspsi_production_material_out.findFirst({
+        where: { out_id: sourceOutId, deleted_at: null },
+      });
+      if (!output) throw new NotFoundException('原BOM出库单不存在');
+      this.assertMaterialReturnSource(output);
+      if (!id) {
+        const duplicate = await t.hspsi_production_material_return.findFirst({
+          where: { request_key: requestKey },
+        });
+        if (duplicate) return { id: duplicate.return_id, message: 'BOM退库草稿已存在' };
+      }
+      let current: Awaited<ReturnType<typeof t.hspsi_production_material_return.findFirst>> = null;
+      if (id) {
+        const returnId = BigInt(id);
+        await t.$queryRaw`SELECT return_id FROM hspsi_production_material_return WHERE return_id=${returnId} FOR UPDATE`;
+        current = await t.hspsi_production_material_return.findFirst({
+          where: { return_id: returnId, deleted_at: null },
+        });
+        if (!current) throw new NotFoundException('BOM退库单不存在');
+        if (current.status !== 0) throw new BadRequestException('仅草稿BOM退库单可以编辑');
+        if (current.source_out_id !== sourceOutId)
+          throw new BadRequestException('退库单创建后不能更换原BOM出库单');
+      }
+      const sourceLines = await t.hspsi_production_material_out_detail.findMany({
+        where: { out_id: sourceOutId, serial_number: { in: lineIds } },
+      });
+      if (sourceLines.length !== lines.length)
+        throw new BadRequestException('退库明细不属于原BOM出库单');
+      const returned = await this.materialReturnQty(
+        t,
+        sourceOutId,
+        [0, 1],
+        current?.return_id,
+      );
+      const detailData = lines.map((line: B) => {
+        const source = sourceLines.find(
+          (item) => item.serial_number === Number(line.sourceOutDetailId),
+        )!;
+        const returnQty = this.qty(line.returnQty, '退库数量');
+        const remaining = Number(source.out_qty ?? 0) - (returned.get(source.serial_number) ?? 0);
+        if (returnQty > remaining)
+          throw new BadRequestException(
+            `物料 ${source.goods_id ?? ''} 批号 ${source.batch_no || '无批号'} 当前最多可退 ${remaining}`,
+          );
+        return {
+          source_out_detail_id: source.serial_number,
+          goods_id: BigInt(source.goods_id ?? 0),
+          sku_id: BigInt(source.sku_id ?? 0),
+          batch_no: source.batch_no,
+          unit_type: Number(source.unit_type ?? 0),
+          source_output_qty: Number(source.out_qty ?? 0),
+          return_qty: returnQty,
+          storage_location: String(line.storageLocation ?? '').trim(),
+          remark: String(line.remark ?? ''),
+          updated_at: new Date(),
+        };
+      });
+      const totalQty = detailData.reduce((sum, line) => sum + line.return_qty, 0);
+      let saved;
+      if (current) {
+        saved = await t.hspsi_production_material_return.update({
+          where: { return_id: current.return_id },
+          data: {
+            return_date: new Date(b.returnDate ?? Date.now()),
+            total_qty: totalQty,
+            return_reason: returnReason,
+            remark: String(b.remark ?? ''),
+            updated_by: BigInt(u),
+            updated_at: new Date(),
+          },
+        });
+        await t.hspsi_production_material_return_detail.deleteMany({
+          where: { return_id: current.return_id },
+        });
+      } else {
+        const returnNo = await this.businessNumber.generate(
+          BUSINESS_PREFIX.PRODUCTION_MATERIAL_RETURN,
+        );
+        saved = await t.hspsi_production_material_return.create({
+          data: {
+            return_no: returnNo,
+            request_key: requestKey,
+            source_out_id: sourceOutId,
+            plan_id: output.plan_id,
+            org_id: BigInt(output.org_id!),
+            warehouse_id: BigInt(output.warehouse_id!),
+            return_date: new Date(b.returnDate ?? Date.now()),
+            total_qty: totalQty,
+            status: 0,
+            return_reason: returnReason,
+            remark: String(b.remark ?? ''),
+            created_by: BigInt(u),
+            updated_by: BigInt(u),
+          },
+        });
+      }
+      await t.hspsi_production_material_return_detail.createMany({
+        data: detailData.map((line) => ({ ...line, return_id: saved.return_id })),
+      });
+      await this.documentTrace.link(
+        {
+          upstreamType: 'production_material_output',
+          upstreamId: output.out_id,
+          upstreamNo: output.out_no,
+          downstreamType: 'production_material_return',
+          downstreamId: saved.return_id,
+          downstreamNo: saved.return_no,
+          relationKind: 'bom_return',
+          createdBy: u,
+        },
+        t,
+      );
+      return { id: saved.return_id, message: current ? 'BOM退库草稿已更新' : 'BOM退库草稿已保存' };
+    });
+  }
+
+  async confirmMaterialReturn(id: string, u: string) {
+    const returnId = BigInt(id);
+    const candidate = await this.p.hspsi_production_material_return.findFirst({
+      where: { return_id: returnId, deleted_at: null },
+      select: { source_out_id: true },
+    });
+    if (!candidate) throw new NotFoundException('BOM退库单不存在');
+    return this.guardedTransaction(async (t) => {
+      await t.$queryRaw`SELECT out_id FROM hspsi_production_material_out WHERE out_id=${candidate.source_out_id} FOR UPDATE`;
+      await t.$queryRaw`SELECT return_id FROM hspsi_production_material_return WHERE return_id=${returnId} FOR UPDATE`;
+      const item = await t.hspsi_production_material_return.findFirst({
+        where: { return_id: returnId, deleted_at: null },
+      });
+      if (!item) throw new NotFoundException('BOM退库单不存在');
+      if (item.status === 1) return { id: item.return_id, message: 'BOM退库单已完成' };
+      if (item.status !== 0) throw new BadRequestException('已作废BOM退库单不能完成');
+      const output = await t.hspsi_production_material_out.findFirst({
+        where: { out_id: item.source_out_id, deleted_at: null },
+      });
+      if (!output) throw new NotFoundException('原BOM出库单不存在');
+      this.assertMaterialReturnSource(output);
+      if (
+        BigInt(output.org_id!) !== item.org_id ||
+        BigInt(output.warehouse_id!) !== item.warehouse_id
+      )
+        throw new BadRequestException('退回组织或仓库与原BOM出库不一致');
+      const details = await t.hspsi_production_material_return_detail.findMany({
+        where: { return_id: item.return_id },
+      });
+      if (!details.length) throw new BadRequestException('BOM退库单没有明细');
+      const sourceLines = await t.hspsi_production_material_out_detail.findMany({
+        where: {
+          out_id: output.out_id,
+          serial_number: { in: details.map((line) => line.source_out_detail_id) },
+        },
+      });
+      if (sourceLines.length !== details.length)
+        throw new BadRequestException('原BOM出库明细已发生变化');
+      const returned = await this.materialReturnQty(t, output.out_id, [0, 1], item.return_id);
+      for (const line of details) {
+        const source = sourceLines.find(
+          (sourceLine) => sourceLine.serial_number === line.source_out_detail_id,
+        )!;
+        const remaining = Number(source.out_qty ?? 0) - (returned.get(source.serial_number) ?? 0);
+        if (line.return_qty > remaining)
+          throw new BadRequestException(
+            `物料 ${source.goods_id ?? ''} 批号 ${source.batch_no || '无批号'} 当前最多可退 ${remaining}`,
+          );
+      }
+      const goods = await t.hspsi_goods_info.findMany({
+        where: { goods_id: { in: details.map((line) => line.goods_id) } },
+        select: { goods_id: true, const_price: true },
+      });
+      const cost = new Map(
+        goods.map((goodsItem) => [String(goodsItem.goods_id), Number(goodsItem.const_price)]),
+      );
+      const nextVersion = item.posting_version + 1;
+      await this.posting.post(
+        {
+          orgId: item.org_id,
+          warehouseId: item.warehouse_id,
+          direction: 1,
+          operationType: 1,
+          inventoryMode: INVENTORY_BUSINESS_MODE.BOM_RETURN,
+          sourceId: item.return_id,
+          sourceType: 'production_material_return',
+          sourceNo: item.return_no,
+          operationBy: u,
+          idempotencyKey: `production-material-return:${item.return_id}:confirm:v${nextVersion}`,
+          remark: item.return_reason || 'BOM物料退库',
+          lines: details.map((line) => ({
+            goodsId: line.goods_id,
+            skuId: line.sku_id,
+            batchNo: line.batch_no,
+            unitType: line.unit_type,
+            quantity: line.return_qty,
+            amount: (cost.get(String(line.goods_id)) ?? 0) * line.return_qty,
+          })),
+        },
+        t,
+      );
+      await t.hspsi_production_material_return.update({
+        where: { return_id: item.return_id },
+        data: {
+          status: 1,
+          posting_version: nextVersion,
+          completed_by: BigInt(u),
+          completed_at: new Date(),
+          updated_by: BigInt(u),
+          updated_at: new Date(),
+        },
+      });
+      return { id: item.return_id, message: 'BOM退库已完成，库存已入账' };
+    });
+  }
+
+  async voidMaterialReturn(id: string, u: string) {
+    const returnId = BigInt(id);
+    return this.guardedTransaction(async (t) => {
+      await t.$queryRaw`SELECT return_id FROM hspsi_production_material_return WHERE return_id=${returnId} FOR UPDATE`;
+      const item = await t.hspsi_production_material_return.findFirst({
+        where: { return_id: returnId, deleted_at: null },
+      });
+      if (!item) throw new NotFoundException('BOM退库单不存在');
+      if (item.status !== 0) throw new BadRequestException('仅未过账草稿可以作废');
+      await t.hspsi_production_material_return.update({
+        where: { return_id: returnId },
+        data: {
+          status: 2,
+          voided_by: BigInt(u),
+          voided_at: new Date(),
+          updated_by: BigInt(u),
+          updated_at: new Date(),
+        },
+      });
+      return { id: returnId, message: 'BOM退库草稿已作废' };
+    });
+  }
+
+  async reverseMaterialReturn(id: string, b: B, u: string) {
+    const returnId = BigInt(id);
+    const reversalReason = String(b.reversalReason ?? '').trim();
+    if (!reversalReason) throw new BadRequestException('冲正原因必填');
+    const candidate = await this.p.hspsi_production_material_return.findFirst({
+      where: { return_id: returnId, deleted_at: null },
+      select: { source_out_id: true },
+    });
+    if (!candidate) throw new NotFoundException('BOM退库单不存在');
+    return this.guardedTransaction(async (t) => {
+      await t.$queryRaw`SELECT out_id FROM hspsi_production_material_out WHERE out_id=${candidate.source_out_id} FOR UPDATE`;
+      await t.$queryRaw`SELECT return_id FROM hspsi_production_material_return WHERE return_id=${returnId} FOR UPDATE`;
+      const item = await t.hspsi_production_material_return.findFirst({
+        where: { return_id: returnId, deleted_at: null },
+      });
+      if (!item) throw new NotFoundException('BOM退库单不存在');
+      if (item.status === 3) return { id: item.return_id, message: 'BOM退库单已经冲正' };
+      if (item.status !== 1) throw new BadRequestException('仅已完成BOM退库单可以冲正');
+      const details = await t.hspsi_production_material_return_detail.findMany({
+        where: { return_id: item.return_id },
+      });
+      if (!details.length) throw new BadRequestException('BOM退库单没有明细');
+      const nextVersion = item.posting_version + 1;
+      await this.posting.post(
+        {
+          orgId: item.org_id,
+          warehouseId: item.warehouse_id,
+          direction: -1,
+          operationType: 2,
+          inventoryMode: INVENTORY_BUSINESS_MODE.BOM_RETURN,
+          sourceId: item.return_id,
+          sourceType: 'production_material_return_reversal',
+          sourceNo: item.return_no,
+          operationBy: u,
+          idempotencyKey: `production-material-return:${item.return_id}:reverse:v${nextVersion}`,
+          remark: `BOM退库冲正：${reversalReason}`,
+          lines: details.map((line) => ({
+            goodsId: line.goods_id,
+            skuId: line.sku_id,
+            batchNo: line.batch_no,
+            unitType: line.unit_type,
+            quantity: line.return_qty,
+          })),
+        },
+        t,
+      );
+      await t.hspsi_production_material_return.update({
+        where: { return_id: item.return_id },
+        data: {
+          status: 3,
+          posting_version: nextVersion,
+          reversal_reason: reversalReason,
+          reversed_by: BigInt(u),
+          reversed_at: new Date(),
+          updated_by: BigInt(u),
+          updated_at: new Date(),
+        },
+      });
+      return { id: item.return_id, message: 'BOM退库已冲正，库存已反向扣减' };
+    });
+  }
+
   async createInputChecked(b: B, u: string) {
     const plan = await this.plan(String(b.planId)),
       qty = this.qty(b.quantity, '本次入库数量'),
@@ -2568,7 +3092,7 @@ export class ProductionService {
       throw new BadRequestException('原料尚未正式出库，不能进行成品入库');
     if (qty > remaining)
       throw new BadRequestException(`本次入库数量不能超过剩余可入数量 ${remaining}`);
-    if (!b.batchNo) throw new BadRequestException('成品批号必填');
+    if (!String(b.batchNo ?? '').trim()) b.batchNo = generateBatchNo();
     const warehouse = await this.p.hspsi_basic_warehouse.findFirst({
       where: {
         warehouse_id: BigInt(b.warehouseId),

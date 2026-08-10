@@ -237,6 +237,35 @@ export class SalesController {
     return this.s.service(id);
   }
   @RequirePermissions('sales')
+  @Get('services/:id/progress')
+  serviceProgresses(@Param('id') id: string) {
+    return this.s.serviceProgresses(id);
+  }
+  @RequirePermissions('sales')
+  @Post('services/:id/progress')
+  createServiceProgress(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveServiceProgress(id, null, b, u.id);
+  }
+  @RequirePermissions('sales')
+  @Patch('services/:id/progress/:progressId')
+  updateServiceProgress(
+    @Param('id') id: string,
+    @Param('progressId') progressId: string,
+    @Body() b: any,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.s.saveServiceProgress(id, progressId, b, u.id);
+  }
+  @RequirePermissions('sales')
+  @Delete('services/:id/progress/:progressId')
+  deleteServiceProgress(
+    @Param('id') id: string,
+    @Param('progressId') progressId: string,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.s.deleteServiceProgress(id, progressId, u.id);
+  }
+  @RequirePermissions('sales')
   @Post('services')
   createService(@Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.saveService(null, b, u.id);

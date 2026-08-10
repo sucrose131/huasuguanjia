@@ -79,21 +79,25 @@ describe('inventory damage disposal parsing', () => {
     ['0', 0],
     [1, 1],
     ['1', 1],
+    [2, 2],
+    ['2', 2],
   ])('accepts only explicit disposal %p', (value, expected) => {
     expect(parseInventoryLossDisposal(value, true)).toBe(expected);
   });
 
-  it.each([null, undefined, '', ' ', -1, '-1', false, 2, '01'])(
+  it.each([null, undefined, '', ' ', -1, '-1', false, '01'])(
     'rejects non-explicit disposal %p when required',
     (value) => {
-      expect(() => parseInventoryLossDisposal(value, true)).toThrow('必须选择直接报废或折价出售');
+      expect(() => parseInventoryLossDisposal(value, true)).toThrow(
+        '必须选择直接报废、折价出售或退货',
+      );
     },
   );
 
   it('allows only the unset sentinel while saving a draft', () => {
     expect(parseInventoryLossDisposal('', false)).toBe(-1);
     expect(parseInventoryLossDisposal(-1, false)).toBe(-1);
-    expect(() => parseInventoryLossDisposal(2, false)).toThrow('必须选择直接报废或折价出售');
+    expect(parseInventoryLossDisposal(2, false)).toBe(2);
   });
 });
 
@@ -568,5 +572,212 @@ describe('inventory draft document row locking', () => {
       where: { loss_id: 14n },
       data: expect.objectContaining({ approve_status: 2, approve_comment: '数量需复核' }),
     });
+  });
+
+  it('generates a purchase-return draft for damage return without posting inventory', async () => {
+    const lockedLoss = {
+      loss_id: 15n,
+      loss_no: 'IL15',
+      loss_reson: '包装损坏退供应商',
+      business_kind: 2,
+      go_where: 2,
+      org_id: 1n,
+      warehouse_id: 2n,
+      status: 1,
+      approve_status: 0,
+    };
+    const lossDetail = {
+      loss_detail_id: 150n,
+      loss_id: 15n,
+      goods_id: 5n,
+      sku_id: 6n,
+      batch_no: 'PH20260807',
+      unit_type: 1,
+      loss_qty: 2,
+      source_receipt_detail_id: 70n,
+    };
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_inventory_loss: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(lockedLoss),
+        update: vi.fn(),
+      },
+      hspsi_inventory_loss_detail: { findMany: vi.fn().mockResolvedValue([lossDetail]) },
+      hspsi_purchase_order_input_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 70n,
+            po_input_id: 8n,
+            po_id: 9n,
+            goods_id: 5n,
+            sku_id: 6n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            po_qty: 10,
+            input_qty: 8,
+          },
+        ]),
+      },
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_input_id: 8n,
+          po_input_no: 'PI8',
+          po_id: 9n,
+          org_id: 1n,
+          warehouse_id: 2n,
+          comfirm_status: 1,
+        }),
+      },
+      hspsi_purchase_order_input_exit: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ po_exit_id: 20n }),
+      },
+      hspsi_purchase_order_input_exit_detail: { createMany: vi.fn() },
+    };
+    const { service, posting, documentTrace } = serviceWithTransaction(tx);
+    vi.spyOn(service as any, 'document').mockResolvedValue({
+      id: 15n,
+      businessNo: 'IL15',
+      businessKind: 2,
+      status: 1,
+      approveStatus: 0,
+      org_id: 1n,
+      warehouse_id: 2n,
+      sourceCheckId: 0n,
+      details: [],
+    } as never);
+
+    const result = await service.approveDocument('loss', '15', true, '同意退货', '9');
+
+    expect(result).toMatchObject({ purchaseReturnIds: [20n] });
+    expect(tx.hspsi_purchase_order_input_exit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          generation_key: 'inventory-loss-return:15:8',
+          auto_created: 1,
+          status: false,
+          approve_status: 0,
+        }),
+      }),
+    );
+    expect(posting.post).not.toHaveBeenCalled();
+    expect(documentTrace.link).toHaveBeenCalledWith(
+      expect.objectContaining({ relationKind: 'damage_return' }),
+      tx,
+    );
+  });
+});
+
+describe('inventory requisition history query', () => {
+  function setup() {
+    const output = {
+      draw_output_id: 7n,
+      draw_output_no: 'DRO7',
+      draw_id: 3n,
+      org_id: 1n,
+      warehouse_id: 2n,
+      dept_id: 4n,
+      receiver_id: 5n,
+      output_date: new Date('2026-08-07T08:00:00+08:00'),
+      comfirm_status: 1,
+    };
+    const prisma = {
+      hspsi_draw_approve_output: { findMany: vi.fn().mockResolvedValue([output]) },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            output_detail_id: 71n,
+            draw_output_id: 7n,
+            goods_id: 10n,
+            sku_id: 11n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            fact_draw_qty: 5,
+            is_returnable: 1,
+          },
+          {
+            output_detail_id: 72n,
+            draw_output_id: 7n,
+            goods_id: 12n,
+            sku_id: 13n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            fact_draw_qty: 2,
+            is_returnable: 0,
+          },
+        ]),
+      },
+      hspsi_draw_approve_output_exit: {
+        findMany: vi.fn().mockResolvedValue([{ draw_exit_id: 8n }]),
+      },
+      hspsi_draw_approve_output_exit_detail: {
+        findMany: vi.fn().mockResolvedValue([{ draw_output_detail_id: 71n, exit_qty: 3 }]),
+      },
+      hspsi_draw_approve: {
+        findMany: vi.fn().mockResolvedValue([{ draw_id: 3n, draw_no: 'DR3' }]),
+      },
+      hspsi_goods_info: {
+        findMany: vi.fn().mockResolvedValue([
+          { goods_id: 10n, query_code: 'G10', goods_name: '借用设备' },
+          { goods_id: 12n, query_code: 'G12', goods_name: '领用耗材' },
+        ]),
+      },
+      hspsi_goods_info_sku: {
+        findMany: vi.fn().mockResolvedValue([
+          { sku_id: 11n, spec_models: '默认规格' },
+          { sku_id: 13n, spec_models: '默认规格' },
+        ]),
+      },
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 2n, name: '行政仓' }]),
+      },
+      hspsi_basic_organization: {
+        findMany: vi.fn().mockResolvedValue([{ org_id: 1n, name: '总部' }]),
+      },
+      hspsi_basic_dept: {
+        findMany: vi.fn().mockResolvedValue([{ dept_id: 4n, name: '实验室' }]),
+      },
+      hspsi_basic_staff: {
+        findMany: vi.fn().mockResolvedValue([{ id: 5n, name: '领用人甲' }]),
+      },
+      hspsi_basic_unit: {
+        findMany: vi.fn().mockResolvedValue([{ id: 1n, name: '件' }]),
+      },
+    };
+    const service = new InventoryService(prisma as never, {} as never, {} as never, {} as never);
+    return { service, prisma };
+  }
+
+  it('shows every confirmed usage detail by default', async () => {
+    const { service } = setup();
+
+    const result = await service.requisitionHistory({ orgId: 1, page: 1, pageSize: 20 });
+
+    expect(result.total).toBe(2);
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 71n, returnedQty: 3, remainingQty: 2 }),
+        expect.objectContaining({ id: 72n, holdingStatusName: '无需归还' }),
+      ]),
+    );
+  });
+
+  it('limits holding inventory to returnable details that are not fully returned', async () => {
+    const { service, prisma } = setup();
+
+    const result = await service.requisitionHistory({
+      orgId: 1,
+      departmentId: 4,
+      receiverId: 5,
+      holdingStatus: 'holding',
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]).toMatchObject({ id: 71n, remainingQty: 2, returnable: true });
+    expect(prisma.hspsi_draw_approve_output.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ org_id: 1n, dept_id: 4n, receiver_id: 5n }),
+      }),
+    );
   });
 });

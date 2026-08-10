@@ -51,7 +51,7 @@ function loadEnvOverride(filePath: string) {
     /* 文件不存在则跳过 */
   }
 }
-loadEnvOverride(resolve(process.cwd(), '../../.env'));
+loadEnvOverride(resolve(process.cwd(), '.env'));
 
 // ==================== 参数校验单元测试 ====================
 
@@ -146,7 +146,10 @@ loadEnvOverride(resolve(process.cwd(), '../../.env'));
 
 // ==================== 发起流程v2 真实请求集成测试 ====================
 
-describe('XinfutongOaApprovalService 发起流程', () => {
+const describeExternal =
+  process.env.RUN_EXTERNAL_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
+
+describeExternal('XinfutongOaApprovalService 发起流程', () => {
   let prisma: PrismaClient;
   let credentialService: XinfutongOaCredentialService;
   let service: XinfutongOaApprovalService;

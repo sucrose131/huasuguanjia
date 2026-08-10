@@ -21,6 +21,11 @@ import { PurchaseService } from './purchase.service';
 export class PurchaseController {
   constructor(@Inject(PurchaseService) private service: PurchaseService) {}
   @RequirePermissions('purchase')
+  @Get(':resource/:id/operation-history')
+  operationHistory(@Param('resource') resource: string, @Param('id') id: string) {
+    return this.service.operationHistory(resource, id);
+  }
+  @RequirePermissions('purchase')
   @Get('applications')
   applications(@Query() q: Record<string, string>) {
     return this.service.applications(q);
@@ -164,7 +169,8 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true, true);
+    // 兼容旧入口，但只创建并提交审批，不再允许绕过OA/审批直接扣减库存。
+    return this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true);
   }
   @RequirePermissions('purchase')
   @Delete('receipts/:id')
