@@ -14,6 +14,7 @@ apps/api/prisma/migrations/*/migration_lock.toml
 docs/*
 !docs/plan/
 !docs/plan/**
+!docs/design
 CLAUDE.md
 HANDOFF.md
 database/*
