@@ -7,6 +7,7 @@ import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display, moneyText } from '@/utils/format';
+import { buildCategoryTree } from '@/utils/category-tree';
 const rows = ref<any[]>([]),
   total = ref(0),
   loading = ref(false),
@@ -40,14 +41,16 @@ const summaryItems = computed(() => [
 const selectedCategory = computed(() =>
   categories.value.find((item) => String(item.id) === String(form.categoryId)),
 );
-const leafCategories = computed(() =>
-  categories.value.filter(
-    (item) =>
-      !categories.value.some(
-        (child) => child.status === 1 && String(child.parentId) === String(item.id),
-      ),
-  ),
-);
+const categoryTree = computed(() => buildCategoryTree(categories.value));
+const categoryTreeProps = { value: 'id', label: 'name', children: 'children' };
+const selectableCategoryTreeProps = { ...categoryTreeProps, disabled: 'disabled' };
+const markSelectableCategories = (nodes: any[]): any[] =>
+  nodes.map((item) => ({
+    ...item,
+    disabled: Number(item.status) !== 1 || Number(item.warehouseType) <= 0,
+    children: markSelectableCategories(item.children ?? []),
+  }));
+const selectableCategoryTree = computed(() => markSelectableCategories(categoryTree.value));
 const inheritedProperties = computed(() =>
   properties.value.filter((item) =>
     selectedCategory.value?.propertyIds?.some((id: any) => String(id) === String(item.id)),
@@ -232,18 +235,17 @@ onMounted(async () => {
           clearable
           placeholder="名称、简称、速查码、品牌或规格"
           @keyup.enter="search"
-        /><el-select
+        /><el-tree-select
           v-model="query.categoryId"
+          :data="categoryTree"
+          :props="categoryTreeProps"
           class="query-field"
           clearable
           filterable
+          check-strictly
+          default-expand-all
           placeholder="商品分类"
-          ><el-option
-            v-for="item in categories"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id" /></el-select
-        ><el-select v-model="query.supplyType" class="query-field" clearable placeholder="供应方式"
+        /><el-select v-model="query.supplyType" class="query-field" clearable placeholder="供应方式"
           ><el-option
             v-for="item in supplyTypes"
             :key="item.value"
@@ -284,11 +286,7 @@ onMounted(async () => {
             label="ID"
             width="100"
             fixed="left"
-          /><el-table-column
-            prop="queryCode"
-            label="速查码"
-            width="110"
-          /><el-table-column
+          /><el-table-column prop="queryCode" label="速查码" width="110" /><el-table-column
             prop="goodsName"
             label="商品名称"
             min-width="160"
@@ -424,18 +422,15 @@ onMounted(async () => {
             ><el-input v-model="form.goodsName" /></el-form-item
           ><el-form-item label="速查码"><el-input v-model="form.queryCode" /></el-form-item
           ><el-form-item label="商品分类" required
-            ><el-select
+            ><el-tree-select
               v-model="form.categoryId"
+              :data="selectableCategoryTree"
+              :props="selectableCategoryTreeProps"
               filterable
+              check-strictly
+              default-expand-all
               style="width: 100%"
-              @change="selectCategory"
-              ><el-option
-                v-for="item in leafCategories.filter(
-                  (c) => c.status === 1 || String(c.id) === String(form.categoryId),
-                )"
-                :key="item.id"
-                :label="item.name"
-                :value="item.id" /></el-select></el-form-item
+              @change="selectCategory" /></el-form-item
           ><el-form-item label="基础单位" required
             ><el-select v-model="form.unitType" filterable style="width: 100%"
               ><el-option

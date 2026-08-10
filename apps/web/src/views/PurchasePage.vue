@@ -16,6 +16,7 @@ import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { purchaseDocumentType } from '@/utils/document-type';
+import { buildCategoryTree } from '@/utils/category-tree';
 
 type Mode = 'create' | 'edit' | 'view' | 'cancel' | 'refund' | 'payment';
 type Option = { label: string; value: string | number };
@@ -131,6 +132,21 @@ const options = reactive<Record<string, any[]>>({
   categories: [],
   units: [],
 });
+const quickCategoryTreeProps = {
+  value: 'id',
+  label: 'name',
+  children: 'children',
+  disabled: 'disabled',
+};
+const markQuickCategories = (nodes: any[]): any[] =>
+  nodes.map((item) => ({
+    ...item,
+    disabled: Number(item.status) !== 1 || Number(item.warehouseType) <= 0,
+    children: markQuickCategories(item.children ?? []),
+  }));
+const quickCategoryTree = computed(() =>
+  markQuickCategories(buildCategoryTree(options.categories ?? [])),
+);
 const organizationOptions = reactive<{ orgId: string; departments: any[]; warehouses: any[] }>({
   orgId: '',
   departments: [],
@@ -184,7 +200,7 @@ const compatibleWarehouses = computed(() =>
       !documentWarehouseType.value || optionWarehouseType(item) === documentWarehouseType.value,
   ),
 );
-function availableGoods(line: any) {
+function requiredGoodsWarehouseType(line: any) {
   const otherType = [
     ...new Set(
       (form.details ?? [])
@@ -196,24 +212,60 @@ function availableGoods(line: any) {
   const selectedWarehouse = filteredWarehouses.value.find(
     (item) => String(item.value) === String(form.warehouseId),
   );
-  const requiredType = Number(otherType || optionWarehouseType(selectedWarehouse));
-  return (options.goods ?? []).filter(
+  return Number(otherType || optionWarehouseType(selectedWarehouse));
+}
+function compatibleGoods(line: any, items: any[]) {
+  const requiredType = requiredGoodsWarehouseType(line);
+  return items.filter(
     (item) => !requiredType || Number(item.categoryWarehouseType) === requiredType,
   );
 }
-function filterGoods(line: any, keyword: string) {
+function availableGoods(line: any) {
+  return compatibleGoods(line, options.goods ?? []);
+}
+function mergeGoodsOptions(items: any[]) {
+  const merged = new Map((options.goods ?? []).map((item) => [String(item.id), item]));
+  items.forEach((item) => merged.set(String(item.id), item));
+  options.goods = [...merged.values()];
+}
+const goodsSearchTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+const goodsSearchVersions = new WeakMap<object, number>();
+function remoteSearchGoods(line: any, keyword: string) {
   line.goodsSearchKeyword = keyword;
+  line.goodsSearchFailed = false;
+  line.remoteGoods = [];
+  const previousTimer = goodsSearchTimers.get(line);
+  if (previousTimer) clearTimeout(previousTimer);
+  const normalized = String(keyword ?? '').trim();
+  const version = (goodsSearchVersions.get(line) ?? 0) + 1;
+  goodsSearchVersions.set(line, version);
+  if (!normalized) {
+    line.goodsLoading = false;
+    return;
+  }
+  line.goodsLoading = true;
+  const timer = setTimeout(async () => {
+    try {
+      const result = (await api.get('/goods', {
+        params: { keyword: normalized, pageSize: 50, status: 1 },
+      })) as any;
+      if (goodsSearchVersions.get(line) !== version) return;
+      const items = compatibleGoods(line, result.items ?? []);
+      line.remoteGoods = items;
+      mergeGoodsOptions(items);
+    } catch {
+      if (goodsSearchVersions.get(line) !== version) return;
+      line.goodsSearchFailed = true;
+      line.remoteGoods = [];
+    } finally {
+      if (goodsSearchVersions.get(line) === version) line.goodsLoading = false;
+    }
+  }, 250);
+  goodsSearchTimers.set(line, timer);
 }
 function searchedGoods(line: any) {
-  const keyword = String(line.goodsSearchKeyword ?? '')
-    .trim()
-    .toLocaleLowerCase();
-  if (!keyword) return availableGoods(line);
-  return availableGoods(line).filter((item) =>
-    [item.goodsName, item.queryCode, item.shortName]
-      .map((value) => String(value ?? '').toLocaleLowerCase())
-      .some((value) => value.includes(keyword)),
-  );
+  const keyword = String(line.goodsSearchKeyword ?? '').trim();
+  return keyword ? compatibleGoods(line, line.remoteGoods ?? []) : availableGoods(line);
 }
 const quickGoodsName = (line: any) => String(line.goodsSearchKeyword ?? '').trim();
 const rules: FormRules = {
@@ -458,6 +510,9 @@ function blankLine() {
     skuOptions: [],
     categoryWarehouseType: 0,
     goodsSearchKeyword: '',
+    remoteGoods: [],
+    goodsLoading: false,
+    goodsSearchFailed: false,
     quantity: 1,
     unitType: 0,
     referencePrice: 0,
@@ -568,6 +623,7 @@ function resetForm() {
 async function enrichLine(line: any) {
   if (!line.goodsId) return;
   const product = (await api.get(`/goods/${line.goodsId}`)) as any;
+  mergeGoodsOptions([product]);
   line.categoryWarehouseType = Number(product.categoryWarehouseType ?? 0);
   line.categoryName = product.categoryName ?? line.categoryName;
   line.skuOptions = (product.skus ?? []).map((sku: any) => ({
@@ -649,8 +705,7 @@ async function explainUnavailableGlobalGoods(result: any, goodsName: string) {
 async function useExistingGlobalGoods(line: any, result: any) {
   const goods = result.goods;
   if (!goods?.id) return;
-  const goodsOptions = options.goods ?? (options.goods = []);
-  if (!goodsOptions.some((item) => String(item.id) === String(goods.id))) goodsOptions.push(goods);
+  mergeGoodsOptions([goods]);
   line.goodsId = goods.id;
   line.goodsSearchKeyword = '';
   await goodsChanged(line);
@@ -2677,7 +2732,9 @@ onMounted(async () => {
                     <el-select
                       v-model="s.row.goodsId"
                       filterable
-                      :filter-method="(keyword: string) => filterGoods(s.row, keyword)"
+                      remote
+                      :remote-method="(keyword: string) => remoteSearchGoods(s.row, keyword)"
+                      :loading="s.row.goodsLoading"
                       @change="goodsChanged(s.row)"
                     >
                       <el-option
@@ -2693,7 +2750,8 @@ onMounted(async () => {
                       />
                       <template #empty>
                         <div class="goods-select-empty">
-                          <span v-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
+                          <span v-if="s.row.goodsSearchFailed">商品搜索失败，请重新输入</span>
+                          <span v-else-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
                           <el-button
                             v-else
                             link
@@ -2890,7 +2948,9 @@ onMounted(async () => {
                     <el-select
                       v-model="s.row.goodsId"
                       filterable
-                      :filter-method="(keyword: string) => filterGoods(s.row, keyword)"
+                      remote
+                      :remote-method="(keyword: string) => remoteSearchGoods(s.row, keyword)"
+                      :loading="s.row.goodsLoading"
                       @change="goodsChanged(s.row)"
                     >
                       <el-option
@@ -2906,7 +2966,8 @@ onMounted(async () => {
                       />
                       <template #empty>
                         <div class="goods-select-empty">
-                          <span v-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
+                          <span v-if="s.row.goodsSearchFailed">商品搜索失败，请重新输入</span>
+                          <span v-else-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
                           <el-button
                             v-else
                             link
@@ -3201,21 +3262,15 @@ onMounted(async () => {
             <el-input v-model="quickCatalogForm.goodsName" />
           </el-form-item>
           <el-form-item v-if="quickCatalogMode === 'goods'" label="商品分类" required>
-            <el-select v-model="quickCatalogForm.categoryId" filterable style="width: 100%">
-              <el-option
-                v-for="item in (options.categories ?? []).filter(
-                  (category) =>
-                    category.status === 1 &&
-                    !(options.categories ?? []).some(
-                      (child) =>
-                        child.status === 1 && String(child.parentId) === String(category.id),
-                    ),
-                )"
-                :key="item.id"
-                :label="item.name"
-                :value="item.id"
-              />
-            </el-select>
+            <el-tree-select
+              v-model="quickCatalogForm.categoryId"
+              :data="quickCategoryTree"
+              :props="quickCategoryTreeProps"
+              filterable
+              check-strictly
+              default-expand-all
+              style="width: 100%"
+            />
           </el-form-item>
           <el-form-item label="基础单位" required>
             <el-select v-model="quickCatalogForm.unitType" filterable style="width: 100%">
