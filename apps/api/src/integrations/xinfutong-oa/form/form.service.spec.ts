@@ -31,7 +31,7 @@ import {
 } from '../core/credential.service';
 import type { FormCategory } from './form.types';
 
-// 加载项目根目录 .env（指向远程开发库，含薪福通账套数据）
+// 加载apps/api/.env（指向远程开发库，含薪福通账套数据）
 // vitest 运行时 cwd 为 apps/api，往上一层即项目根目录
 // 用 dotenv-style 手动解析并覆盖 process.env（process.loadEnvFile 不覆盖已有变量）
 import { readFileSync } from 'node:fs';
@@ -51,10 +51,13 @@ function loadEnvOverride(filePath: string) {
     /* 文件不存在则跳过 */
   }
 }
-// cwd 为 apps/api，项目根目录在 ../../
-loadEnvOverride(resolve(process.cwd(), '../../.env'));
+// pnpm workspace 运行本测试时 cwd 为 apps/api，配置读取当前包目录的 .env
+loadEnvOverride(resolve(process.cwd(), '.env'));
 
-describe('XinfutongOaFormService 业务接口集成测试（真实请求）', () => {
+const describeExternal =
+  process.env.RUN_EXTERNAL_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
+
+describeExternal('XinfutongOaFormService 业务接口集成测试（真实请求）', () => {
   let prisma: PrismaClient;
   let credentialService: XinfutongOaCredentialService;
   let service: XinfutongOaFormService;
@@ -163,8 +166,9 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
         expect(body).toHaveProperty('formConfig');
 
         // formConfig 是 JSON 字符串（可能很长），验证可被 JSON.parse
-        if (body!.formConfig) {
-          expect(() => JSON.parse(body!.formConfig)).not.toThrow();
+        const formConfig = body?.formConfig;
+        if (formConfig) {
+          expect(() => JSON.parse(formConfig)).not.toThrow();
         }
       },
       60_000,
@@ -208,8 +212,9 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
         expect(body).toBeDefined();
 
         // formConfig 是 JSON 字符串（新版中间格式），验证可被 JSON.parse
-        if (body!.formConfig) {
-          expect(() => JSON.parse(body!.formConfig)).not.toThrow();
+        const formConfig = body?.formConfig;
+        if (formConfig) {
+          expect(() => JSON.parse(formConfig)).not.toThrow();
         }
       },
       60_000,
@@ -248,8 +253,9 @@ describe('XinfutongOaFormService 业务接口集成测试（真实请求）', ()
           expect(record).toHaveProperty('busKey');
           expect(record).toHaveProperty('formData');
           // formData 是 JSON 字符串（兼容历史/新两种层级），验证可被 JSON.parse
-          if (record.formData) {
-            expect(() => JSON.parse(record.formData)).not.toThrow();
+          const formData = record.formData;
+          if (formData) {
+            expect(() => JSON.parse(formData)).not.toThrow();
           }
         }
       },

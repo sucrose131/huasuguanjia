@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import type { FormInstance, FormRules, TableColumnCtx, TableInstance } from 'element-plus';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import BusinessStatusTag from '@/components/business/BusinessStatusTag.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import InventoryCheckTable from '@/components/inventory/InventoryCheckTable.vue';
@@ -24,6 +25,7 @@ type Option = {
 type Mode = 'create' | 'edit' | 'view';
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const resource = computed(() => String(route.params.resource));
 const meta: Record<
@@ -96,6 +98,7 @@ const usesWarehouseTabs = computed(() =>
   ['stocks', 'checks', 'quantity-alerts', 'expiry-alerts'].includes(resource.value),
 );
 const stockScopeReady = computed(() => resource.value !== 'stocks' || Boolean(query.orgId));
+const stockView = ref<'inventory' | 'requisition'>('inventory');
 
 const rows = ref<Row[]>([]);
 const total = ref(0);
@@ -112,6 +115,7 @@ const mode = ref<Mode>('create');
 const stockAdjustment = ref(false);
 const formRef = ref<FormInstance>();
 const form = reactive<Row>({});
+const attachmentType = computed(() => inventoryDocumentType(resource.value, form));
 const generatedDamageLocked = computed(
   () =>
     resource.value === 'losses' &&
@@ -131,8 +135,20 @@ const query = reactive({
   warehouseId: '',
   batchNo: '',
   inStockOnly: true,
+  departmentId: '',
+  receiverId: '',
+  holdingStatus: 'all',
+  dateRange: [] as string[],
 });
-const summary = reactive({ itemCount: 0, totalAmount: 0, warningCount: 0 });
+const summary = reactive({
+  itemCount: 0,
+  totalAmount: 0,
+  warningCount: 0,
+  issuedQty: 0,
+  returnedQty: 0,
+  holdingQty: 0,
+  holdingLines: 0,
+});
 const options = reactive<Record<string, Option[] | Row[]>>({
   organizations: [],
   warehouses: [],
@@ -172,8 +188,7 @@ const rules: FormRules = {
 
 const quantity = (value: unknown) =>
   Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
-const isExplicitDisposal = (value: unknown) =>
-  String(value ?? '').trim() === '0' || String(value ?? '').trim() === '1';
+const isExplicitDisposal = (value: unknown) => ['0', '1', '2'].includes(String(value ?? '').trim());
 const lookup = (name: string, value: unknown) =>
   (options[name] as Option[])?.find((item) => String(item.value) === String(value))?.label ?? '—';
 const dictLabel = (code: string, value: unknown) =>
@@ -208,6 +223,12 @@ const filteredWarehouses = computed(() =>
         (item) => String(item.raw?.orgId ?? item.orgId) === String(form.orgId),
       ),
 );
+const stockDepartments = computed(() =>
+  (options.departments as Option[]).filter(
+    (item) => !query.orgId || String(item.raw?.orgId ?? '') === String(query.orgId),
+  ),
+);
+const stockReceivers = computed(() => options.users as Option[]);
 const filteredToWarehouses = computed(() => {
   const requiredTypes = new Set(
     (form.details ?? [])
@@ -357,7 +378,16 @@ function params() {
   const result: Row = { page: query.page, pageSize: query.pageSize };
   for (const key of ['keyword', 'orgId', 'warehouseId', 'batchNo'])
     if ((query as Row)[key] !== '') result[key] = (query as Row)[key];
-  if (resource.value === 'stocks') result.inStockOnly = query.inStockOnly;
+  if (resource.value === 'stocks' && stockView.value === 'inventory')
+    result.inStockOnly = query.inStockOnly;
+  if (resource.value === 'stocks' && stockView.value === 'requisition') {
+    if (query.departmentId) result.departmentId = query.departmentId;
+    if (query.receiverId) result.receiverId = query.receiverId;
+    if (query.holdingStatus) result.holdingStatus = query.holdingStatus;
+    if (query.dateRange?.[0]) result.startDate = query.dateRange[0];
+    if (query.dateRange?.[1]) result.endDate = query.dateRange[1];
+    delete result.warehouseId;
+  }
   return result;
 }
 
@@ -371,7 +401,11 @@ async function load() {
   }
   loading.value = true;
   try {
-    const result = (await api.get(`/inventory/${current.value.endpoint}`, {
+    const endpoint =
+      resource.value === 'stocks' && stockView.value === 'requisition'
+        ? 'requisition-history'
+        : current.value.endpoint;
+    const result = (await api.get(`/inventory/${endpoint}`, {
       params: params(),
     })) as Row;
     rows.value = result.items ?? [];
@@ -379,7 +413,7 @@ async function load() {
     Object.assign(summary, result.summary ?? {});
     if (['quantity-alerts', 'expiry-alerts'].includes(resource.value) && !query.warehouseId)
       warehouseCounts.value = result.warehouseCounts ?? {};
-    if (resource.value === 'stocks') {
+    if (resource.value === 'stocks' && stockView.value === 'inventory') {
       const recent = (await api.get('/inventory/ledger', {
         params: {
           page: 1,
@@ -401,7 +435,7 @@ async function loadOptions() {
       api.get('/base-data/organizations/options'),
       api.get('/base-data/departments/options'),
       api.get('/base-data/warehouses/options'),
-      api.get('/inventory/users/options'),
+      api.get('/base-data/employees/options'),
       resource.value === 'stocks' ? Promise.resolve([]) : api.get('/inventory/warehouses/tabs'),
       api.get('/inventory/losses/approved-options'),
       ...dictCodes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
@@ -427,11 +461,27 @@ async function organizationChanged(value: unknown) {
   query.orgId = String(value ?? '');
   query.warehouseId = '';
   query.page = 1;
+  query.departmentId = '';
+  query.receiverId = '';
   rows.value = [];
   total.value = 0;
   recentLedger.value = [];
   Object.assign(summary, { itemCount: 0, totalAmount: 0, warningCount: 0 });
   if (resource.value === 'stocks') await loadWarehouseTabs(query.orgId);
+  if (resource.value === 'stocks')
+    options.users = query.orgId
+      ? ((await api.get('/base-data/employees/options', {
+          params: { orgId: query.orgId },
+        })) as Option[])
+      : [];
+  await load();
+}
+async function changeStockView(value: 'inventory' | 'requisition') {
+  stockView.value = value;
+  query.page = 1;
+  query.warehouseId = '';
+  rows.value = [];
+  total.value = 0;
   await load();
 }
 function resetQuery() {
@@ -442,6 +492,10 @@ function resetQuery() {
     warehouseId: '',
     batchNo: '',
     inStockOnly: true,
+    departmentId: '',
+    receiverId: '',
+    holdingStatus: 'all',
+    dateRange: [],
   });
   if (resource.value === 'stocks') options.warehouseTabs = [];
   load();
@@ -471,6 +525,8 @@ function blankLine() {
     unitPrice: 0,
     amount: 0,
     remark: '',
+    sourceReceiptDetailId: '',
+    purchaseSourceOptions: [],
   };
 }
 function resetForm() {
@@ -533,6 +589,46 @@ function selectStock(line: Row, key: string) {
     unitPrice: Number(stock.unitPrice ?? 0),
   });
   recalcLine(line);
+  if (resource.value === 'losses' && Number(form.goWhere) === 2) {
+    void loadLossPurchaseSources(line);
+  }
+}
+
+async function loadLossPurchaseSources(line: Row) {
+  line.purchaseSourceOptions = [];
+  if (
+    resource.value !== 'losses' ||
+    Number(form.goWhere) !== 2 ||
+    !form.orgId ||
+    !form.warehouseId ||
+    !line.goodsId ||
+    !line.skuId
+  )
+    return;
+  const result = (await api.get('/inventory/losses/purchase-source-options', {
+    params: {
+      orgId: form.orgId,
+      warehouseId: form.warehouseId,
+      goodsId: line.goodsId,
+      skuId: line.skuId,
+      batchNo: line.batchNo ?? '',
+    },
+  })) as Option[];
+  line.purchaseSourceOptions = result;
+  if (!result.some((option) => String(option.value) === String(line.sourceReceiptDetailId))) {
+    line.sourceReceiptDetailId = result.length === 1 ? result[0]?.value : '';
+  }
+}
+
+async function lossDisposalChanged(value: unknown) {
+  if (Number(value) !== 2) {
+    for (const line of form.details ?? []) {
+      line.sourceReceiptDetailId = '';
+      line.purchaseSourceOptions = [];
+    }
+    return;
+  }
+  await Promise.all((form.details ?? []).map((line: Row) => loadLossPurchaseSources(line)));
 }
 function recalcLine(line: Row) {
   line.afterQty =
@@ -599,6 +695,9 @@ async function openRow(row: Row, view = false) {
       recalcLine(line);
     });
   await loadStocks(form.warehouseId, form.orgId);
+  if (resource.value === 'losses' && Number(form.goWhere) === 2) {
+    await Promise.all((form.details ?? []).map((line: Row) => loadLossPurchaseSources(line)));
+  }
   dialog.value = true;
 }
 async function createCheck() {
@@ -626,7 +725,7 @@ function validateLines(submit = true) {
     submit &&
     !isExplicitDisposal(form.goWhere)
   ) {
-    ElMessage.warning('报损出库单提交前必须选择直接报废或折价出售');
+    ElMessage.warning('报损出库单提交前必须选择直接报废、折价出售或退货');
     return false;
   }
   if (!form.details?.length) {
@@ -640,6 +739,10 @@ function validateLines(submit = true) {
     }
     if (Number(line.quantity) <= 0) {
       ElMessage.warning('明细数量必须大于 0');
+      return false;
+    }
+    if (resource.value === 'losses' && Number(form.goWhere) === 2 && !line.sourceReceiptDetailId) {
+      ElMessage.warning(`${line.goodsName || '商品'}未选择原采购入库来源`);
       return false;
     }
     if (resource.value === 'adjustments' && Number(line.afterQty) < 0) {
@@ -710,7 +813,7 @@ async function submit(row: Row) {
     Number(row.businessKind) === 2 &&
     !isExplicitDisposal(row.goWhere)
   ) {
-    ElMessage.warning('报损出库单提交前必须选择直接报废或折价出售');
+    ElMessage.warning('报损出库单提交前必须选择直接报废、折价出售或退货');
     return;
   }
   await ElMessageBox.confirm('提交后进入审批流程，是否继续？', '提交审批');
@@ -726,7 +829,7 @@ async function approve(row: Row, approved: boolean) {
       Number(row.businessKind) === 2 &&
       !isExplicitDisposal(row.goWhere)
     ) {
-      ElMessage.warning('报损出库单必须先明确选择直接报废或折价出售');
+      ElMessage.warning('报损出库单必须先明确选择直接报废、折价出售或退货');
       return;
     }
     const message =
@@ -740,7 +843,9 @@ async function approve(row: Row, approved: boolean) {
               ? '审批通过将自动生成报亏出库单并扣减库存，是否继续？'
               : resource.value === 'losses' && Number(row.goWhere) === 1
                 ? '审批通过将生成折价销售单，本次不会扣减库存，是否继续？'
-                : '审批通过将按直接报废去向扣减库存，是否继续？';
+                : resource.value === 'losses' && Number(row.goWhere) === 2
+                  ? '审批通过将按原采购入库来源生成采购退货草稿，本次不会扣减库存，是否继续？'
+                  : '审批通过将按直接报废去向扣减库存，是否继续？';
     await ElMessageBox.confirm(message, '确认审批', { type: 'warning' });
   } else {
     const result = await ElMessageBox.prompt('请输入驳回原因', '驳回审批', {
@@ -925,10 +1030,21 @@ onMounted(async () => {
             :value="item.value"
           />
         </el-select>
+        <el-radio-group
+          v-if="stockScopeReady"
+          :model-value="stockView"
+          @update:model-value="changeStockView($event as 'inventory' | 'requisition')"
+        >
+          <el-radio-button value="inventory">仓库库存</el-radio-button>
+          <el-radio-button value="requisition">领用记录</el-radio-button>
+        </el-radio-group>
       </div>
 
       <div
-        v-if="(resource === 'stocks' && stockScopeReady) || resource === 'quantity-alerts'"
+        v-if="
+          (resource === 'stocks' && stockScopeReady && stockView === 'inventory') ||
+          resource === 'quantity-alerts'
+        "
         class="summary-strip"
       >
         <div class="summary-item">
@@ -942,6 +1058,27 @@ onMounted(async () => {
         <div class="summary-item">
           <span class="summary-label">库存预警</span
           ><strong class="summary-value">{{ summary.warningCount }}</strong>
+        </div>
+      </div>
+      <div
+        v-if="resource === 'stocks' && stockScopeReady && stockView === 'requisition'"
+        class="summary-strip"
+      >
+        <div class="summary-item">
+          <span class="summary-label">领用明细</span
+          ><strong class="summary-value">{{ total }}</strong>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">累计领用</span
+          ><strong class="summary-value">{{ quantity(summary.issuedQty) }}</strong>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">累计退回</span
+          ><strong class="summary-value">{{ quantity(summary.returnedQty) }}</strong>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">当前持有</span
+          ><strong class="summary-value">{{ quantity(summary.holdingQty) }}</strong>
         </div>
       </div>
 
@@ -968,7 +1105,10 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="usesWarehouseTabs && stockScopeReady" class="warehouse-tabs">
+      <div
+        v-if="usesWarehouseTabs && stockScopeReady && stockView === 'inventory'"
+        class="warehouse-tabs"
+      >
         <button :class="{ active: !query.warehouseId }" @click="selectWarehouse('')">
           全部 <span>{{ resource === 'stocks' ? summary.itemCount : total }}</span>
         </button>
@@ -993,6 +1133,36 @@ onMounted(async () => {
             load();
           "
         />
+        <el-select
+          v-if="resource === 'stocks' && stockView === 'requisition'"
+          v-model="query.departmentId"
+          class="query-field"
+          clearable
+          filterable
+          placeholder="全部部门"
+        >
+          <el-option
+            v-for="item in stockDepartments"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+        <el-select
+          v-if="resource === 'stocks' && stockView === 'requisition'"
+          v-model="query.receiverId"
+          class="query-field"
+          clearable
+          filterable
+          placeholder="全部领用人"
+        >
+          <el-option
+            v-for="item in stockReceivers"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
         <el-select
           v-if="resource !== 'stocks'"
           v-model="query.orgId"
@@ -1024,7 +1194,27 @@ onMounted(async () => {
           clearable
           placeholder="批号"
         />
-        <el-checkbox v-if="resource === 'stocks'" v-model="query.inStockOnly"
+        <el-date-picker
+          v-if="resource === 'stocks' && stockView === 'requisition'"
+          v-model="query.dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="领用开始日期"
+          end-placeholder="领用结束日期"
+          class="query-date-range"
+        />
+        <el-select
+          v-if="resource === 'stocks' && stockView === 'requisition'"
+          v-model="query.holdingStatus"
+          class="query-field"
+        >
+          <el-option label="全部领用历史" value="all" />
+          <el-option label="仅看持有结存" value="holding" />
+          <el-option label="仅看已退清" value="returned" />
+        </el-select>
+        <el-checkbox
+          v-if="resource === 'stocks' && stockView === 'inventory'"
+          v-model="query.inStockOnly"
           >仅显示有库存</el-checkbox
         >
         <div class="query-actions">
@@ -1059,8 +1249,9 @@ onMounted(async () => {
         />
         <el-table v-else :data="rows" v-loading="loading" border>
           <el-table-column type="index" label="序号" width="58" />
+          <el-table-column prop="id" label="ID" width="100" />
 
-          <template v-if="resource === 'stocks'">
+          <template v-if="resource === 'stocks' && stockView === 'inventory'">
             <el-table-column prop="goodsCode" label="商品编码" width="125" /><el-table-column
               prop="goodsName"
               label="商品名称"
@@ -1098,6 +1289,47 @@ onMounted(async () => {
                 ></template
               ></el-table-column
             >
+          </template>
+
+          <template v-else-if="resource === 'stocks' && stockView === 'requisition'">
+            <el-table-column prop="outputNo" label="领用出库单" width="165" />
+            <el-table-column prop="applicationNo" label="领用申请单" width="165" />
+            <el-table-column label="领用日期" width="112">
+              <template #default="s">{{ dateText(s.row.outputDate) }}</template>
+            </el-table-column>
+            <el-table-column prop="departmentName" label="部门" min-width="110" />
+            <el-table-column prop="receiverName" label="领用人" width="100" />
+            <el-table-column prop="goodsCode" label="商品编码" width="125" />
+            <el-table-column prop="goodsName" label="商品名称" min-width="145" />
+            <el-table-column prop="skuSpec" label="SKU规格" min-width="130" />
+            <el-table-column prop="batchNo" label="批号" width="135" />
+            <el-table-column prop="warehouseName" label="领出仓库" min-width="120" />
+            <el-table-column label="领用数量" width="92" align="right">
+              <template #default="s">{{ quantity(s.row.issuedQty) }}</template>
+            </el-table-column>
+            <el-table-column label="已退数量" width="92" align="right">
+              <template #default="s">{{ quantity(s.row.returnedQty) }}</template>
+            </el-table-column>
+            <el-table-column label="持有结存" width="92" align="right">
+              <template #default="s">{{
+                s.row.returnable ? quantity(s.row.remainingQty) : '—'
+              }}</template>
+            </el-table-column>
+            <el-table-column label="归还状态" width="95" fixed="right">
+              <template #default="s">
+                <el-tag
+                  :type="
+                    !s.row.returnable
+                      ? 'info'
+                      : Number(s.row.remainingQty) > 0
+                        ? 'warning'
+                        : 'success'
+                  "
+                  effect="plain"
+                  >{{ s.row.holdingStatusName }}</el-tag
+                >
+              </template>
+            </el-table-column>
           </template>
 
           <template v-else-if="resource === 'transfers'">
@@ -1331,6 +1563,17 @@ onMounted(async () => {
                       >驳回</el-dropdown-item
                     >
                     <el-dropdown-item
+                      v-for="purchaseReturn in s.row.purchaseReturns || []"
+                      :key="purchaseReturn.id"
+                      @click="
+                        router.push({
+                          path: '/purchase/returns',
+                          query: { documentId: String(purchaseReturn.id), view: '1' },
+                        })
+                      "
+                      >查看采购退货 {{ purchaseReturn.returnNo }}</el-dropdown-item
+                    >
+                    <el-dropdown-item
                       v-if="canDelete(s.row)"
                       class="table-action-danger"
                       divided
@@ -1435,7 +1678,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="resource === 'stocks' && stockScopeReady" class="panel recent-panel">
+    <div
+      v-if="resource === 'stocks' && stockScopeReady && stockView === 'inventory'"
+      class="panel recent-panel"
+    >
       <div class="panel-title">最近库存流水</div>
       <el-table :data="recentLedger" border
         ><el-table-column label="发生时间" width="150"
@@ -1735,6 +1981,7 @@ onMounted(async () => {
                 v-model="form.goWhere"
                 :disabled="mode === 'view'"
                 placeholder="提交前必须选择"
+                @change="lossDisposalChanged"
                 ><el-option
                   v-for="item in dicts.inventory_loss_disposal"
                   :key="item.value"
@@ -2097,8 +2344,22 @@ onMounted(async () => {
                     @change="recalcLine(s.row)" /></template></el-table-column
               ><el-table-column label="金额" width="100"
                 ><template #default="s">¥ {{ moneyText(s.row.amount) }}</template></el-table-column
-              ><el-table-column prop="batchNo" label="批号" width="125"
-            /></template>
+              ><el-table-column prop="batchNo" label="批号" width="125" /><el-table-column
+                v-if="resource === 'losses' && Number(form.goWhere) === 2"
+                label="原采购入库来源"
+                min-width="220"
+                ><template #default="s"
+                  ><el-select
+                    v-model="s.row.sourceReceiptDetailId"
+                    filterable
+                    :disabled="mode === 'view'"
+                    placeholder="请选择来源入库单"
+                    ><el-option
+                      v-for="option in s.row.purchaseSourceOptions || []"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value" /></el-select></template></el-table-column
+            ></template>
             <el-table-column
               v-if="
                 mode !== 'view' &&
@@ -2156,6 +2417,11 @@ onMounted(async () => {
           >
         </div>
       </el-form>
+      <DocumentAttachments
+        v-if="mode !== 'create' && attachmentType && form.id"
+        :document-type="attachmentType"
+        :document-id="form.id"
+      />
       <template #footer>
         <el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button>
         <template v-if="mode !== 'view'">

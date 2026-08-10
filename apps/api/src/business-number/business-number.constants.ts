@@ -1,7 +1,8 @@
 /**
  * 全局业务单号前缀。
  *
- * 单号格式：{业务前缀}{上海时区日期YYYYMMDD}{全局当日序号6位}
+ * 默认单号格式：{业务前缀}{上海时区日期YYYYMMDD}{全局当日序号6位}。
+ * 采购类单据按业务类型独立计数，使用4位日流水。
  * 这些值只用于业务单号，不参与数据库主键生成。
  */
 export const BUSINESS_PREFIX = {
@@ -30,6 +31,8 @@ export const BUSINESS_PREFIX = {
   PRODUCTION_MATERIAL_OUTPUT: 'PMO',
   /** 生产成品入库单；hspsi_production_plan_input.input_no。 */
   PRODUCTION_PRODUCT_INPUT: 'PPI',
+  /** BOM物料退库单；hspsi_production_material_return.return_no。 */
+  PRODUCTION_MATERIAL_RETURN: 'PMR',
 
   /** 普通销售订单；hspsi_sale_order.so_no，so_property_type=1。 */
   SALES_ORDER: 'SO',
@@ -79,5 +82,16 @@ export const BUSINESS_PREFIX = {
 
 export type BusinessPrefix = (typeof BUSINESS_PREFIX)[keyof typeof BUSINESS_PREFIX];
 
+export const PURCHASE_BUSINESS_PREFIXES = new Set<BusinessPrefix>([
+  BUSINESS_PREFIX.PURCHASE_APPLICATION,
+  BUSINESS_PREFIX.PURCHASE_ORDER,
+  BUSINESS_PREFIX.PURCHASE_RECEIPT,
+  BUSINESS_PREFIX.PURCHASE_RETURN,
+  BUSINESS_PREFIX.PURCHASE_PAYMENT,
+  BUSINESS_PREFIX.PURCHASE_REFUND,
+  BUSINESS_PREFIX.PURCHASE_REFUND_FLOW,
+]);
+
 export const BUSINESS_NUMBER_TIME_ZONE = 'Asia/Shanghai';
 export const BUSINESS_NUMBER_DAILY_LIMIT = 999_999;
+export const PURCHASE_BUSINESS_NUMBER_DAILY_LIMIT = 9_999;

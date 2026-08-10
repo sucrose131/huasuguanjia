@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
 type B = Record<string, any>;
 const auth = useAuthStore();
@@ -280,6 +281,11 @@ watch(
       </div>
       <div v-if="error" class="in-error">{{ error }}</div>
     </template>
+    <DocumentAttachments
+      v-if="sourceRow?.id"
+      document-type="production_input"
+      :document-id="sourceRow.id"
+    />
     <template #footer>
       <el-button @click="close" :disabled="saving">{{ readonly ? '关闭' : '取消' }}</el-button>
       <el-button v-if="!readonly" type="primary" :loading="saving" @click="submit">保存</el-button>

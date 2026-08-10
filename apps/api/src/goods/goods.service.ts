@@ -1,19 +1,88 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
 
 @Injectable()
 export class GoodsService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
+  private async visibleWarehouseTypes(user?: AuthUser) {
+    if (!user || user.permissions.includes('*')) return null;
+    if (!user.orgId) return [];
+    const warehouses = await this.prisma.hspsi_basic_warehouse.findMany({
+      where: {
+        org_id: BigInt(user.orgId),
+        status: 1,
+        deleted_at: null,
+      },
+      distinct: ['warehouse_type'],
+      select: { warehouse_type: true },
+    });
+    return [...new Set(warehouses.map((item) => Number(item.warehouse_type)).filter(Boolean))];
+  }
+
+  private async categoryScope(user?: AuthUser) {
+    const warehouseTypes = await this.visibleWarehouseTypes(user);
+    return warehouseTypes === null
+      ? null
+      : ({
+          warehouse_type: { in: warehouseTypes },
+        } satisfies Prisma.hspsi_goods_info_categoryWhereInput);
+  }
+  async nameAvailability(name: string, user: AuthUser) {
+    const goodsName = String(name ?? '').trim();
+    if (!goodsName) throw new BadRequestException('商品名称必填');
+    const goods = await this.prisma.hspsi_goods_info.findFirst({
+      where: { goods_name: goodsName },
+    });
+    if (!goods) return { exists: false, usable: false, reason: 'not_found' };
+    const category = await this.prisma.hspsi_goods_info_category.findUnique({
+      where: { goods_catg_id: goods.goods_catg_id },
+    });
+    const allowedWarehouseTypes = await this.visibleWarehouseTypes(user);
+    let reason = '';
+    if (goods.deleted_at) reason = 'goods_deleted';
+    else if (goods.status !== 1) reason = 'goods_disabled';
+    else if (!category || category.deleted_at) reason = 'category_deleted';
+    else if (category.status !== 1) reason = 'category_disabled';
+    else if (
+      allowedWarehouseTypes !== null &&
+      !allowedWarehouseTypes.includes(category.warehouse_type)
+    )
+      reason = 'warehouse_type_unavailable';
+    const usable = !reason;
+    return {
+      exists: true,
+      usable,
+      reason: usable ? 'available' : reason,
+      categoryName: category?.goods_name ?? '',
+      warehouseType: category?.warehouse_type ?? 0,
+      goods: usable
+        ? {
+            id: goods.goods_id,
+            queryCode: goods.query_code,
+            goodsName: goods.goods_name,
+            shortName: goods.short_name,
+            unitType: goods.unit_type,
+            categoryId: goods.goods_catg_id,
+            categoryName: category?.goods_name ?? '',
+            categoryWarehouseType: category?.warehouse_type ?? 0,
+            costPrice: goods.const_price,
+            status: goods.status,
+          }
+        : null,
+    };
+  }
   private page(query: Record<string, string | undefined>) {
     return {
       page: Math.max(1, Number(query.page ?? 1)),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize ?? 20))),
     };
   }
-  async categories(query: Record<string, string | undefined>) {
-    const { page, pageSize } = this.page(query);
+  async categories(query: Record<string, string | undefined>, user?: AuthUser) {
     const where: Prisma.hspsi_goods_info_categoryWhereInput = { deleted_at: null };
+    const scope = await this.categoryScope(user);
+    if (scope) where.AND = [scope];
     if (query.keyword) where.goods_name = { contains: query.keyword };
     if (query.parentId) where.parent_goods_catg_id = BigInt(query.parentId);
     if (query.warehouseType) where.warehouse_type = Number(query.warehouseType);
@@ -21,8 +90,6 @@ export class GoodsService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_info_category.findMany({
         where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
         orderBy: [{ sort: 'asc' }, { goods_catg_id: 'desc' }],
       }),
       this.prisma.hspsi_goods_info_category.count({ where }),
@@ -59,10 +126,14 @@ export class GoodsService {
           where: { parent_goods_catg_id: { in: ids }, deleted_at: null },
           _count: true,
         }),
-        this.prisma.hspsi_goods_info_category.count({ where: { deleted_at: null } }),
-        this.prisma.hspsi_goods_info_category.count({ where: { deleted_at: null, status: 1 } }),
         this.prisma.hspsi_goods_info_category.count({
-          where: { deleted_at: null, status: { not: 1 } },
+          where: { deleted_at: null, ...(scope ?? {}) },
+        }),
+        this.prisma.hspsi_goods_info_category.count({
+          where: { deleted_at: null, status: 1, ...(scope ?? {}) },
+        }),
+        this.prisma.hspsi_goods_info_category.count({
+          where: { deleted_at: null, status: { not: 1 }, ...(scope ?? {}) },
         }),
       ]);
     return {
@@ -98,8 +169,6 @@ export class GoodsService {
         };
       }),
       total,
-      page,
-      pageSize,
       summary: { total: allCount, active: activeCount, inactive: inactiveCount },
     };
   }
@@ -222,9 +291,19 @@ export class GoodsService {
       pageSize,
     };
   }
-  async list(query: Record<string, string | undefined>) {
+  async list(query: Record<string, string | undefined>, user?: AuthUser) {
     const { page, pageSize } = this.page(query);
     const where: Prisma.hspsi_goods_infoWhereInput = { deleted_at: null };
+    const scope = await this.categoryScope(user);
+    let visibleCategoryIds: bigint[] | null = null;
+    if (scope) {
+      const categories = await this.prisma.hspsi_goods_info_category.findMany({
+        where: { deleted_at: null, ...scope },
+        select: { goods_catg_id: true },
+      });
+      visibleCategoryIds = categories.map((item) => item.goods_catg_id);
+      where.goods_catg_id = { in: visibleCategoryIds };
+    }
     if (query.keyword)
       where.OR = [
         { query_code: { contains: query.keyword } },
@@ -232,12 +311,14 @@ export class GoodsService {
         { short_name: { contains: query.keyword } },
         { brand_name: { contains: query.keyword } },
       ];
-    if (query.orgId) where.org_id = BigInt(query.orgId);
-    if (query.categoryId) where.goods_catg_id = BigInt(query.categoryId);
+    if (query.categoryId) {
+      const categoryId = BigInt(query.categoryId);
+      where.goods_catg_id =
+        visibleCategoryIds && !visibleCategoryIds.includes(categoryId) ? { in: [] } : categoryId;
+    }
     if (query.status !== undefined) where.status = Number(query.status);
     if (query.supplyType) where.supply_type = Number(query.supplyType);
     if (query.goodsType) where.goods_type = Number(query.goodsType);
-    if (query.vendorId) where.vendor_id = BigInt(query.vendorId);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_info.findMany({
         where,
@@ -248,54 +329,50 @@ export class GoodsService {
       this.prisma.hspsi_goods_info.count({ where }),
     ]);
     const categoryIds = [...new Set(items.map((item) => item.goods_catg_id))];
-    const vendorIds = [...new Set(items.map((item) => item.vendor_id).filter((id) => id > 0n))];
-    const warehouseIds = [
-      ...new Set(items.map((item) => item.warehouse_id).filter(Boolean) as bigint[]),
-    ];
-    const orgIds = [...new Set(items.map((item) => item.org_id))];
     const unitIds = [...new Set(items.map((item) => item.unit_type).filter(Boolean))];
     const ids = items.map((item) => item.goods_id);
     const userIds = [
       ...new Set(items.flatMap((item) => [item.updated_by, item.created_by]).map(String)),
     ].map(BigInt);
-    const [
-      categories,
-      vendors,
-      warehouses,
-      organizations,
-      units,
-      skuCounts,
-      users,
-      allCount,
-      activeCount,
-      inactiveCount,
-    ] = await Promise.all([
-      this.prisma.hspsi_goods_info_category.findMany({
-        where: { goods_catg_id: { in: categoryIds } },
-      }),
-      this.prisma.hspsi_basic_vendor.findMany({ where: { vendor_id: { in: vendorIds } } }),
-      this.prisma.hspsi_basic_warehouse.findMany({ where: { warehouse_id: { in: warehouseIds } } }),
-      this.prisma.hspsi_basic_organization.findMany({ where: { org_id: { in: orgIds } } }),
-      this.prisma.hspsi_basic_unit.findMany({ where: { id: { in: unitIds.map(BigInt) } } }),
-      this.prisma.hspsi_goods_info_sku.groupBy({
-        by: ['good_id'],
-        where: { good_id: { in: ids }, deleted_at: null },
-        _count: true,
-      }),
-      this.prisma.hspsi_sys_user.findMany({ where: { id: { in: userIds } } }),
-      this.prisma.hspsi_goods_info.count({ where: { deleted_at: null } }),
-      this.prisma.hspsi_goods_info.count({ where: { deleted_at: null, status: 1 } }),
-      this.prisma.hspsi_goods_info.count({ where: { deleted_at: null, status: { not: 1 } } }),
-    ]);
+    const [categories, units, skuCounts, users, allCount, activeCount, inactiveCount] =
+      await Promise.all([
+        this.prisma.hspsi_goods_info_category.findMany({
+          where: { goods_catg_id: { in: categoryIds } },
+        }),
+        this.prisma.hspsi_basic_unit.findMany({ where: { id: { in: unitIds.map(BigInt) } } }),
+        this.prisma.hspsi_goods_info_sku.groupBy({
+          by: ['good_id'],
+          where: { good_id: { in: ids }, deleted_at: null },
+          _count: true,
+        }),
+        this.prisma.hspsi_sys_user.findMany({ where: { id: { in: userIds } } }),
+        this.prisma.hspsi_goods_info.count({
+          where: {
+            deleted_at: null,
+            ...(visibleCategoryIds ? { goods_catg_id: { in: visibleCategoryIds } } : {}),
+          },
+        }),
+        this.prisma.hspsi_goods_info.count({
+          where: {
+            deleted_at: null,
+            status: 1,
+            ...(visibleCategoryIds ? { goods_catg_id: { in: visibleCategoryIds } } : {}),
+          },
+        }),
+        this.prisma.hspsi_goods_info.count({
+          where: {
+            deleted_at: null,
+            status: { not: 1 },
+            ...(visibleCategoryIds ? { goods_catg_id: { in: visibleCategoryIds } } : {}),
+          },
+        }),
+      ]);
     return {
       items: items.map((item) => {
         const category = categories.find((c) => c.goods_catg_id === item.goods_catg_id);
         return this.goodsOutput(item, {
           categoryName: category?.goods_name,
           categoryWarehouseType: category?.warehouse_type ?? 0,
-          vendorName: vendors.find((v) => v.vendor_id === item.vendor_id)?.conpany_name,
-          warehouseName: warehouses.find((w) => w.warehouse_id === item.warehouse_id)?.name,
-          organizationName: organizations.find((o) => o.org_id === item.org_id)?.name,
           unitName: units.find((u) => u.id === BigInt(item.unit_type))?.name,
           skuCount: skuCounts.find((count) => count.good_id === item.goods_id)?._count ?? 0,
           operatorName: (() => {
@@ -313,7 +390,6 @@ export class GoodsService {
   private goodsOutput(item: any, extra: Record<string, unknown> = {}) {
     return {
       id: item.goods_id,
-      orgId: item.org_id,
       queryCode: item.query_code,
       goodsName: item.goods_name,
       goodsImage: item.goods_image,
@@ -326,8 +402,6 @@ export class GoodsService {
       goodsType: item.goods_type,
       costPrice: item.const_price,
       salePrice: item.sale_price,
-      vendorId: item.vendor_id,
-      warehouseId: item.warehouse_id,
       status: item.status,
       sort: item.sort,
       remark: item.remark,
@@ -339,11 +413,20 @@ export class GoodsService {
       ...extra,
     };
   }
-  async detail(id: string) {
+  async detail(id: string, user?: AuthUser) {
     const item = await this.prisma.hspsi_goods_info.findFirst({
       where: { goods_id: BigInt(id), deleted_at: null },
     });
     if (!item) throw new NotFoundException('商品不存在');
+    const scope = await this.categoryScope(user);
+    if (
+      scope &&
+      !(await this.prisma.hspsi_goods_info_category.findFirst({
+        where: { goods_catg_id: item.goods_catg_id, deleted_at: null, ...scope },
+        select: { goods_catg_id: true },
+      }))
+    )
+      throw new NotFoundException('商品不存在或不在当前组织可用范围内');
     const [skus, properties] = await Promise.all([
       this.prisma.hspsi_goods_info_sku.findMany({
         where: { good_id: item.goods_id, deleted_at: null },
@@ -351,19 +434,10 @@ export class GoodsService {
       }),
       this.prisma.hspsi_goods_info_property.findMany({ where: { goods_id: item.goods_id } }),
     ]);
-    const [category, vendor, warehouse, organization, unit] = await Promise.all([
+    const [category, unit] = await Promise.all([
       this.prisma.hspsi_goods_info_category.findUnique({
         where: { goods_catg_id: item.goods_catg_id },
       }),
-      item.vendor_id
-        ? this.prisma.hspsi_basic_vendor.findUnique({ where: { vendor_id: item.vendor_id } })
-        : null,
-      item.warehouse_id
-        ? this.prisma.hspsi_basic_warehouse.findUnique({
-            where: { warehouse_id: item.warehouse_id },
-          })
-        : null,
-      this.prisma.hspsi_basic_organization.findUnique({ where: { org_id: item.org_id } }),
       item.unit_type
         ? this.prisma.hspsi_basic_unit.findUnique({ where: { id: BigInt(item.unit_type) } })
         : null,
@@ -372,9 +446,6 @@ export class GoodsService {
       ...this.goodsOutput(item, {
         categoryName: category?.goods_name,
         categoryWarehouseType: category?.warehouse_type ?? 0,
-        vendorName: vendor?.conpany_name,
-        warehouseName: warehouse?.name,
-        organizationName: organization?.name,
         unitName: unit?.name,
         skuCount: skus.length,
       }),
@@ -397,7 +468,39 @@ export class GoodsService {
       })),
     };
   }
-  private async validate(body: Record<string, any>) {
+  private prepareSkus(body: Record<string, any>) {
+    const provided = Array.isArray(body.skus)
+      ? body.skus.filter((item: unknown) => item && typeof item === 'object')
+      : [];
+    const isSingleBlank =
+      provided.length === 1 && !String(provided[0].specModels ?? '').trim() && !provided[0].id;
+    if (!provided.length || isSingleBlank) {
+      body.skus = [
+        {
+          ...(provided[0] ?? {}),
+          specModels: String(body.specModels ?? '').trim() || '默认规格',
+          pcsQty: 1,
+          costPrice: Number(body.costPrice ?? 0),
+          salePrice: Number(body.salePrice ?? 0),
+          unitType: Number(body.unitType),
+          isDefault: 1,
+          status: 1,
+          sort: 0,
+          remark: '',
+          freeWarrantyPeriod: Number(body.freeWarrantyPeriod ?? 0),
+          isAlertPeriod: Number(body.isAlertPeriod ?? 0),
+          alertQty: Number(body.alertQty ?? 0),
+        },
+      ];
+      return;
+    }
+    if (!provided.some((sku: Record<string, any>) => Number(sku.isDefault) === 1))
+      provided[0].isDefault = 1;
+    body.skus = provided;
+  }
+
+  private async validate(id: string | null, body: Record<string, any>, user?: AuthUser) {
+    this.prepareSkus(body);
     if (!String(body.goodsName ?? '').trim()) throw new BadRequestException('商品名称必填');
     if (!Number.isSafeInteger(Number(body.unitType)) || Number(body.unitType) <= 0)
       throw new BadRequestException('基础单位必填');
@@ -405,31 +508,38 @@ export class GoodsService {
       where: { goods_catg_id: BigInt(String(body.categoryId)), deleted_at: null, status: 1 },
     });
     if (!category) throw new BadRequestException('商品分类无效');
+    const allowedWarehouseTypes = await this.visibleWarehouseTypes(user);
+    if (allowedWarehouseTypes !== null && !allowedWarehouseTypes.includes(category.warehouse_type))
+      throw new BadRequestException('所选商品分类不在当前组织可用仓库类型范围内');
+    if (!Number.isSafeInteger(category.warehouse_type) || category.warehouse_type <= 0)
+      throw new BadRequestException('所选商品分类尚未绑定有效仓库类型，不能保存商品');
     const childCategoryCount = await this.prisma.hspsi_goods_info_category.count({
       where: { parent_goods_catg_id: category.goods_catg_id, deleted_at: null, status: 1 },
     });
     if (childCategoryCount)
       throw new BadRequestException('商品必须选择叶级分类，不能直接选择包含下级分类的父分类');
-    const warehouse = await this.prisma.hspsi_basic_warehouse.findFirst({
+    const duplicateGoods = await this.prisma.hspsi_goods_info.findFirst({
       where: {
-        warehouse_id: BigInt(String(body.warehouseId)),
-        org_id: BigInt(String(body.orgId)),
-        deleted_at: null,
-        status: 1,
+        goods_name: String(body.goodsName).trim(),
+        ...(id ? { goods_id: { not: BigInt(id) } } : {}),
       },
+      select: { goods_id: true },
     });
-    if (!warehouse || warehouse.warehouse_type !== category.warehouse_type)
-      throw new BadRequestException('默认仓库无效或仓库类型与商品分类不一致');
-    if (Number(body.supplyType) === 2) {
-      const vendor = await this.prisma.hspsi_basic_vendor.findFirst({
-        where: { vendor_id: BigInt(String(body.vendorId ?? 0)), deleted_at: null },
-      });
-      if (!vendor) throw new BadRequestException('外购商品必须选择有效供应商');
-    }
-    if (Number(body.supplyType) !== 2) body.vendorId = 0;
-    if (!Array.isArray(body.skus) || !body.skus.length)
-      throw new BadRequestException('至少维护一个 SKU');
+    if (duplicateGoods)
+      throw new BadRequestException('商品名称已存在，请选择已有商品档案，不能重复创建');
+    if (
+      (body.skus as Record<string, any>[]).filter((sku) => Number(sku.isDefault) === 1).length !== 1
+    )
+      throw new BadRequestException('必须且只能设置一个默认 SKU');
+    const normalizedSpecs = new Set<string>();
     for (const [index, sku] of (body.skus as Record<string, any>[]).entries()) {
+      const normalizedSpec = String(sku.specModels ?? '')
+        .trim()
+        .toLocaleLowerCase();
+      if (!normalizedSpec) throw new BadRequestException(`第 ${index + 1} 个 SKU 的规格型号必填`);
+      if (normalizedSpecs.has(normalizedSpec))
+        throw new BadRequestException('同一商品下 SKU 规格型号不能重复，请选择已有 SKU');
+      normalizedSpecs.add(normalizedSpec);
       const pieces = Number(sku.pcsQty);
       if (!Number.isSafeInteger(pieces) || pieces <= 0)
         throw new BadRequestException(`第 ${index + 1} 个 SKU 的基础件数换算系数必须为正整数`);
@@ -440,12 +550,15 @@ export class GoodsService {
         throw new BadRequestException(`第 ${index + 1} 个 SKU 的基础件成本必须为非负数`);
     }
   }
-  async save(id: string | null, body: Record<string, any>, userId: string) {
-    await this.validate(body);
+  async save(id: string | null, body: Record<string, any>, operator: string | AuthUser) {
+    const userId = typeof operator === 'string' ? operator : operator.id;
+    const user = typeof operator === 'string' ? undefined : operator;
+    if (id && user) await this.detail(id, user);
+    await this.validate(id, body, user);
     if (id) await this.assertPieceSettingsMutable(BigInt(id), body);
     const now = new Date();
     const data = {
-      org_id: BigInt(String(body.orgId)),
+      org_id: 0n,
       query_code: String(body.queryCode ?? ''),
       goods_name: String(body.goodsName).trim(),
       goods_image: String(body.goodsImage ?? ''),
@@ -458,8 +571,8 @@ export class GoodsService {
       goods_type: Number(body.goodsType ?? 0),
       const_price: new Prisma.Decimal(String(body.costPrice ?? 0)),
       sale_price: new Prisma.Decimal(String(body.salePrice ?? 0)),
-      vendor_id: BigInt(String(body.vendorId ?? 0)),
-      warehouse_id: BigInt(String(body.warehouseId)),
+      vendor_id: 0n,
+      warehouse_id: 0n,
       status: Number(body.status ?? 1),
       sort: Number(body.sort ?? 0),
       remark: String(body.remark ?? ''),
@@ -569,7 +682,9 @@ export class GoodsService {
         throw new BadRequestException('SKU 已有库存业务记录，不能修改业务单位或基础件数换算系数');
     }
   }
-  async remove(id: string, userId: string) {
+  async remove(id: string, operator: string | AuthUser) {
+    const userId = typeof operator === 'string' ? operator : operator.id;
+    if (typeof operator !== 'string') await this.detail(id, operator);
     const goodsId = BigInt(id);
     const referenced = await this.prisma.hspsi_inventory_total.count({
       where: { goods_id: goodsId, deleted_at: null },
@@ -587,8 +702,9 @@ export class GoodsService {
     ]);
     return { id, message: '删除成功' };
   }
-  async setStatus(id: string, status: number, userId: string) {
-    await this.detail(id);
+  async setStatus(id: string, status: number, operator: string | AuthUser) {
+    const userId = typeof operator === 'string' ? operator : operator.id;
+    await this.detail(id, typeof operator === 'string' ? undefined : operator);
     await this.prisma.hspsi_goods_info.update({
       where: { goods_id: BigInt(id) },
       data: { status, updated_by: BigInt(userId), updated_at: new Date() },

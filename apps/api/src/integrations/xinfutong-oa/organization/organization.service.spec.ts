@@ -29,7 +29,7 @@ import {
   type AccountSetCredential,
 } from '../core/credential.service';
 
-// 加载项目根目录 .env（指向远程开发库，含薪福通账套数据）
+// 加载apps/api/.env（指向远程开发库，含薪福通账套数据）
 // vitest 运行时 cwd 为 apps/api，往上一层即项目根目录
 // 用 dotenv-style 手动解析并覆盖 process.env（process.loadEnvFile 不覆盖已有变量）
 import { readFileSync } from 'node:fs';
@@ -49,10 +49,13 @@ function loadEnvOverride(filePath: string) {
     /* 文件不存在则跳过 */
   }
 }
-// cwd 为 apps/api，项目根目录在 ../../
-loadEnvOverride(resolve(process.cwd(), '../../.env'));
+// pnpm workspace 运行本测试时 cwd 为 apps/api，配置读取当前包目录的 .env
+loadEnvOverride(resolve(process.cwd(), '.env'));
 
-describe('XinfutongOaOrganizationService 业务接口集成测试（真实请求）', () => {
+const describeExternal =
+  process.env.RUN_EXTERNAL_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
+
+describeExternal('XinfutongOaOrganizationService 业务接口集成测试（真实请求）', () => {
   let prisma: PrismaClient;
   let credentialService: XinfutongOaCredentialService;
   let service: XinfutongOaOrganizationService;

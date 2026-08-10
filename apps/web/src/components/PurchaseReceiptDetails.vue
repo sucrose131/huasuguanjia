@@ -2,7 +2,9 @@
 import { computed } from 'vue';
 import { dateText, display, moneyText } from '@/utils/format';
 
-const props = defineProps<{ details: any[]; readonly?: boolean }>();
+type UnitOption = { label: string; value: string | number };
+
+const props = defineProps<{ details: any[]; units?: UnitOption[]; readonly?: boolean }>();
 const totalQuantity = computed(() =>
   props.details.reduce((sum, line) => sum + Number(line.inputQuantity ?? 0), 0),
 );
@@ -33,6 +35,10 @@ const uninputtedQuantity = (line: any) =>
         0,
         Number(line.baseUninputtedQuantity ?? line.uninputtedQuantity ?? 0) + currentQuantity(line),
       );
+const unitName = (line: any) =>
+  props.units?.find((item) => String(item.value) === String(line.unitType))?.label ??
+  line.unitName ??
+  '—';
 </script>
 
 <template>
@@ -57,7 +63,7 @@ const uninputtedQuantity = (line: any) =>
         <div class="value-box product-name">{{ display(line.goodsName) }}</div>
         <div class="value-box">{{ display(line.categoryName) }}</div>
         <div class="value-box">{{ display(line.skuLabel ?? line.skuName) }}</div>
-        <div class="value-box">{{ display(line.unitName ?? line.unitType) }}</div>
+        <div class="value-box">{{ unitName(line) }}</div>
         <div class="value-box number">{{ line.orderQuantity }}</div>
         <div class="value-box number">¥ {{ moneyText(line.unitPrice) }}</div>
         <div class="value-box number amount">¥ {{ moneyText(orderAmount(line)) }}</div>

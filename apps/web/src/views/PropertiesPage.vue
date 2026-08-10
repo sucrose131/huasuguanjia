@@ -83,6 +83,10 @@ onMounted(async () => {
       <div v-else class="table-wrap">
         <el-table :data="rows" v-loading="loading"
           ><el-table-column type="index" label="序号" width="65" /><el-table-column
+            prop="id"
+            label="ID"
+            width="100"
+          /><el-table-column
             prop="name"
             label="属性名称"
             min-width="140"

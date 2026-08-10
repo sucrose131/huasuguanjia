@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
 type B = Record<string, any>;
 
@@ -216,6 +217,11 @@ watch(visible, (v) => {
         :mode="outRow.outType === 3 ? 'lab' : 'execute'"
         @update:rows="onRowsChanged"
         @goodsChanged="onGoodsChanged"
+      />
+      <DocumentAttachments
+        v-if="outRow.id"
+        document-type="production_material_output"
+        :document-id="outRow.id"
       />
     </template>
     <template #footer>

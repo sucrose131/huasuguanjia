@@ -355,6 +355,7 @@ onMounted(async () => {
       <div v-else class="table-wrap" v-loading="loading">
         <el-table v-if="resource === 'roles'" :data="filteredRows" min-width="1180">
           <el-table-column type="index" label="序号" width="65" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column prop="name" label="角色名称" min-width="130"
             ><template #default="{ row }"
               ><strong class="business-no">{{ row.name }}</strong></template
@@ -409,6 +410,7 @@ onMounted(async () => {
 
         <el-table v-else-if="resource === 'users'" :data="filteredRows" min-width="1180">
           <el-table-column type="index" label="序号" width="65" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column prop="account" label="登录账号" min-width="120"
             ><template #default="{ row }"
               ><strong class="business-no">{{ row.account }}</strong></template
@@ -469,6 +471,7 @@ onMounted(async () => {
 
         <el-table v-else :data="filteredRows" min-width="1180">
           <el-table-column type="index" label="序号" width="65" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column prop="parentName" label="上级菜单" min-width="120" />
           <el-table-column prop="name" label="菜单名称" min-width="140"
             ><template #default="{ row }"

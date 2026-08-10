@@ -74,10 +74,15 @@ export const businessConfigs: Record<string, BusinessConfig> = {
     no: 'outNo',
     summary: true,
     createText: '新增临时出库',
-    dictionaries: ['production_material_out_type', 'confirm_status'],
+    dictionaries: [
+      'production_material_out_type',
+      'temporary_outbound_destination',
+      'confirm_status',
+    ],
     columns: [
       c('outNo', '单据编号', 155),
       status('outTypeName', '出库类型'),
+      c('destinationTypeName', '出库去向', 100),
       c('planNo', '来源生产计划', 150),
       c('bomNo', 'BOM编号', 140),
       c('goodsName', '生产成品', 140),
@@ -266,6 +271,8 @@ export const businessConfigs: Record<string, BusinessConfig> = {
     dictionaries: ['after_sale_event_type', 'after_sale_event_status'],
     columns: [
       c('serviceNo', '服务编号', 155),
+      c('sourceSystemName', '售后来源', 110),
+      c('externalRequestNo', '外部申请号', 150),
       c('orderNo', '销售订单', 155),
       c('customerName', '客户', 130),
       c('goodsName', '商品', 145),

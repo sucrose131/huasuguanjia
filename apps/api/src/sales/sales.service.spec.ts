@@ -25,8 +25,117 @@ function createService(
   };
 }
 
+describe('SalesService after-sales progress', () => {
+  it('creates an independent progress and updates the main service status with an audit log', async () => {
+    const createProgress = vi.fn().mockResolvedValue({
+      progress_id: 31n,
+      service_id: 8n,
+      progress_content: '已联系客户确认处理方案',
+      progress_status: 1,
+    });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_sale_order_service: {
+        findFirst: vi.fn().mockResolvedValue({ service_id: 8n, so_id: 5n }),
+        count: vi.fn().mockResolvedValue(1),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      hspsi_sale_order_service_progress: { create: createProgress },
+      hspsi_sale_order: { update: vi.fn().mockResolvedValue({}) },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 2 }),
+      },
+      hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_id: 3 }) },
+      hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.saveServiceProgress(
+      '8',
+      null,
+      { content: '已联系客户确认处理方案', status: 1, handlerId: 9 },
+      '9',
+    );
+
+    expect(result.id).toBe(31n);
+    expect(createProgress).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        service_id: 8n,
+        progress_content: '已联系客户确认处理方案',
+        progress_status: 1,
+        source_type: 1,
+      }),
+    });
+    expect(tx.hspsi_sale_order_service.update).toHaveBeenCalledWith({
+      where: { service_id: 8n },
+      data: expect.objectContaining({ event_status: 1, handler_id: 9n }),
+    });
+    expect(tx.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SalesService external after-sales webhook', () => {
+  it('stores the immutable original payload when receiving a new request', async () => {
+    const payload = {
+      externalRequestId: 'HSZJ-1001',
+      externalRequestNo: 'AS-20260807-01',
+      eventContent: '客户反馈设备无法启动',
+      customer: { name: '测试客户', mobile: '13800000000' },
+    };
+    const create = vi.fn().mockResolvedValue({ service_id: 81n, service_no: 'AS20260807000001' });
+    const tx = {
+      hspsi_sale_order_service: { create },
+      hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      hspsi_sale_order_service: { findFirst: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.receiveExternalAfterSales('huashu_home', payload);
+
+    expect(result).toMatchObject({ id: 81n, duplicate: false });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        source_system: 'huashu_home',
+        external_request_id: 'HSZJ-1001',
+        external_request_no: 'AS-20260807-01',
+        external_payload: payload,
+        event_content: '客户反馈设备无法启动',
+      }),
+    });
+    expect(tx.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+
+  it('returns the existing service without overwriting it on a repeated request', async () => {
+    const existing = { service_id: 81n, service_no: 'AS20260807000001' };
+    const prisma = {
+      hspsi_sale_order_service: { findFirst: vi.fn().mockResolvedValue(existing) },
+      $transaction: vi.fn(),
+    };
+    const { service } = createService(prisma);
+
+    const result = await service.receiveExternalAfterSales('huashu_home', {
+      externalRequestId: 'HSZJ-1001',
+      eventContent: '重复推送不应覆盖',
+    });
+
+    expect(result).toEqual({
+      id: 81n,
+      businessNo: 'AS20260807000001',
+      duplicate: true,
+      message: '该外部售后申请已接收',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('SalesService ordinary-order P0 guards', () => {
-  it('ignores client propertyType and approveStatus when saving an ordinary order', async () => {
+  it('saves an ordinary sales order as effective without an approval step', async () => {
     const createOrder = vi.fn().mockResolvedValue({ so_id: 10n });
     const tx = {
       hspsi_sale_order: {
@@ -81,7 +190,10 @@ describe('SalesService ordinary-order P0 guards', () => {
     expect(createOrder).toHaveBeenCalledWith({
       data: expect.objectContaining({
         so_property_type: 1,
-        approve_status: 0,
+        approve_status: 1,
+        approve_comment: '销售订单无需审批',
+        approve_by: 9n,
+        approve_date: expect.any(Date),
         order_status: 1,
         status: 1,
       }),
@@ -178,92 +290,12 @@ describe('SalesService ordinary-order P0 guards', () => {
     );
   });
 
-  it('creates a pending output for available finished stock and a production plan for the shortage on approval', async () => {
-    const production = {
-      createPlanFromSalesGap: vi.fn().mockResolvedValue({ id: 30n, planNo: 'PP30', created: true }),
-    };
-    const trace = { link: vi.fn() };
-    const outputCreate = vi.fn().mockResolvedValue({ so_output_id: 20n });
-    const outputDetailCreate = vi.fn().mockResolvedValue({ count: 1 });
-    const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([]),
-      hspsi_sale_order: {
-        findFirst: vi.fn().mockResolvedValue({
-          so_id: 10n,
-          so_no: 'SO10',
-          so_property_type: 1,
-          approve_status: 0,
-          org_id: 1n,
-          warehouse_id: 2n,
-        }),
-        update: vi.fn().mockResolvedValue({ so_id: 10n }),
-      },
-      hspsi_sale_order_detail: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([{ goods_id: 101n, sku_id: 201n, unit_type: 1, sale_qty: 15 }]),
-      },
-      hspsi_inventory_batch_total: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            goods_id: 101n,
-            sku_id: 201n,
-            warehouse_id: 2n,
-            batch_no: 'FG001',
-            unit_type: 1,
-            inventory_qty: 5,
-          },
-        ]),
-      },
-      hspsi_sale_order_output: {
-        findMany: vi.fn().mockResolvedValue([]),
-        create: outputCreate,
-        update: vi.fn().mockResolvedValue({ so_output_id: 20n }),
-      },
-      hspsi_sale_order_output_detail: {
-        findMany: vi.fn().mockResolvedValue([]),
-        createMany: outputDetailCreate,
-      },
-      hspsi_goods_info: {
-        findUnique: vi.fn().mockResolvedValue({ goods_id: 101n, goods_name: '测试成品' }),
-      },
-      hspsi_production_bom: {
-        findFirst: vi.fn().mockResolvedValue({ bom_id: 9n, warehouse_id: 3n }),
-      },
-    };
-    const prisma = {
-      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
-    };
-    const { service } = createService(prisma, { post: vi.fn() }, production, trace);
-    vi.spyOn(service, 'order').mockResolvedValue({ approve_status: 0, propertyType: 1 } as never);
+  it('rejects the legacy approval endpoint for an ordinary sales order', async () => {
+    const { service } = createService({});
+    vi.spyOn(service, 'order').mockResolvedValue({ approve_status: 1, propertyType: 1 } as never);
 
-    const result = await service.approveOrder('10', true, '通过', '9');
-
-    expect(result).toMatchObject({
-      outputId: 20n,
-      outputQty: 5,
-      plans: [{ id: 30n, created: true }],
-    });
-    expect(outputDetailCreate).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ batch_no: 'FG001', output_qty: expect.anything() })],
-    });
-    expect(production.createPlanFromSalesGap).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        sourceId: 10n,
-        sourceNo: 'SO10',
-        planQty: 10,
-        productWarehouseId: 2n,
-      }),
-      '9',
-    );
-    expect(trace.link).toHaveBeenCalledWith(
-      expect.objectContaining({
-        upstreamType: 'sales_order',
-        downstreamType: 'sales_output',
-        downstreamId: 20n,
-      }),
-      tx,
+    await expect(service.approveOrder('10', true, '通过', '9')).rejects.toThrow(
+      '销售订单无需审批，请直接办理后续业务',
     );
   });
 });

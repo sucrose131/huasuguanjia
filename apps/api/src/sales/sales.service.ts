@@ -711,8 +711,12 @@ export class SalesService {
         service_status: 3,
         shipper: '',
         status: 1,
-        approve_status: 0,
-        approve_comment: '',
+        // 普通销售订单来自已在线上完成的订单，不进入本系统/OA审批。
+        // 折价销售单仍保留独立的处置确认流程。
+        approve_status: propertyType === 1 ? 1 : 0,
+        approve_comment: propertyType === 1 ? '销售订单无需审批' : '',
+        approve_by: propertyType === 1 ? BigInt(u) : 0n,
+        approve_date: propertyType === 1 ? new Date() : null,
         remark: String(b.remark ?? ''),
         updated_by: BigInt(u),
       };
@@ -743,166 +747,11 @@ export class SalesService {
     });
     return { id: idv, message: '销售订单已保存' };
   }
-  private async allocateApprovedOrdinaryOrder(t: Prisma.TransactionClient, order: B, u: string) {
-    const details = await t.hspsi_sale_order_detail.findMany({ where: { so_id: order.so_id } });
-    const goodsIds = [...new Set(details.map((line) => line.goods_id))];
-    const batches = goodsIds.length
-      ? await t.hspsi_inventory_batch_total.findMany({
-          where: {
-            org_id: order.org_id,
-            warehouse_id: order.warehouse_id,
-            goods_id: { in: goodsIds },
-            inventory_qty: { gt: 0 },
-          },
-          orderBy: [{ batch_no: 'asc' }],
-        })
-      : [];
-    for (const batch of batches)
-      await t.$queryRaw`SELECT goods_id FROM hspsi_inventory_batch_total WHERE warehouse_id=${batch.warehouse_id} AND goods_id=${batch.goods_id} AND sku_id=${batch.sku_id} AND batch_no=${batch.batch_no} FOR UPDATE`;
-    const pendingHeads = await t.hspsi_sale_order_output.findMany({
-      where: {
-        org_id: order.org_id,
-        warehouse_id: order.warehouse_id,
-        comfirm_status: 0,
-        deleted_at: null,
-      },
-      select: { so_output_id: true },
-    });
-    const pendingDetails = pendingHeads.length
-      ? await t.hspsi_sale_order_output_detail.findMany({
-          where: { so_output_id: { in: pendingHeads.map((item) => item.so_output_id) } },
-        })
-      : [];
-    const reserved = new Map<string, number>();
-    for (const line of pendingDetails) {
-      const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
-      reserved.set(key, (reserved.get(key) ?? 0) + Number(line.output_qty));
-    }
-    const outputLines: B[] = [],
-      shortages: B[] = [];
-    for (const line of details) {
-      let remaining = Number(line.sale_qty);
-      for (const batch of batches.filter(
-        (item) => item.goods_id === line.goods_id && item.sku_id === line.sku_id,
-      )) {
-        if (remaining <= 0.000001) break;
-        const key = `${batch.goods_id}:${batch.sku_id}:${batch.batch_no}`,
-          available = Math.max(0, Number(batch.inventory_qty) - (reserved.get(key) ?? 0));
-        const quantity = Math.min(remaining, available);
-        if (quantity <= 0.000001) continue;
-        outputLines.push({
-          goodsId: line.goods_id,
-          skuId: line.sku_id,
-          batchNo: batch.batch_no,
-          unitType: line.unit_type,
-          orderQty: line.sale_qty,
-          quantity,
-        });
-        reserved.set(key, (reserved.get(key) ?? 0) + quantity);
-        remaining -= quantity;
-      }
-      if (remaining > 0.000001)
-        shortages.push({
-          goodsId: line.goods_id,
-          skuId: line.sku_id,
-          unitType: line.unit_type,
-          quantity: remaining,
-        });
-    }
-    let outputId: bigint | undefined, outputNo: string | undefined;
-    if (outputLines.length) {
-      outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_OUTPUT);
-      const output = await t.hspsi_sale_order_output.create({
-        data: {
-          so_output_no: outputNo,
-          so_id: order.so_id,
-          org_id: order.org_id,
-          warehouse_id: order.warehouse_id,
-          output_date: new Date(),
-          go_where: 1,
-          dept_id: 0n,
-          receiver_id: BigInt(u),
-          output_sku_qty: new Set(outputLines.map((line) => `${line.goodsId}:${line.skuId}`)).size,
-          status: true,
-          comfirm_status: 0,
-          comfirm_comment: '',
-          comfirm_by: 0n,
-          posting_version: 0,
-          remark: `销售订单 ${order.so_no} 审核后按可用库存自动生成`,
-          created_by: BigInt(u),
-          updated_by: BigInt(u),
-        },
-      });
-      outputId = output.so_output_id;
-      await t.hspsi_sale_order_output_detail.createMany({
-        data: outputLines.map((line) => ({
-          so_output_id: output.so_output_id,
-          so_id: order.so_id,
-          goods_id: line.goodsId,
-          sku_id: line.skuId,
-          batch_no: String(line.batchNo),
-          unit_type: Number(line.unitType),
-          sale_qty: Number(line.orderQty),
-          output_qty: Number(line.quantity),
-        })),
-      });
-      await this.documentTrace.link(
-        {
-          upstreamType: 'sales_order',
-          upstreamId: order.so_id,
-          upstreamNo: order.so_no,
-          downstreamType: 'sales_output',
-          downstreamId: output.so_output_id,
-          downstreamNo: outputNo,
-          relationKind: 'fulfillment',
-          createdBy: u,
-        },
-        t,
-      );
-    }
-    const plans: B[] = [];
-    for (const shortage of shortages) {
-      const goods = await t.hspsi_goods_info.findUnique({ where: { goods_id: shortage.goodsId } });
-      if (!goods) throw new BadRequestException('销售订单存在无效成品，不能生成生产计划');
-      const bom = await t.hspsi_production_bom.findFirst({
-        where: {
-          org_id: order.org_id,
-          goods_id: shortage.goodsId,
-          sku_id: shortage.skuId,
-          status: 1,
-          deleted_at: null,
-        },
-      });
-      if (!bom)
-        throw new BadRequestException(
-          `${goods.goods_name} 没有当前订单组织下启用的BOM，不能生成生产计划`,
-        );
-      const result = await this.production.createPlanFromSalesGap(
-        t,
-        {
-          bomId: bom.bom_id,
-          orgId: order.org_id,
-          warehouseId: bom.warehouse_id,
-          productWarehouseId: order.warehouse_id,
-          planQty: shortage.quantity,
-          sourceType: 'sales_order',
-          sourceId: order.so_id,
-          sourceNo: order.so_no,
-        },
-        u,
-      );
-      if (result.created !== false) plans.push(result);
-    }
-    return {
-      outputId,
-      outputNo,
-      outputQty: outputLines.reduce((sum, line) => sum + Number(line.quantity), 0),
-      plans,
-    };
-  }
   async approveOrder(id: string, approved: boolean, comment: string, u: string) {
     const orderId = BigInt(id),
       snapshot = await this.order(id);
+    if (Number(snapshot.propertyType) === 1)
+      throw new BadRequestException('销售订单无需审批，请直接办理后续业务');
     const isTrustedDiscount =
       Number(snapshot.propertyType) === 2 &&
       this.trustedDiscountSource(snapshot.businessSourceType) &&
@@ -915,47 +764,18 @@ export class SalesService {
     )
       throw new BadRequestException('该折价销售单已经完成处置，请勿重复操作');
     if (!isTrustedDiscount) {
-      const isDiscount = Number(snapshot.propertyType) === 2;
-      if (isDiscount || !approved) {
-        await this.p.hspsi_sale_order.update({
-          where: { so_id: orderId },
-          data: {
-            approve_status: approved ? 1 : 2,
-            approve_comment: comment,
-            approve_by: BigInt(u),
-            approve_date: new Date(),
-            order_status: approved ? 1 : 3,
-            updated_by: BigInt(u),
-          },
-        });
-        return { id, message: approved ? '折价销售已通过，待生成折价销售出库' : '已驳回并关闭' };
-      }
-      const allocation = await this.guardedTransaction(async (t) => {
-        await t.$queryRaw`SELECT so_id FROM hspsi_sale_order WHERE so_id=${orderId} FOR UPDATE`;
-        const locked = await t.hspsi_sale_order.findFirst({
-          where: { so_id: orderId, so_property_type: 1, deleted_at: null },
-        });
-        if (!locked) throw new NotFoundException('销售订单不存在');
-        if (locked.approve_status !== 0)
-          throw new BadRequestException('该销售订单已经处理，请勿重复审核');
-        await t.hspsi_sale_order.update({
-          where: { so_id: orderId },
-          data: {
-            approve_status: 1,
-            approve_comment: comment,
-            approve_by: BigInt(u),
-            approve_date: new Date(),
-            order_status: 1,
-            updated_by: BigInt(u),
-          },
-        });
-        return this.allocateApprovedOrdinaryOrder(t, locked, u);
+      await this.p.hspsi_sale_order.update({
+        where: { so_id: orderId },
+        data: {
+          approve_status: approved ? 1 : 2,
+          approve_comment: comment,
+          approve_by: BigInt(u),
+          approve_date: new Date(),
+          order_status: approved ? 1 : 3,
+          updated_by: BigInt(u),
+        },
       });
-      return {
-        id,
-        ...allocation,
-        message: `审批通过${allocation.outputId ? `，已生成待出库销售出库单 ${allocation.outputNo}` : ''}${allocation.plans.length ? `，已生成 ${allocation.plans.length} 张缺口生产计划` : ''}`,
-      };
+      return { id, message: approved ? '折价销售已通过，待生成折价销售出库' : '已驳回并关闭' };
     }
 
     let outputNo = '';
@@ -2987,6 +2807,17 @@ export class SalesService {
           successorType: i.next_document_type,
           successorId: i.next_document_id,
           eventDate: i.event_date,
+          sourceSystem: i.source_system,
+          externalRequestId: i.external_request_id,
+          externalRequestNo: i.external_request_no,
+          externalPayload: i.external_payload,
+          receivedAt: i.received_at,
+          sourceSystemName:
+            i.source_system === 'huashu_home'
+              ? '华数之家'
+              : i.source_system
+                ? i.source_system
+                : '系统内新增',
           createdBy: i.created_by,
           updatedBy: i.updated_by,
           createdAt: i.created_at,
@@ -3106,12 +2937,14 @@ export class SalesService {
       (i) => String(i.id) === id,
     );
     if (!result) throw new NotFoundException('售后记录不存在');
-    const [order, details] = await Promise.all([
-      this.order(String(result.orderId)),
+    const linkedOrderId = BigInt(result.orderId ?? 0);
+    const [order, details, progresses] = await Promise.all([
+      linkedOrderId > 0n ? this.order(String(linkedOrderId)) : Promise.resolve(null),
       this.p.hspsi_sale_order_service_detail.findMany({
         where: { service_id: BigInt(id) },
         orderBy: { id: 'asc' },
       }),
+      this.serviceProgresses(id),
     ]);
     const sourceOutputIds = [...new Set(details.map((item) => String(item.source_output_id)))].map(
         BigInt,
@@ -3129,10 +2962,11 @@ export class SalesService {
     return {
       ...result,
       order,
-      orderDate: order.orderDate,
-      orderAmount: order.fact_amount,
-      orderGoodsIds: order.details.map((line: B) => line.goodsId),
+      orderDate: order?.orderDate ?? null,
+      orderAmount: order?.fact_amount ?? 0,
+      orderGoodsIds: order?.details?.map((line: B) => line.goodsId) ?? [],
       sourceOutputId: details[0]?.source_output_id ?? 0n,
+      progresses,
       details: details.map((line) => ({
         id: line.id,
         sourceOutputId: line.source_output_id,
@@ -3157,6 +2991,245 @@ export class SalesService {
         remark: line.remark,
       })),
     };
+  }
+  async receiveExternalAfterSales(sourceSystem: string, body: B) {
+    if (!body || Array.isArray(body) || typeof body !== 'object')
+      throw new BadRequestException('外部售后请求体无效');
+    const source = String(sourceSystem ?? '').trim().toLowerCase();
+    if (!/^[a-z0-9_]{2,32}$/.test(source))
+      throw new BadRequestException('外部售后来源无效');
+    const externalRequestId = String(
+      body.externalRequestId ?? body.requestId ?? body.id ?? '',
+    ).trim();
+    if (!externalRequestId || externalRequestId.length > 100)
+      throw new BadRequestException('外部申请ID必填且不得超过100个字符');
+    const existing = await this.p.hspsi_sale_order_service.findFirst({
+      where: { source_system: source, external_request_id: externalRequestId },
+    });
+    if (existing)
+      return {
+        id: existing.service_id,
+        businessNo: existing.service_no,
+        duplicate: true,
+        message: '该外部售后申请已接收',
+      };
+    const externalRequestNo = String(
+      body.externalRequestNo ?? body.requestNo ?? body.orderNo ?? externalRequestId,
+    )
+      .trim()
+      .slice(0, 100);
+    const rawContent = String(
+      body.eventContent ?? body.content ?? body.reason ?? body.description ?? '外部售后申请',
+    ).trim();
+    const eventContent = (rawContent || '外部售后申请').slice(0, 255);
+    const eventTypeValue = Number(body.eventType);
+    const eventStatusValue = Number(body.eventStatus);
+    const eventType = [1, 2, 3, 4, 5].includes(eventTypeValue) ? eventTypeValue : 1;
+    const eventStatus = [1, 2, 3].includes(eventStatusValue) ? eventStatusValue : 1;
+    const eventDate = new Date(String(body.eventDate ?? body.createdAt ?? Date.now()));
+    const receivedAt = new Date();
+    const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
+    try {
+      return await this.p.$transaction(async (t) => {
+        const created = await t.hspsi_sale_order_service.create({
+          data: {
+            service_no: serviceNo,
+            source_system: source,
+            external_request_id: externalRequestId,
+            external_request_no: externalRequestNo,
+            external_payload: body as Prisma.InputJsonObject,
+            received_at: receivedAt,
+            so_id: 0n,
+            customer_id: 0,
+            goods_id: 0,
+            sku_id: 0,
+            event_type: eventType,
+            event_content: eventContent,
+            event_status: eventStatus,
+            handler_id: 0n,
+            event_date: Number.isNaN(eventDate.getTime()) ? receivedAt : eventDate,
+            remark: '由外部商户系统推送，原始信息不可覆盖',
+            created_by: 0n,
+            updated_by: 0n,
+          },
+        });
+        await t.hspsi_sys_oper_log.create({
+          data: {
+            method: 'WEBHOOK',
+            router: `integrations/aftersales/${source}`,
+            url: `sales/services/${created.service_id}`,
+            service_name: 'external-aftersales',
+            request_data: JSON.stringify({
+              sourceSystem: source,
+              externalRequestId,
+              externalRequestNo,
+            }),
+            response_code: '200',
+            response_data: String(created.service_id),
+            created_by: 0,
+            updated_by: 0,
+          },
+        });
+        return {
+          id: created.service_id,
+          businessNo: created.service_no,
+          duplicate: false,
+          message: '外部售后申请已接收',
+        };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const duplicate = await this.p.hspsi_sale_order_service.findFirst({
+          where: { source_system: source, external_request_id: externalRequestId },
+        });
+        if (duplicate)
+          return {
+            id: duplicate.service_id,
+            businessNo: duplicate.service_no,
+            duplicate: true,
+            message: '该外部售后申请已接收',
+          };
+      }
+      throw error;
+    }
+  }
+  async serviceProgresses(id: string) {
+    const serviceId = this.positiveId(id, '售后记录');
+    const service = await this.p.hspsi_sale_order_service.findFirst({
+      where: { service_id: serviceId, deleted_at: null },
+      select: { service_id: true },
+    });
+    if (!service) throw new NotFoundException('售后记录不存在');
+    const records = await this.p.hspsi_sale_order_service_progress.findMany({
+      where: { service_id: serviceId, deleted_at: null },
+      orderBy: [{ occurred_at: 'desc' }, { progress_id: 'desc' }],
+    });
+    return this.refs.enrich(
+      records.map((item) => ({
+        id: item.progress_id,
+        serviceId: item.service_id,
+        content: item.progress_content,
+        status: item.progress_status,
+        sourceType: item.source_type,
+        sourceSystem: item.source_system,
+        handlerId: item.handler_id,
+        occurredAt: item.occurred_at,
+        createdBy: item.created_by,
+        updatedBy: item.updated_by,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+      })),
+      { status: 'after_sale_event_status' },
+    );
+  }
+  async saveServiceProgress(serviceIdText: string, progressIdText: string | null, b: B, u: string) {
+    const serviceId = this.positiveId(serviceIdText, '售后记录');
+    const content = String(b.content ?? '').trim();
+    const status = Number(b.status);
+    if (!content) throw new BadRequestException('处理进展内容必填');
+    if (content.length > 10000) throw new BadRequestException('处理进展内容过长');
+    const occurredAt = new Date(b.occurredAt ?? Date.now());
+    if (Number.isNaN(occurredAt.getTime())) throw new BadRequestException('处理时间无效');
+    return this.p.$transaction(async (t) => {
+      await t.$queryRaw`SELECT service_id FROM hspsi_sale_order_service WHERE service_id=${serviceId} FOR UPDATE`;
+      const service = await t.hspsi_sale_order_service.findFirst({
+        where: { service_id: serviceId, deleted_at: null },
+      });
+      if (!service) throw new NotFoundException('售后记录不存在');
+      await this.assertDictionaryValue(t, 'after_sale_event_status', status, '售后进展状态');
+      const data = {
+        progress_content: content,
+        progress_status: status,
+        handler_id: BigInt(b.handlerId ?? u),
+        occurred_at: occurredAt,
+        updated_by: BigInt(u),
+        updated_at: new Date(),
+      };
+      let before: B | null = null;
+      const progress = progressIdText
+        ? await (async () => {
+            const progressId = this.positiveId(progressIdText, '售后进展');
+            const existing = await t.hspsi_sale_order_service_progress.findFirst({
+              where: { progress_id: progressId, service_id: serviceId, deleted_at: null },
+            });
+            if (!existing) throw new NotFoundException('售后进展不存在');
+            before = existing;
+            return t.hspsi_sale_order_service_progress.update({
+              where: { progress_id: progressId },
+              data,
+            });
+          })()
+        : await t.hspsi_sale_order_service_progress.create({
+            data: {
+              ...data,
+              service_id: serviceId,
+              source_type: 1,
+              created_by: BigInt(u),
+            },
+          });
+      await t.hspsi_sale_order_service.update({
+        where: { service_id: serviceId },
+        data: {
+          event_status: status,
+          handler_id: BigInt(b.handlerId ?? u),
+          event_date: occurredAt,
+          updated_by: BigInt(u),
+          updated_at: new Date(),
+        },
+      });
+      await this.auditServiceProgress(
+        progressIdText ? 'UPDATE' : 'CREATE',
+        serviceIdText,
+        progress.progress_id,
+        before,
+        progress,
+        u,
+        t,
+      );
+      await this.refreshOrderServiceStatus(t, service.so_id);
+      return { id: progress.progress_id, message: progressIdText ? '进展已更新' : '进展已添加' };
+    });
+  }
+  async deleteServiceProgress(serviceIdText: string, progressIdText: string, u: string) {
+    const serviceId = this.positiveId(serviceIdText, '售后记录');
+    const progressId = this.positiveId(progressIdText, '售后进展');
+    return this.p.$transaction(async (t) => {
+      const progress = await t.hspsi_sale_order_service_progress.findFirst({
+        where: { progress_id: progressId, service_id: serviceId, deleted_at: null },
+      });
+      if (!progress) throw new NotFoundException('售后进展不存在');
+      await t.hspsi_sale_order_service_progress.update({
+        where: { progress_id: progressId },
+        data: { deleted_at: new Date(), updated_by: BigInt(u), updated_at: new Date() },
+      });
+      await this.auditServiceProgress('DELETE', serviceIdText, progressId, progress, null, u, t);
+      return { id: progressId, message: '进展已删除' };
+    });
+  }
+  private auditServiceProgress(
+    action: string,
+    serviceId: string,
+    progressId: bigint,
+    before: B | null,
+    after: B | null,
+    userId: string,
+    t: Prisma.TransactionClient,
+  ) {
+    const json = (value: unknown) =>
+      JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
+    return t.hspsi_sys_oper_log.create({
+      data: {
+        method: action,
+        router: `sales/services/${serviceId}/progress/${progressId}`,
+        url: `sales/services/${serviceId}/progress`,
+        service_name: 'sales-service-progress',
+        request_data: json({ before, after }),
+        response_code: '200',
+        response_data: action,
+        created_by: Number(userId),
+        updated_by: Number(userId),
+      },
+    });
   }
   async saveService(id: string | null, b: B, u: string) {
     const orderId = this.positiveId(b.orderId, '销售订单'),
