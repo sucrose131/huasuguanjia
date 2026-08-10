@@ -4,10 +4,11 @@ import { api } from '@/api';
 import { dateText } from '@/utils/format';
 import BatchMaterialTable from './BatchMaterialTable.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import { lineUnitName, type UnitOption } from '@/utils/unit-name';
 
 type B = Record<string, any>;
 
-const props = defineProps<{ modelValue: boolean; outRow: B }>();
+const props = defineProps<{ modelValue: boolean; outRow: B; units?: UnitOption[] }>();
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>();
 
 const visible = computed({
@@ -50,7 +51,7 @@ function groupLines(lines: B[]) {
       goodsCode: line.goodsCode ?? line.queryCode ?? '—',
       goodsName: line.goodsName ?? '—',
       skuSpec: line.skuSpec ?? line.goodsSpec ?? line.specModels ?? '—',
-      unitName: line.unitName ?? line.unitTypeName ?? line.unitType ?? '—',
+      unitName: lineUnitName(props.units, line),
       bomUnitQty: line.bomUnitQty ?? '—',
       totalDemand: line.standardQty ?? line.totalDemand ?? line.planOutQty ?? line.quantity ?? 0,
       stockQty: line.currentStock ?? stockQuantity(line.goodsId, line.skuId),

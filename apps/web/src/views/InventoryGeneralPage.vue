@@ -7,6 +7,7 @@ import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
+import { createRequestId } from '@/utils/random-id';
 
 type Row = Record<string, any>;
 type Option = { value: string | number; label: string; raw?: Row };
@@ -93,7 +94,7 @@ function resetForm() {
         ? 'initial'
         : 'entrusted_purchase'
       : 'direct_output',
-    requestKey: crypto.randomUUID(),
+    requestKey: createRequestId(),
     businessDate: dateText(new Date()),
     orgId: auth.user?.orgId ?? '',
     warehouseId: '',
