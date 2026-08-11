@@ -464,7 +464,7 @@ describe('RequisitionService OA callback result handling', () => {
         findFirst: vi.fn().mockResolvedValue(application),
         update: vi.fn(),
       },
-      hspsi_oa_approval_callback_log: { create: vi.fn() },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
     };
     const { service } = serviceWithTransaction(tx, {
       hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
@@ -477,7 +477,7 @@ describe('RequisitionService OA callback result handling', () => {
       procKey: 'PROC-KEY',
     };
 
-    const result = await service.handleOaApprovalResult(payload, payload);
+    const result = await service.handleOaApprovalResult(payload, payload, 99n);
 
     expect(result).toMatchObject({ processed: true, duplicate: false, procStatus: 'REJECTED' });
     expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith({
@@ -489,7 +489,8 @@ describe('RequisitionService OA callback result handling', () => {
         status: 0,
       }),
     });
-    expect(tx.hspsi_oa_approval_callback_log.create).toHaveBeenCalledWith({
+    expect(tx.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
+      where: { id: 99n },
       data: expect.objectContaining({ processed: 1, proc_status: 'REJECTED' }),
     });
   });

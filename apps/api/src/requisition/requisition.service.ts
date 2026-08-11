@@ -932,7 +932,11 @@ export class RequisitionService {
     };
   }
 
-  async handleOaApprovalResult(payload: ApprovalCallbackPayload, rawPayload: unknown) {
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    callbackLogId: bigint,
+  ) {
     const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
       where: {
         business_type: 'requisition_application',
@@ -996,7 +1000,8 @@ export class RequisitionService {
           updated_at: new Date(),
         },
       });
-      await tx.hspsi_oa_approval_callback_log.create({
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: callbackLogId },
         data: {
           instance_id: current.id,
           event_code: 'XFTOAFPS',
