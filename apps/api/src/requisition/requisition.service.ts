@@ -10,6 +10,8 @@ import {
   InventoryPostingService,
   type InventoryLine,
 } from '../inventory/inventory-posting.service';
+import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -29,6 +31,8 @@ export class RequisitionService {
     @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(RequisitionOaApprovalService)
+    private readonly oaApproval: RequisitionOaApprovalService,
   ) {}
 
   private decimal(value: unknown) {
@@ -370,6 +374,21 @@ export class RequisitionService {
     });
   }
 
+  private oaStatusName(status: string) {
+    return (
+      {
+        PENDING_PUSH: '待提交OA',
+        PUSH_FAILED: 'OA提交失败',
+        RUNNING: 'OA审批中',
+        BACKTOSTART: 'OA退回发起人',
+        PASSED: 'OA已通过',
+        REJECTED: 'OA已驳回',
+        CANCELED: 'OA已取消',
+        DELETED: 'OA已删除',
+      }[status] ?? ''
+    );
+  }
+
   async applications(query: Body) {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_draw_approveWhereInput = { deleted_at: null };
@@ -396,9 +415,25 @@ export class RequisitionService {
         })
       : [];
     const generatedMap = new Map(generated.map((item) => [String(item.draw_id), item]));
+    const oaInstances = records.length
+      ? await this.prisma.hspsi_oa_approval_instance.findMany({
+          where: {
+            business_type: 'requisition_application',
+            business_id: { in: records.map((item) => item.draw_id) },
+            deleted_at: null,
+          },
+          orderBy: { id: 'desc' },
+        })
+      : [];
+    const oaMap = new Map<string, (typeof oaInstances)[number]>();
+    for (const instance of oaInstances) {
+      if (!oaMap.has(String(instance.business_id)))
+        oaMap.set(String(instance.business_id), instance);
+    }
     const referencedItems = await this.references.enrich(
       records.map((item) => {
         const output = generatedMap.get(String(item.draw_id));
+        const oa = oaMap.get(String(item.draw_id));
         return {
           ...item,
           id: item.draw_id,
@@ -422,7 +457,12 @@ export class RequisitionService {
           autoOutputId: output?.draw_output_id ?? null,
           autoOutputNo: output?.draw_output_no ?? '',
           autoOutputConfirmStatus: output?.comfirm_status ?? null,
-          reverseGenerated: output?.generation_key?.startsWith('direct-requisition-output:') ?? false,
+          reverseGenerated:
+            output?.generation_key?.startsWith('direct-requisition-output:') ?? false,
+          oaStatus: oa?.proc_status ?? '',
+          oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
+          oaProcessId: oa?.proc_inst_id ?? '',
+          oaBusKey: oa?.bus_key ?? '',
           createdBy: item.created_by,
           updatedBy: item.updated_by,
           createdAt: item.created_at,
@@ -444,7 +484,7 @@ export class RequisitionService {
       where: { draw_id: BigInt(id), deleted_at: null },
     });
     if (!item) throw new NotFoundException('领用申请不存在');
-    const [details, usage, autoOutput] = await Promise.all([
+    const [details, usage, autoOutput, oa] = await Promise.all([
       this.prisma.hspsi_draw_approve_detail.findMany({
         where: { draw_id: item.draw_id },
         orderBy: { draw_detail_id: 'asc' },
@@ -453,6 +493,14 @@ export class RequisitionService {
       this.prisma.hspsi_draw_approve_output.findFirst({
         where: { draw_id: item.draw_id, generation_key: { not: null }, deleted_at: null },
         orderBy: { draw_output_id: 'desc' },
+      }),
+      this.prisma.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'requisition_application',
+          business_id: item.draw_id,
+          deleted_at: null,
+        },
+        orderBy: { id: 'desc' },
       }),
     ]);
     const [enriched] = await this.enrichRequisitionStaff([
@@ -482,6 +530,10 @@ export class RequisitionService {
         autoOutputConfirmStatus: autoOutput?.comfirm_status ?? null,
         reverseGenerated:
           autoOutput?.generation_key?.startsWith('direct-requisition-output:') ?? false,
+        oaStatus: oa?.proc_status ?? '',
+        oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
+        oaProcessId: oa?.proc_inst_id ?? '',
+        oaBusKey: oa?.bus_key ?? '',
         details: details.map((detail) => {
           const historicalQty =
             (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
@@ -527,6 +579,18 @@ export class RequisitionService {
           : null;
       if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
       if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+      if (requestedId !== null) {
+        const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+          where: {
+            business_type: 'requisition_application',
+            business_id: requestedId,
+            proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+            deleted_at: null,
+          },
+          select: { id: true },
+        });
+        if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可修改');
+      }
 
       const currentDetails =
         requestedId !== null
@@ -650,7 +714,17 @@ export class RequisitionService {
       });
       return header.draw_id;
     });
-    return { id: drawId, message: submit ? '申请已提交' : '草稿已保存' };
+    if (!submit) return { id: drawId, message: '草稿已保存' };
+    const oa = await this.oaApproval.submit(drawId, userId);
+    return {
+      id: drawId,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `领用申请已保存，但提交OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '申请已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
 
   private async ensureAutomaticOutput(
@@ -748,6 +822,17 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
+
+      const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'requisition_application',
+          business_id: drawId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (activeOa) throw new BadRequestException('该申请正在OA审批，不能在本系统审批');
 
       if (!approved) {
         const directOutput = await tx.hspsi_draw_approve_output.findFirst({
@@ -847,6 +932,106 @@ export class RequisitionService {
     };
   }
 
+  async handleOaApprovalResult(payload: ApprovalCallbackPayload, rawPayload: unknown) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'requisition_application',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的领用OA审批实例');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', instance.business_id);
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const application = await tx.hspsi_draw_approve.findFirst({
+        where: { draw_id: current.business_id, deleted_at: null },
+      });
+      if (!application) throw new NotFoundException('OA审批对应的领用申请不存在');
+
+      const expectedApproveStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const duplicate =
+        current.proc_status === payload.procStatus &&
+        application.approve_status === expectedApproveStatus;
+      let outputId: bigint | null = null;
+      if (!duplicate) {
+        const approved = payload.procStatus === 'PASSED';
+        await tx.hspsi_draw_approve.update({
+          where: { draw_id: application.draw_id },
+          data: {
+            approve_status: approved ? 1 : 2,
+            approve_comment: this.oaApprovalComment(payload.procStatus),
+            approve_by: 0n,
+            approve_date: new Date(),
+            status: approved ? 1 : 0,
+            updated_by: 0n,
+          },
+        });
+        if (approved) {
+          const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
+          outputId = output.draw_output_id;
+        }
+      } else if (payload.procStatus === 'PASSED') {
+        const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
+        outputId = output.draw_output_id;
+      }
+
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.create({
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '领用审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        applicationId: application.draw_id,
+        outputId,
+        procStatus: payload.procStatus,
+      };
+    });
+  }
+
+  private oaApprovalComment(status: ApprovalCallbackPayload['procStatus']) {
+    return (
+      {
+        PASSED: 'OA审批通过',
+        REJECTED: 'OA审批驳回',
+        CANCELED: 'OA审批取消',
+        DELETED: 'OA审批流程删除',
+      }[status] ?? `OA审批状态：${status}`
+    );
+  }
+
   private async ensureRejectedDirectOutputReturn(
     tx: Prisma.TransactionClient,
     application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
@@ -876,10 +1061,7 @@ export class RequisitionService {
         draw_id: application.draw_id,
         draw_output_id: output.draw_output_id,
         exit_reson: '直接领用申请被否决，待办理退回',
-        exit_qty: returnableDetails.reduce(
-          (sum, detail) => sum + Number(detail.fact_draw_qty),
-          0,
-        ),
+        exit_qty: returnableDetails.reduce((sum, detail) => sum + Number(detail.fact_draw_qty), 0),
         org_id: output.org_id,
         warehouse_id: output.warehouse_id,
         dept_id: output.dept_id,
@@ -932,17 +1114,27 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
-      const [confirmedOutputs, confirmedReturns] = await Promise.all([
+      const [confirmedOutputs, confirmedReturns, activeOa] = await Promise.all([
         tx.hspsi_draw_approve_output.count({
           where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
         }),
         tx.hspsi_draw_approve_output_exit.count({
           where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
         }),
+        tx.hspsi_oa_approval_instance.findFirst({
+          where: {
+            business_type: 'requisition_application',
+            business_id: drawId,
+            proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+            deleted_at: null,
+          },
+          select: { id: true },
+        }),
       ]);
       if (confirmedOutputs || confirmedReturns) {
         throw new BadRequestException('申请已有确认出入库，不可删除');
       }
+      if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可删除');
       if (application.approve_status === 1) throw new BadRequestException('已审批申请不可删除');
       await tx.hspsi_draw_approve.update({
         where: { draw_id: drawId },
@@ -1360,7 +1552,11 @@ export class RequisitionService {
       });
       if (existing) {
         if (existing.deleted_at) throw new BadRequestException('该直接出库请求对应单据已删除');
-        return { outputId: existing.draw_output_id, applicationId: existing.draw_id, already: true };
+        return {
+          outputId: existing.draw_output_id,
+          applicationId: existing.draw_id,
+          already: true,
+        };
       }
       await this.validateApplicationReferences(tx, {
         orgId,
@@ -1502,7 +1698,11 @@ export class RequisitionService {
         },
         tx,
       );
-      return { outputId: output.draw_output_id, applicationId: application.draw_id, already: false };
+      return {
+        outputId: output.draw_output_id,
+        applicationId: application.draw_id,
+        already: false,
+      };
     });
     return {
       id: result.outputId,
@@ -1876,15 +2076,14 @@ export class RequisitionService {
           unitType: source.unit_type,
           issuedQuantity: Number(source.fact_draw_qty),
           quantity,
-          storageLocation: String(line.storageLocation ?? line.position ?? '').trim().slice(0, 100),
+          storageLocation: String(line.storageLocation ?? line.position ?? '')
+            .trim()
+            .slice(0, 100),
           remark: String(line.remark ?? ''),
         };
       });
 
-      const returnWarehouseId = this.bigint(
-        body.warehouseId ?? output.warehouse_id,
-        '退回仓库',
-      );
+      const returnWarehouseId = this.bigint(body.warehouseId ?? output.warehouse_id, '退回仓库');
       const returnWarehouse = await tx.hspsi_basic_warehouse.findFirst({
         where: {
           warehouse_id: returnWarehouseId,
