@@ -44,6 +44,14 @@
 - **字段映射与取值逻辑分离**：mapping表只存 `uniqueName ↔ local_field` 映射，取值转换逻辑在代码策略模式中实现
 - **幂等由代码层保证**：推送幂等通过分布式锁+状态机实现，回调幂等通过状态机判断
 
+### 1.4 领用申请的组织、部门和人员规则
+
+薪福通 OA 用户登录后，OA 已根据登录身份确定所属公司和使用部门。领用申请对接时，“所属组织”和“领用部门”不作为 OA 表单控件或 `formData` 展示字段推送。
+
+平台内部仍保留领用申请的 `org_id`、`dept_id`，用于组织数据权限、仓库范围校验、业务追溯和审计。如果发起流程接口要求 `starterOrgId`，该值仅作为接口技术路由参数传递，不进入表单展示内容。
+
+领用申请当前确认的 OA 展示范围为：领用类型、仓库、领用人、申请日期、申请原因；商品明细只展示商品名称和申请数量。领用人必须通过同步后的 OA `memberId`、`staffId` 和主部门唯一标识精确关联，不使用姓名模糊匹配。
+
 ## 2. OA接口清单
 
 ### 2.1 出站接口（平台 → OA）
@@ -190,6 +198,14 @@ Content-Type: multipart/form-data
   procInstId: string  // 审批编号（流程实例id）
   procKey: string     // 流程Key
 ```
+
+华溯管家 DEV 联调回调入口：
+
+```text
+POST /api/integrations/xinfutong-oa/events/XFTOAFPS
+```
+
+在 OA 官方入站验签规则确认前，DEV 环境必须配置 `XINFUTONG_OA_CALLBACK_TOKEN`，并通过 `x-hspsi-webhook-token` 或 `Authorization: Bearer <token>` 传递。未配置或凭证不匹配时拒绝处理，不得在生产环境以无认证方式开放。
 
 ## 3. 表单控件数据格式速查表
 

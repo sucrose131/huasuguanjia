@@ -297,6 +297,7 @@ export const businessConfigs: Record<string, BusinessConfig> = {
       num('quantity', '申请总量'),
       num('actualQty', '实际领用'),
       status('approveStatusName', '审批状态'),
+      status('oaStatusName', 'OA状态'),
       c('createdByName', '创建人'),
       dt('createdAt'),
     ],

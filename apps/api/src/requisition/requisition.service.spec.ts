@@ -15,6 +15,7 @@ function aggregatePostingLines(lines: InventoryLine[]) {
     undefined as never,
     undefined as never,
     undefined as never,
+    undefined as never,
   );
   return (
     service as unknown as { aggregatePostingLines: AggregatePostingLines }
@@ -22,6 +23,7 @@ function aggregatePostingLines(lines: InventoryLine[]) {
 }
 
 function serviceWithTransaction(tx: Record<string, any>, root: Record<string, any> = {}) {
+  tx.hspsi_oa_approval_instance ??= { findFirst: vi.fn().mockResolvedValue(null) };
   const prisma = {
     ...root,
     $transaction: vi.fn(async (callback: (client: Record<string, any>) => unknown) => callback(tx)),
@@ -38,6 +40,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
       { enrich: vi.fn() } as never,
       documentTrace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+      { submit: vi.fn() } as never,
     ),
     prisma,
     posting,
@@ -430,8 +433,64 @@ describe('RequisitionService direct output reverse workflow', () => {
       expect.objectContaining({ data: expect.objectContaining({ approve_status: 2, status: 0 }) }),
     );
     expect(tx.hspsi_draw_approve_output_exit.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ comfirm_status: 0, exit_qty: 2 }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ comfirm_status: 0, exit_qty: 2 }),
+      }),
     );
     expect(posting.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('RequisitionService OA callback result handling', () => {
+  it('updates a requisition from an OA rejection and records the callback', async () => {
+    const instance = {
+      id: 31n,
+      business_type: 'requisition_application',
+      business_id: 7n,
+      bus_key: 'requisition_application:7',
+      proc_inst_id: 'PROC-7',
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+    };
+    const application = { draw_id: 7n, approve_status: 0, status: 1 };
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        update: vi.fn(),
+      },
+      hspsi_oa_approval_callback_log: { create: vi.fn() },
+    };
+    const { service } = serviceWithTransaction(tx, {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
+    });
+    const payload = {
+      prjCod: 'PRJ-1',
+      procStatus: 'REJECTED' as const,
+      busKey: 'requisition_application:7',
+      procInstId: 'PROC-7',
+      procKey: 'PROC-KEY',
+    };
+
+    const result = await service.handleOaApprovalResult(payload, payload);
+
+    expect(result).toMatchObject({ processed: true, duplicate: false, procStatus: 'REJECTED' });
+    expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith({
+      where: { draw_id: 7n },
+      data: expect.objectContaining({
+        approve_status: 2,
+        approve_comment: 'OA审批驳回',
+        approve_by: 0n,
+        status: 0,
+      }),
+    });
+    expect(tx.hspsi_oa_approval_callback_log.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ processed: 1, proc_status: 'REJECTED' }),
+    });
   });
 });

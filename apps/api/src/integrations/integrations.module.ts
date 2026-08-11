@@ -13,6 +13,6 @@ import { HuasuHomeModule } from './huasu-home/huasu-home.module';
 @Module({
   imports: [XinfutongOaModule, ShifangQingyuanModule, HuasuHomeModule],
   providers: [HttpClientService, IntegrationLoggerService],
-  exports: [HttpClientService, IntegrationLoggerService],
+  exports: [HttpClientService, IntegrationLoggerService, XinfutongOaModule],
 })
 export class IntegrationsModule {}
