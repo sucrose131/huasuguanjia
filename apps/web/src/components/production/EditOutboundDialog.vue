@@ -3,10 +3,12 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import { lineUnitName, type UnitOption } from '@/utils/unit-name';
 
 type B = Record<string, any>;
 
-const props = defineProps<{ modelValue: boolean; outRow: B }>();
+const props = defineProps<{ modelValue: boolean; outRow: B; units?: UnitOption[] }>();
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'done'): void }>();
 
 const loading = ref(false);
@@ -67,7 +69,7 @@ async function load() {
             goodsName: pd.goodsName ?? '',
             goodsCode: pd.goodsCode ?? '',
             skuSpec: pd.skuSpec ?? '',
-            unitName: pd.unitName ?? '—',
+            unitName: lineUnitName(props.units, pd),
             bomUnitQty: pd.bomUnitQty ?? '',
             totalDemand: pd.standardQty ?? pd.planQty,
           };
@@ -88,7 +90,7 @@ async function load() {
             goodsCode: od.goodsCode ?? od.queryCode ?? '—',
             goodsName: od.goodsName ?? '—',
             skuSpec: od.skuSpec ?? od.goodsSpec ?? od.specModels ?? '—',
-            unitName: od.unitName ?? od.unitTypeName ?? od.unitType ?? '—',
+            unitName: lineUnitName(props.units, od),
             batchRows: [
               {
                 batchNo: od.batchNo,
@@ -125,7 +127,7 @@ async function onGoodsChanged(row: B) {
   row.goodsCode = goods.queryCode ?? '';
   row.goodsName = goods.goodsName ?? '';
   row.skuSpec = sku?.specModels ?? sku?.spec_models ?? goods.specModels ?? '';
-  row.unitName = goods.unitName ?? '';
+  row.unitName = lineUnitName(props.units, { ...goods, unitType: row.unitType }, '');
   row.stockQty = allStocks.value
     .filter(
       (stock: B) =>
@@ -216,6 +218,11 @@ watch(visible, (v) => {
         :mode="outRow.outType === 3 ? 'lab' : 'execute'"
         @update:rows="onRowsChanged"
         @goodsChanged="onGoodsChanged"
+      />
+      <DocumentAttachments
+        v-if="outRow.id"
+        document-type="production_material_output"
+        :document-id="outRow.id"
       />
     </template>
     <template #footer>

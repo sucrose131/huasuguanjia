@@ -11,16 +11,261 @@ function serviceWith(
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
-    { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+    { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
   );
 }
+
+describe('PurchaseService quick catalog materialization', () => {
+  it('creates goods under an enabled parent category inside the document transaction', async () => {
+    const goodsCreate = vi.fn().mockResolvedValue({ goods_id: 101n });
+    const skuCreate = vi.fn().mockResolvedValue({ sku_id: 202n });
+    const childCount = vi.fn().mockResolvedValue(2);
+    const tx = {
+      hspsi_goods_info: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: goodsCreate,
+      },
+      hspsi_goods_info_category: {
+        findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
+        count: childCount,
+      },
+      hspsi_goods_info_sku: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        create: skuCreate,
+      },
+    };
+    const line: Record<string, any> = {
+      goodsId: 'quick-goods',
+      skuId: 'quick-sku',
+      unitType: 5,
+      newGoods: {
+        goodsName: '快捷补充商品',
+        categoryId: 3,
+        unitType: 5,
+        specModels: '盒装',
+      },
+      newSku: { specModels: '盒装', unitType: 5, pcsQty: 12, costPrice: 2 },
+    };
+
+    await (serviceWith({}) as any).materializeQuickCatalog(tx, [line], '9');
+
+    expect(goodsCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        goods_name: '快捷补充商品',
+        goods_catg_id: 3n,
+        org_id: 0n,
+        vendor_id: 0n,
+        warehouse_id: 0n,
+      }),
+    });
+    expect(skuCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        good_id: 101n,
+        spec_models: '盒装',
+        pcs_qty: 12,
+        is_default: 1,
+      }),
+    });
+    expect(line.goodsId).toBe(101n);
+    expect(line.skuId).toBe(202n);
+    expect(childCount).not.toHaveBeenCalled();
+  });
+
+  it('materializes staged goods before a direct receipt writes its generated documents', async () => {
+    const service = serviceWith({});
+    const expected = new Error('stop after materialization');
+    const materialize = vi
+      .spyOn(service as any, 'materializeQuickCatalog')
+      .mockRejectedValue(expected);
+    vi.spyOn(service as any, 'guardedTransaction').mockImplementation((async (
+      callback: (tx: Record<string, never>) => unknown,
+    ) => callback({})) as any);
+    const details = [
+      {
+        goodsId: 'quick-goods',
+        skuId: 'quick-sku',
+        inputQuantity: 1,
+        unitType: 5,
+        newGoods: { goodsName: '直接入库快捷商品', categoryId: 3, unitType: 5 },
+        newSku: { specModels: '默认规格', unitType: 5, pcsQty: 1 },
+      },
+    ];
+
+    await expect(
+      service.saveReceipt(
+        null,
+        {
+          orderId: '',
+          orgId: 1,
+          warehouseId: 2,
+          deptId: 3,
+          receiverId: 9,
+          inputType: 1,
+          details,
+        },
+        '9',
+      ),
+    ).rejects.toBe(expected);
+    expect(materialize).toHaveBeenCalledWith({}, expect.any(Array), '9');
+  });
+
+  it('uses the newly created goods and default SKU across the complete direct-receipt document chain', async () => {
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const goodsCreate = vi.fn().mockResolvedValue({ goods_id: 101n });
+    const skuCreate = vi.fn().mockResolvedValue({ sku_id: 202n });
+    const applicationCreate = vi.fn().mockResolvedValue({ pur_id: 301n });
+    const applicationDetailCreate = vi.fn();
+    const orderCreate = vi.fn().mockResolvedValue({ po_id: 401n });
+    const orderDetailCreate = vi.fn();
+    const receiptCreate = vi.fn().mockResolvedValue({ po_input_id: 501n });
+    const receiptDetailCreate = vi.fn();
+    const tx = {
+      hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null), create: goodsCreate },
+      hspsi_goods_info_category: {
+        findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      hspsi_goods_info_sku: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        create: skuCreate,
+      },
+      hspsi_purchase_approve: { create: applicationCreate, update: vi.fn() },
+      hspsi_purchase_approve_detail: { createMany: applicationDetailCreate },
+      hspsi_purchase_order: { create: orderCreate },
+      hspsi_purchase_order_detail: { createMany: orderDetailCreate },
+      hspsi_purchase_order_input: { create: receiptCreate },
+      hspsi_purchase_order_input_detail: {
+        deleteMany: vi.fn(),
+        createMany: receiptDetailCreate,
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    vi.spyOn(service as any, 'dictionaryValue').mockResolvedValue(99);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+
+    const result = await service.saveReceipt(
+      null,
+      {
+        orderId: '',
+        orgId: 1,
+        warehouseId: 2,
+        deptId: 3,
+        vendorId: 4,
+        receiverId: 9,
+        inputType: 1,
+        details: [
+          {
+            goodsId: 'quick-goods',
+            skuId: 'quick-sku',
+            inputQuantity: 2,
+            unitPrice: 12.5,
+            unitType: 5,
+            batchNo: 'PH20260809',
+            newGoods: { goodsName: '直接入库全链路商品', categoryId: 3, unitType: 5 },
+            newSku: { specModels: '默认规格', unitType: 5, pcsQty: 1 },
+          },
+        ],
+      },
+      '9',
+    );
+
+    expect(goodsCreate).toHaveBeenCalledOnce();
+    expect(skuCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ good_id: 101n, spec_models: '默认规格', is_default: 1 }),
+    });
+    expect(applicationDetailCreate).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, qty: 2 })],
+    });
+    expect(orderDetailCreate).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, qty: 2 })],
+    });
+    expect(receiptDetailCreate).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, input_qty: 2 })],
+    });
+    expect(trace.link).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(expect.objectContaining({ id: 501n, message: '入库单已创建' }));
+  });
+});
+
+describe('PurchaseService receipt confirmation', () => {
+  it('posts inventory and marks a pending receipt as confirmed', async () => {
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const receiptUpdate = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_input_id: 501n,
+          po_input_no: 'GA501',
+          po_id: 401n,
+          warehouse_id: 2n,
+          comfirm_status: 0,
+          posting_version: 0,
+        }),
+        findMany: vi.fn().mockResolvedValue([]),
+        update: receiptUpdate,
+      },
+      hspsi_purchase_order: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ po_id: 401n, po_no: 'PO401', pur_id: 301n }),
+      },
+      hspsi_purchase_order_detail: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ id: 1n, goods_id: 101n, sku_id: 202n, qty: 2, cancel_qty: 0 }]),
+      },
+      hspsi_purchase_order_input_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            goods_id: 101n,
+            sku_id: 202n,
+            batch_no: 'PH20260809',
+            unit_type: 5,
+            input_qty: 2,
+            validity_period: null,
+          },
+        ]),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    const postReceipt = vi.spyOn(service as any, 'postReceipt').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncProductionShortageState').mockResolvedValue(undefined);
+
+    const result = await service.confirmReceipt('501', true, '办理采购入库', '9');
+
+    expect(postReceipt).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        po_input_id: 501n,
+        receiptNo: 'GA501',
+        details: [expect.objectContaining({ goodsId: 101n, skuId: 202n, inputQuantity: 2 })],
+      }),
+      1,
+      '9',
+      1,
+    );
+    expect(receiptUpdate).toHaveBeenCalledWith({
+      where: { po_input_id: 501n },
+      data: expect.objectContaining({ comfirm_status: 1, posting_version: 1, updated_by: 9n }),
+    });
+    expect(result.message).toBe('入库已确认，库存已增加');
+  });
+});
 
 describe('PurchaseService production-shortage guards', () => {
   it('creates one pending purchase-refund task for an effective paid return', async () => {
     const refundCreate = vi.fn().mockResolvedValue({
       refund_id: 77n,
       po_exit_id: 30n,
-      refund_no: 'PRF20260804000001',
+      refund_no: 'PRF202608040001',
     });
     const refundUpdate = vi.fn().mockResolvedValue({ refund_id: 77n, refund_no: 'CGTK77' });
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
@@ -82,7 +327,7 @@ describe('PurchaseService production-shortage guards', () => {
     const created = refundCreate.mock.calls[0]![0].data;
     expect(Number(created.return_amount)).toBe(30);
     expect(Number(created.refundable_amount)).toBe(30);
-    expect(created.refund_no).toBe('PRF20260804000001');
+    expect(created.refund_no).toBe('PRF202608040001');
     expect(refundUpdate).not.toHaveBeenCalled();
     expect(trace.link).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -91,7 +336,7 @@ describe('PurchaseService production-shortage guards', () => {
       }),
       tx,
     );
-    expect(result.refund_no).toBe('PRF20260804000001');
+    expect(result.refund_no).toBe('PRF202608040001');
   });
 
   it('does not create a refund task when payment does not exceed the effective payable', async () => {

@@ -3,8 +3,11 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
+import { generateBatchNo } from '@/utils/batch-number';
+import { createRequestId } from '@/utils/random-id';
 
 type Row = Record<string, any>;
 type Option = { value: string | number; label: string; raw?: Row };
@@ -91,7 +94,7 @@ function resetForm() {
         ? 'initial'
         : 'entrusted_purchase'
       : 'direct_output',
-    requestKey: crypto.randomUUID(),
+    requestKey: createRequestId(),
     businessDate: dateText(new Date()),
     orgId: auth.user?.orgId ?? '',
     warehouseId: '',
@@ -122,7 +125,7 @@ function addLine() {
     selectKey: '',
     goodsId: '',
     skuId: '',
-    batchNo: '',
+    batchNo: isInput.value ? generateBatchNo() : '',
     quantity: 1,
     piecesPerUnit: 1,
     documentUnitName: '',
@@ -265,6 +268,8 @@ onMounted(async () => {
         <el-button type="primary" @click="load">查询</el-button>
       </div>
       <el-table :data="rows" v-loading="loading">
+        <el-table-column type="index" label="序号" width="65" />
+        <el-table-column prop="id" label="ID" width="100" />
         <el-table-column prop="businessNo" label="单号" min-width="180" />
         <el-table-column label="类型" width="130"
           ><template #default="s">{{
@@ -438,6 +443,11 @@ onMounted(async () => {
         </div>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" /></el-form-item>
       </el-form>
+      <DocumentAttachments
+        v-if="viewing && form.id"
+        document-type="inventory_general_order"
+        :document-id="form.id"
+      />
       <template #footer
         ><el-button @click="dialog = false">关闭</el-button
         ><el-button v-if="!viewing" type="primary" :loading="saving" @click="save"

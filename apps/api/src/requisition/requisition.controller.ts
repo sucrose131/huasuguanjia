@@ -16,11 +16,15 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { RequisitionService } from './requisition.service';
+import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('requisitions')
 export class RequisitionController {
-  constructor(@Inject(RequisitionService) private readonly service: RequisitionService) {}
+  constructor(
+    @Inject(RequisitionService) private readonly service: RequisitionService,
+    @Inject(RequisitionOaApprovalService) private readonly oaApproval: RequisitionOaApprovalService,
+  ) {}
 
   @RequirePermissions('requisitions')
   @Get('applications')
@@ -50,6 +54,19 @@ export class RequisitionController {
   @Patch('applications/:id')
   updateApplication(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
     return this.service.saveApplication(id, body, user.id, Boolean(body.submit));
+  }
+
+  @RequirePermissions('requisitions')
+  @Post('applications/:id/submit-oa')
+  async submitApplicationToOa(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    const result = await this.oaApproval.submit(BigInt(id), user.id);
+    return {
+      ...result,
+      message:
+        result.procStatus === 'PUSH_FAILED'
+          ? `提交OA失败：${result.errorMessage ?? '请稍后重试'}`
+          : '已提交OA审批',
+    };
   }
 
   @RequirePermissions('requisitions')

@@ -6,13 +6,17 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
+import PurchaseOperationHistoryDialog from '@/components/PurchaseOperationHistoryDialog.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import DataState from '@/components/DataState.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import PurchaseReceiptDetails from '@/components/PurchaseReceiptDetails.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display, moneyText } from '@/utils/format';
+import { generateBatchNo } from '@/utils/batch-number';
 import { purchaseDocumentType } from '@/utils/document-type';
+import { buildCategoryTree } from '@/utils/category-tree';
 
 type Mode = 'create' | 'edit' | 'view' | 'cancel' | 'refund' | 'payment';
 type Option = { label: string; value: string | number };
@@ -83,6 +87,12 @@ const detail = ref<any>(null);
 const formRef = ref<FormInstance>();
 const form = reactive<any>({});
 const traceVisible = ref(false);
+const operationHistoryVisible = ref(false);
+const quickCatalogVisible = ref(false);
+const quickCatalogChecking = ref(false);
+const quickCatalogMode = ref<'goods' | 'sku'>('goods');
+const quickCatalogLine = ref<any>(null);
+const quickCatalogForm = reactive<any>({});
 const traceRow = ref<any>({});
 const traceType = computed(() => purchaseDocumentType(resource.value));
 const traceNo = computed(
@@ -119,7 +129,24 @@ const options = reactive<Record<string, any[]>>({
   orders: [],
   receipts: [],
   applications: [],
+  categories: [],
+  units: [],
 });
+const quickCategoryTreeProps = {
+  value: 'id',
+  label: 'name',
+  children: 'children',
+  disabled: 'disabled',
+};
+const markQuickCategories = (nodes: any[]): any[] =>
+  nodes.map((item) => ({
+    ...item,
+    disabled: Number(item.status) !== 1 || Number(item.warehouseType) <= 0,
+    children: markQuickCategories(item.children ?? []),
+  }));
+const quickCategoryTree = computed(() =>
+  markQuickCategories(buildCategoryTree(options.categories ?? [])),
+);
 const organizationOptions = reactive<{ orgId: string; departments: any[]; warehouses: any[] }>({
   orgId: '',
   departments: [],
@@ -140,6 +167,7 @@ const dictCodes = [
   'approval_status',
   'purchase_input_status',
   'purchase_return_status',
+  'warehouse_type',
 ];
 const optionOrgId = (item: any) => item.orgId ?? item.raw?.orgId ?? item.raw?.organization?.id;
 const filteredDepartments = computed(() => {
@@ -172,7 +200,7 @@ const compatibleWarehouses = computed(() =>
       !documentWarehouseType.value || optionWarehouseType(item) === documentWarehouseType.value,
   ),
 );
-function availableGoods(line: any) {
+function requiredGoodsWarehouseType(line: any) {
   const otherType = [
     ...new Set(
       (form.details ?? [])
@@ -184,11 +212,62 @@ function availableGoods(line: any) {
   const selectedWarehouse = filteredWarehouses.value.find(
     (item) => String(item.value) === String(form.warehouseId),
   );
-  const requiredType = Number(otherType || optionWarehouseType(selectedWarehouse));
-  return (options.goods ?? []).filter(
+  return Number(otherType || optionWarehouseType(selectedWarehouse));
+}
+function compatibleGoods(line: any, items: any[]) {
+  const requiredType = requiredGoodsWarehouseType(line);
+  return items.filter(
     (item) => !requiredType || Number(item.categoryWarehouseType) === requiredType,
   );
 }
+function availableGoods(line: any) {
+  return compatibleGoods(line, options.goods ?? []);
+}
+function mergeGoodsOptions(items: any[]) {
+  const merged = new Map((options.goods ?? []).map((item) => [String(item.id), item]));
+  items.forEach((item) => merged.set(String(item.id), item));
+  options.goods = [...merged.values()];
+}
+const goodsSearchTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+const goodsSearchVersions = new WeakMap<object, number>();
+function remoteSearchGoods(line: any, keyword: string) {
+  line.goodsSearchKeyword = keyword;
+  line.goodsSearchFailed = false;
+  line.remoteGoods = [];
+  const previousTimer = goodsSearchTimers.get(line);
+  if (previousTimer) clearTimeout(previousTimer);
+  const normalized = String(keyword ?? '').trim();
+  const version = (goodsSearchVersions.get(line) ?? 0) + 1;
+  goodsSearchVersions.set(line, version);
+  if (!normalized) {
+    line.goodsLoading = false;
+    return;
+  }
+  line.goodsLoading = true;
+  const timer = setTimeout(async () => {
+    try {
+      const result = (await api.get('/goods', {
+        params: { keyword: normalized, pageSize: 50, status: 1 },
+      })) as any;
+      if (goodsSearchVersions.get(line) !== version) return;
+      const items = compatibleGoods(line, result.items ?? []);
+      line.remoteGoods = items;
+      mergeGoodsOptions(items);
+    } catch {
+      if (goodsSearchVersions.get(line) !== version) return;
+      line.goodsSearchFailed = true;
+      line.remoteGoods = [];
+    } finally {
+      if (goodsSearchVersions.get(line) === version) line.goodsLoading = false;
+    }
+  }, 250);
+  goodsSearchTimers.set(line, timer);
+}
+function searchedGoods(line: any) {
+  const keyword = String(line.goodsSearchKeyword ?? '').trim();
+  return keyword ? compatibleGoods(line, line.remoteGoods ?? []) : availableGoods(line);
+}
+const quickGoodsName = (line: any) => String(line.goodsSearchKeyword ?? '').trim();
 const rules: FormRules = {
   orgId: [{ required: true, message: '请选择所属组织', trigger: 'change' }],
   deptId: [{ required: true, message: '请选择部门', trigger: 'change' }],
@@ -211,6 +290,7 @@ const goodsName = (id: unknown) => byId('goods', id)?.goodsName ?? '—';
 const goodsCode = (line: any) => line.goodsCode ?? byId('goods', line.goodsId)?.queryCode ?? '—';
 const goodsCategory = (line: any) =>
   line.categoryName ?? byId('goods', line.goodsId)?.categoryName ?? '—';
+const unitName = (value: unknown) => lookup('units', value);
 const skuText = (line: any) =>
   line.skuLabel ?? line.skuName ?? (line.skuId ? `规格 ${line.skuId}` : '—');
 const creator = (row: any) =>
@@ -331,18 +411,31 @@ async function load() {
   }
 }
 async function loadOptions() {
-  const [orgs, depts, warehouses, vendors, goods, orders, receipts, applications, ...dictionaries] =
-    (await Promise.all([
-      api.get('/base-data/organizations/options'),
-      api.get('/base-data/departments/options'),
-      api.get('/base-data/warehouses/options'),
-      api.get('/base-data/vendors/options'),
-      api.get('/goods', { params: { pageSize: 100, status: 1 } }),
-      api.get('/purchase/orders', { params: { pageSize: 100 } }),
-      api.get('/purchase/receipts', { params: { pageSize: 100, confirmStatus: 1 } }),
-      api.get('/purchase/applications', { params: { pageSize: 100, approveStatus: 1 } }),
-      ...dictCodes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
-    ])) as any[];
+  const [
+    orgs,
+    depts,
+    warehouses,
+    vendors,
+    goods,
+    orders,
+    receipts,
+    applications,
+    categories,
+    units,
+    ...dictionaries
+  ] = (await Promise.all([
+    api.get('/base-data/organizations/options'),
+    api.get('/base-data/departments/options'),
+    api.get('/base-data/warehouses/options'),
+    api.get('/base-data/vendors/options'),
+    api.get('/goods', { params: { pageSize: 100, status: 1 } }),
+    api.get('/purchase/orders', { params: { pageSize: 100 } }),
+    api.get('/purchase/receipts', { params: { pageSize: 100, confirmStatus: 1 } }),
+    api.get('/purchase/applications', { params: { pageSize: 100, approveStatus: 1 } }),
+    api.get('/goods/categories'),
+    api.get('/base-data/units/options'),
+    ...dictCodes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
+  ])) as any[];
   options.organizations = orgs;
   options.departments = depts;
   options.warehouses = warehouses;
@@ -363,6 +456,8 @@ async function loadOptions() {
     label: item.applicationNo,
     value: item.id,
   }));
+  options.categories = categories.items ?? [];
+  options.units = units ?? [];
   dictCodes.forEach((code, index) => {
     dicts[code] = dictionaries[index] ?? [];
   });
@@ -414,6 +509,10 @@ function blankLine() {
     skuId: '',
     skuOptions: [],
     categoryWarehouseType: 0,
+    goodsSearchKeyword: '',
+    remoteGoods: [],
+    goodsLoading: false,
+    goodsSearchFailed: false,
     quantity: 1,
     unitType: 0,
     referencePrice: 0,
@@ -427,7 +526,7 @@ function blankLine() {
     latestArrivalDate: '',
     inputQuantity: 1,
     returnQuantity: 1,
-    batchNo: '',
+    batchNo: resource.value === 'receipts' ? generateBatchNo() : '',
     position: '',
     productionDate: '',
     validityPeriod: '',
@@ -524,10 +623,11 @@ function resetForm() {
 async function enrichLine(line: any) {
   if (!line.goodsId) return;
   const product = (await api.get(`/goods/${line.goodsId}`)) as any;
+  mergeGoodsOptions([product]);
   line.categoryWarehouseType = Number(product.categoryWarehouseType ?? 0);
   line.categoryName = product.categoryName ?? line.categoryName;
   line.skuOptions = (product.skus ?? []).map((sku: any) => ({
-    label: sku.skuName || sku.skuNo || `规格 ${sku.id}`,
+    label: sku.specModels || sku.skuName || sku.skuNo || `规格 ${sku.id}`,
     value: sku.id,
     unitType: sku.unitType,
     costPrice: Number(sku.costPrice ?? product.costPrice ?? 0),
@@ -536,6 +636,7 @@ async function enrichLine(line: any) {
   const selected = line.skuOptions.find((item: any) => String(item.value) === String(line.skuId));
   line.skuLabel = selected?.label;
   if (selected?.unitType) line.unitType = selected.unitType;
+  else if (!Number(line.unitType) && product.unitType) line.unitType = product.unitType;
   if (
     (resource.value === 'orders' || (resource.value === 'receipts' && form.directReceipt)) &&
     !Number(line.unitPrice)
@@ -543,6 +644,8 @@ async function enrichLine(line: any) {
     line.unitPrice = Number(selected?.costPrice ?? product.costPrice ?? 0);
 }
 async function goodsChanged(line: any) {
+  delete line.newGoods;
+  delete line.newSku;
   line.skuId = '';
   await enrichLine(line);
   const warehouse = filteredWarehouses.value.find(
@@ -556,6 +659,151 @@ async function goodsChanged(line: any) {
     form.warehouseId = '';
     ElMessage.warning('所选商品要求的仓库类型已变化，请重新选择同类型仓库');
   }
+}
+function openQuickCatalog(line: any, kind: 'goods' | 'sku', goodsName = '') {
+  quickCatalogMode.value = kind;
+  quickCatalogLine.value = line;
+  Object.keys(quickCatalogForm).forEach((key) => delete quickCatalogForm[key]);
+  const goods = byId('goods', line.goodsId);
+  Object.assign(quickCatalogForm, {
+    goodsName,
+    queryCode: '',
+    categoryId: '',
+    unitType: Number(line.unitType || goods?.unitType || 0) || '',
+    specModels: '',
+    costPrice: Number(line.referencePrice ?? line.unitPrice ?? 0),
+    salePrice: 0,
+    pcsQty: 1,
+  });
+  quickCatalogVisible.value = true;
+}
+async function globalGoodsAvailability(goodsName: string) {
+  return (await api.get('/goods/name-availability', {
+    params: { name: goodsName },
+  })) as any;
+}
+function warehouseTypeText(value: unknown) {
+  const label = dictLabel('warehouse_type', value);
+  return label === '—' ? `仓库类型 ${value}` : label;
+}
+async function explainUnavailableGlobalGoods(result: any, goodsName: string) {
+  const categoryText = result.categoryName ? `，所属分类为“${result.categoryName}”` : '';
+  const messages: Record<string, string> = {
+    warehouse_type_unavailable: `全局商品主档中已经存在“${goodsName}”${categoryText}，要求使用“${warehouseTypeText(result.warehouseType)}”。当前组织没有启用该类型仓库，因此不能使用，也不能重复新增。请先配置对应类型仓库，或联系管理员调整商品分类。`,
+    goods_disabled: `全局商品主档中已经存在“${goodsName}”，但商品当前已停用，不能使用，也不能重复新增。请联系商品管理员恢复。`,
+    goods_deleted: `全局商品主档中已经存在“${goodsName}”的历史档案，不能重复新增。请联系商品管理员恢复或处理原档案。`,
+    category_disabled: `全局商品主档中已经存在“${goodsName}”${categoryText}，但该分类当前已停用，不能使用，也不能重复新增。`,
+    category_deleted: `全局商品主档中已经存在“${goodsName}”，但其分类当前不可用，不能使用，也不能重复新增。`,
+  };
+  await ElMessageBox.alert(
+    messages[result.reason] ??
+      `全局商品主档中已经存在“${goodsName}”，当前不可使用，也不能重复新增。`,
+    '商品已存在但当前不可用',
+    { confirmButtonText: '我知道了', type: 'warning' },
+  ).catch(() => undefined);
+}
+async function useExistingGlobalGoods(line: any, result: any) {
+  const goods = result.goods;
+  if (!goods?.id) return;
+  mergeGoodsOptions([goods]);
+  line.goodsId = goods.id;
+  line.goodsSearchKeyword = '';
+  await goodsChanged(line);
+  quickCatalogVisible.value = false;
+  ElMessage.success(`商品“${goods.goodsName}”已存在，已为你选择现有商品`);
+}
+async function requestQuickCatalog(line: any, goodsName: string) {
+  const normalizedName = goodsName.trim();
+  if (!normalizedName || quickCatalogChecking.value) return;
+  quickCatalogChecking.value = true;
+  try {
+    const result = await globalGoodsAvailability(normalizedName);
+    if (!result.exists) {
+      openQuickCatalog(line, 'goods', normalizedName);
+      return;
+    }
+    if (result.usable) await useExistingGlobalGoods(line, result);
+    else await explainUnavailableGlobalGoods(result, normalizedName);
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.message ?? '全局商品名称检查失败，请稍后重试');
+  } finally {
+    quickCatalogChecking.value = false;
+  }
+}
+async function stageQuickCatalog() {
+  const line = quickCatalogLine.value;
+  if (!line) return;
+  if (quickCatalogMode.value === 'goods') {
+    const goodsName = String(quickCatalogForm.goodsName ?? '').trim();
+    if (!goodsName || !quickCatalogForm.categoryId || !quickCatalogForm.unitType) {
+      ElMessage.warning('请填写商品名称、分类和基础单位');
+      return;
+    }
+    quickCatalogChecking.value = true;
+    let availability: any;
+    try {
+      availability = await globalGoodsAvailability(goodsName);
+    } catch (e: any) {
+      ElMessage.error(e.response?.data?.message ?? '全局商品名称检查失败，请稍后重试');
+      quickCatalogChecking.value = false;
+      return;
+    }
+    quickCatalogChecking.value = false;
+    if (availability.exists) {
+      if (availability.usable) await useExistingGlobalGoods(line, availability);
+      else await explainUnavailableGlobalGoods(availability, goodsName);
+      return;
+    }
+    const category = (options.categories ?? []).find(
+      (item) => String(item.id) === String(quickCatalogForm.categoryId),
+    );
+    const token = `quick-goods-${Date.now()}-${Math.random()}`;
+    line.newGoods = {
+      goodsName,
+      categoryId: quickCatalogForm.categoryId,
+      unitType: Number(quickCatalogForm.unitType),
+    };
+    line.newSku = {
+      specModels: '默认规格',
+      unitType: Number(quickCatalogForm.unitType),
+      pcsQty: 1,
+      costPrice: 0,
+      salePrice: 0,
+    };
+    line.goodsId = token;
+    line.skuId = `${token}-sku`;
+    line.categoryName = category?.name ?? '';
+    line.categoryWarehouseType = Number(category?.warehouseType ?? 0);
+    line.unitType = Number(quickCatalogForm.unitType);
+    line.goodsSearchKeyword = '';
+    line.skuOptions = [{ label: line.newSku.specModels, value: line.skuId }];
+  } else {
+    const specModels = String(quickCatalogForm.specModels ?? '').trim();
+    if (!specModels || !quickCatalogForm.unitType) {
+      ElMessage.warning('请填写 SKU 规格和单位');
+      return;
+    }
+    const duplicate = (line.skuOptions ?? []).some(
+      (item: any) =>
+        String(item.label ?? '')
+          .trim()
+          .toLocaleLowerCase() === specModels.toLocaleLowerCase(),
+    );
+    if (duplicate) {
+      ElMessage.warning('该 SKU 规格已存在，请直接选择已有 SKU');
+      return;
+    }
+    line.newSku = { ...quickCatalogForm, specModels };
+    line.skuId = `quick-sku-${Date.now()}-${Math.random()}`;
+    line.unitType = Number(quickCatalogForm.unitType);
+    line.skuOptions = [
+      ...(line.skuOptions ?? []).filter(
+        (item: any) => !String(item.value).startsWith('quick-sku-'),
+      ),
+      { label: specModels, value: line.skuId },
+    ];
+  }
+  quickCatalogVisible.value = false;
 }
 async function sourceApplicationChanged() {
   if (!form.applicationId) return;
@@ -601,7 +849,7 @@ async function sourceOrderChanged() {
       baseUninputtedQuantity: Number(line.uninputtedQuantity ?? 0),
       remainingQuantity: Number(line.remainingQuantity ?? 0),
       inputQuantity: Number(line.remainingQuantity ?? 0),
-      batchNo: '',
+      batchNo: generateBatchNo(),
     }));
   if (!form.details.length) ElMessage.warning('该订单没有剩余可入库商品');
   await Promise.all(form.details.map(enrichLine));
@@ -877,15 +1125,6 @@ async function save(submit = false) {
   if (!(await formRef.value?.validate().catch(() => false)) || !validateLines()) return;
   saving.value = true;
   try {
-    if (resource.value === 'returns') {
-      const result = (await api.post(`/purchase/receipts/${form.receiptId}/return`, {
-        ...form,
-      })) as any;
-      ElMessage.success(result.message ?? '采购退货已完成，库存已扣减');
-      dialog.value = false;
-      await Promise.all([load(), loadOptions()]);
-      return;
-    }
     const url = `/purchase/${resource.value}${mode.value === 'edit' ? `/${detail.value.id ?? detail.value.po_id ?? detail.value.po_input_id ?? detail.value.po_exit_id}` : ''}`;
     const payload = {
       ...form,
@@ -1198,8 +1437,9 @@ async function closeRefund(row: any) {
 function editable(row: any) {
   if (resource.value === 'applications')
     return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
-  if (resource.value === 'returns' || resource.value === 'refunds' || resource.value === 'payments')
-    return false;
+  if (resource.value === 'returns')
+    return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
+  if (resource.value === 'refunds' || resource.value === 'payments') return false;
   if (resource.value === 'receipts') return Number(row.confirmStatus) === 0;
   if (resource.value === 'orders') return Number(row.orderStatus) === 1;
   return false;
@@ -1208,14 +1448,18 @@ function removable(row: any) {
   return (
     resource.value === 'payments' ||
     (resource.value === 'orders' && Number(row.orderStatus) === 1) ||
-    (resource.value === 'applications' && editable(row))
+    (['applications', 'returns'].includes(resource.value) && editable(row))
   );
 }
 function canSubmit(row: any) {
-  return resource.value === 'applications' && editable(row);
+  return ['applications', 'returns'].includes(resource.value) && editable(row);
 }
 function canApprove(row: any) {
-  return resource.value === 'applications' && Number(row.status) === 1 && approval(row) === 0;
+  return (
+    ['applications', 'returns'].includes(resource.value) &&
+    Number(row.status) === 1 &&
+    approval(row) === 0
+  );
 }
 function amount(row: any) {
   return (
@@ -1238,6 +1482,10 @@ function vendorOfOrder(id: unknown) {
 function openTrace(row: any) {
   traceRow.value = row;
   traceVisible.value = true;
+}
+function openOperationHistory(row: any) {
+  traceRow.value = row;
+  operationHistoryVisible.value = true;
 }
 
 watch([resource, () => route.query.receiptId, () => route.query.returnReceiptId], async () => {
@@ -1490,6 +1738,7 @@ onMounted(async () => {
               @create="openCreate"
           /></template>
           <el-table-column type="index" label="序号" width="64" fixed="left" />
+          <el-table-column prop="id" label="ID" width="100" fixed="left" />
           <template v-if="resource === 'applications'">
             <el-table-column
               prop="applicationNo"
@@ -1787,11 +2036,23 @@ onMounted(async () => {
                   >确认退款</el-button
                 >
                 <template #more>
-                  <!-- 暂时隐藏“业务链路”入口，保留底层查询能力以便后续恢复。
-                  <el-dropdown-item @click="openTrace(s.row)">业务链路</el-dropdown-item>
-                  -->
+                  <el-dropdown-item @click="openOperationHistory(s.row)">操作记录</el-dropdown-item>
                   <el-dropdown-item v-if="canSubmit(s.row)" @click="submit(s.row)"
                     >提交</el-dropdown-item
+                  >
+                  <el-dropdown-item
+                    v-if="
+                      resource === 'returns' &&
+                      s.row.sourceDocumentType === 'inventory_loss' &&
+                      s.row.sourceDocumentId
+                    "
+                    @click="
+                      router.push({
+                        path: '/inventory/losses',
+                        query: { documentId: String(s.row.sourceDocumentId), view: '1' },
+                      })
+                    "
+                    >查看来源报损单</el-dropdown-item
                   >
                   <el-dropdown-item
                     v-if="canApprove(s.row)"
@@ -2454,6 +2715,7 @@ onMounted(async () => {
           <PurchaseReceiptDetails
             v-if="resource === 'receipts' && !form.directReceipt"
             :details="form.details ?? []"
+            :units="options.units"
             :readonly="mode === 'view'"
           />
           <template v-else-if="resource === 'receipts' && form.directReceipt">
@@ -2466,19 +2728,45 @@ onMounted(async () => {
             <el-table :data="form.details" border class="detail-table direct-receipt-table">
               <el-table-column label="商品名称" min-width="152">
                 <template #default="s"
-                  ><el-select
-                    v-if="mode !== 'view'"
-                    v-model="s.row.goodsId"
-                    filterable
-                    @change="goodsChanged(s.row)"
-                    ><el-option
-                      v-for="item in availableGoods(s.row)"
-                      :key="item.id"
-                      :label="`${item.queryCode || ''} ${item.goodsName}`"
-                      :value="item.id" /></el-select
-                  ><span v-else class="readonly-cell">{{
-                    goodsName(s.row.goodsId)
-                  }}</span></template
+                  ><div v-if="mode !== 'view'" class="quick-catalog-cell">
+                    <el-select
+                      v-model="s.row.goodsId"
+                      filterable
+                      remote
+                      :remote-method="(keyword: string) => remoteSearchGoods(s.row, keyword)"
+                      :loading="s.row.goodsLoading"
+                      @change="goodsChanged(s.row)"
+                    >
+                      <el-option
+                        v-if="s.row.newGoods"
+                        :label="s.row.newGoods.goodsName"
+                        :value="s.row.goodsId"
+                      />
+                      <el-option
+                        v-for="item in searchedGoods(s.row)"
+                        :key="item.id"
+                        :label="`${item.queryCode || ''} ${item.goodsName}`"
+                        :value="item.id"
+                      />
+                      <template #empty>
+                        <div class="goods-select-empty">
+                          <span v-if="s.row.goodsSearchFailed">商品搜索失败，请重新输入</span>
+                          <span v-else-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
+                          <el-button
+                            v-else
+                            link
+                            type="primary"
+                            :loading="quickCatalogChecking"
+                            @click.stop="requestQuickCatalog(s.row, quickGoodsName(s.row))"
+                          >
+                            新增“{{ quickGoodsName(s.row) }}”
+                          </el-button>
+                        </div>
+                      </template>
+                    </el-select>
+                    <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
+                  </div>
+                  <span v-else class="readonly-cell">{{ goodsName(s.row.goodsId) }}</span></template
                 >
               </el-table-column>
               <el-table-column label="规格" min-width="128">
@@ -2649,23 +2937,52 @@ onMounted(async () => {
               >
               <el-table-column label="商品名称" min-width="160"
                 ><template #default="s"
-                  ><el-select
+                  ><div
                     v-if="
                       mode !== 'view' &&
                       (resource === 'applications' ||
                         (resource === 'orders' && !form.applicationId))
                     "
-                    v-model="s.row.goodsId"
-                    filterable
-                    @change="goodsChanged(s.row)"
-                    ><el-option
-                      v-for="item in availableGoods(s.row)"
-                      :key="item.id"
-                      :label="item.goodsName"
-                      :value="item.id" /></el-select
-                  ><span v-else class="readonly-cell">{{
-                    goodsName(s.row.goodsId)
-                  }}</span></template
+                    class="quick-catalog-cell"
+                  >
+                    <el-select
+                      v-model="s.row.goodsId"
+                      filterable
+                      remote
+                      :remote-method="(keyword: string) => remoteSearchGoods(s.row, keyword)"
+                      :loading="s.row.goodsLoading"
+                      @change="goodsChanged(s.row)"
+                    >
+                      <el-option
+                        v-if="s.row.newGoods"
+                        :label="s.row.newGoods.goodsName"
+                        :value="s.row.goodsId"
+                      />
+                      <el-option
+                        v-for="item in searchedGoods(s.row)"
+                        :key="item.id"
+                        :label="item.goodsName"
+                        :value="item.id"
+                      />
+                      <template #empty>
+                        <div class="goods-select-empty">
+                          <span v-if="s.row.goodsSearchFailed">商品搜索失败，请重新输入</span>
+                          <span v-else-if="!quickGoodsName(s.row)">请输入商品名称进行搜索</span>
+                          <el-button
+                            v-else
+                            link
+                            type="primary"
+                            :loading="quickCatalogChecking"
+                            @click.stop="requestQuickCatalog(s.row, quickGoodsName(s.row))"
+                          >
+                            新增“{{ quickGoodsName(s.row) }}”
+                          </el-button>
+                        </div>
+                      </template>
+                    </el-select>
+                    <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
+                  </div>
+                  <span v-else class="readonly-cell">{{ goodsName(s.row.goodsId) }}</span></template
                 ></el-table-column
               >
               <el-table-column v-if="resource === 'orders'" label="分类" min-width="112"
@@ -2673,23 +2990,41 @@ onMounted(async () => {
               >
               <el-table-column label="SKU/规格" min-width="136"
                 ><template #default="s"
-                  ><el-select
+                  ><div
                     v-if="
                       mode !== 'view' &&
                       (resource === 'applications' ||
                         (resource === 'orders' && !form.applicationId))
                     "
-                    v-model="s.row.skuId"
-                    ><el-option
-                      v-for="item in s.row.skuOptions"
-                      :key="item.value"
-                      :label="item.label"
-                      :value="item.value" /></el-select
-                  ><span v-else class="readonly-cell">{{ skuText(s.row) }}</span></template
+                    class="quick-catalog-cell"
+                  >
+                    <el-select v-model="s.row.skuId">
+                      <el-option
+                        v-if="s.row.newSku"
+                        :label="s.row.newSku.specModels"
+                        :value="s.row.skuId"
+                      />
+                      <el-option
+                        v-for="item in s.row.skuOptions"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                      />
+                    </el-select>
+                    <el-button
+                      v-if="!s.row.newGoods && s.row.goodsId"
+                      link
+                      type="primary"
+                      @click="openQuickCatalog(s.row, 'sku')"
+                    >
+                      补充 SKU
+                    </el-button>
+                  </div>
+                  <span v-else class="readonly-cell">{{ skuText(s.row) }}</span></template
                 ></el-table-column
               >
               <el-table-column label="单位" width="72"
-                ><template #default="s">{{ display(s.row.unitType) }}</template></el-table-column
+                ><template #default="s">{{ unitName(s.row.unitType) }}</template></el-table-column
               >
               <el-table-column
                 v-if="resource === 'applications' || resource === 'orders'"
@@ -2856,6 +3191,11 @@ onMounted(async () => {
           </template>
         </div>
       </el-form>
+      <DocumentAttachments
+        v-if="mode !== 'create' && traceType && (detail?.id || form.id)"
+        :document-type="traceType"
+        :document-id="detail?.id || form.id"
+      />
       <template #footer
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><template v-if="mode !== 'view'"
@@ -2877,7 +3217,10 @@ onMounted(async () => {
             :loading="saving"
             @click="confirmOrderPayment"
             >确认本次付款</el-button
-          ><el-button v-if="resource === 'applications'" :loading="saving" @click="save(false)"
+          ><el-button
+            v-if="['applications', 'returns'].includes(resource)"
+            :loading="saving"
+            @click="save(false)"
             >保存草稿</el-button
           ><el-button
             v-if="resource === 'orders' && !['cancel', 'payment'].includes(mode)"
@@ -2886,17 +3229,11 @@ onMounted(async () => {
             @click="save(false)"
             >保存采购订单</el-button
           ><el-button
-            v-if="resource === 'applications'"
+            v-if="['applications', 'returns'].includes(resource)"
             type="primary"
             :loading="saving"
             @click="save(true)"
             >提交审批</el-button
-          ><el-button
-            v-if="resource === 'returns'"
-            type="primary"
-            :loading="saving"
-            @click="save(true)"
-            >确认退货</el-button
           ><el-button
             v-if="resource === 'receipts'"
             type="primary"
@@ -2907,9 +3244,89 @@ onMounted(async () => {
         ></template
       >
     </el-dialog>
+    <el-dialog
+      v-model="quickCatalogVisible"
+      :title="quickCatalogMode === 'goods' ? '快捷新增商品' : '单据内补充 SKU'"
+      width="620"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        title="当前内容仅暂存在单据行中；保存或提交单据成功时才会创建正式商品/SKU档案。"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 14px"
+      />
+      <el-form label-position="top">
+        <div class="master-grid">
+          <el-form-item v-if="quickCatalogMode === 'goods'" label="商品名称" required>
+            <el-input v-model="quickCatalogForm.goodsName" />
+          </el-form-item>
+          <el-form-item v-if="quickCatalogMode === 'goods'" label="商品分类" required>
+            <el-tree-select
+              v-model="quickCatalogForm.categoryId"
+              :data="quickCategoryTree"
+              :props="quickCategoryTreeProps"
+              filterable
+              check-strictly
+              default-expand-all
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item label="基础单位" required>
+            <el-select v-model="quickCatalogForm.unitType" filterable style="width: 100%">
+              <el-option
+                v-for="item in options.units"
+                :key="item.value"
+                :label="item.label"
+                :value="Number(item.value)"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="quickCatalogMode === 'sku'" label="SKU规格">
+            <el-input v-model="quickCatalogForm.specModels" placeholder="留空则使用“默认规格”" />
+          </el-form-item>
+          <el-form-item v-if="quickCatalogMode === 'sku'" label="每业务单位基础件数" required>
+            <el-input-number
+              v-model="quickCatalogForm.pcsQty"
+              :min="1"
+              :precision="0"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item v-if="quickCatalogMode === 'sku'" label="基础件成本">
+            <el-input-number
+              v-model="quickCatalogForm.costPrice"
+              :min="0"
+              :precision="2"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item v-if="quickCatalogMode === 'sku'" label="销售价">
+            <el-input-number
+              v-model="quickCatalogForm.salePrice"
+              :min="0"
+              :precision="2"
+              style="width: 100%"
+            />
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="quickCatalogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="quickCatalogChecking" @click="stageQuickCatalog"
+          >暂存到单据行</el-button
+        >
+      </template>
+    </el-dialog>
     <DocumentTraceDialog
       v-model="traceVisible"
       :document-type="traceType"
+      :document-id="traceRow.id || ''"
+      :document-no="String(traceNo)"
+    />
+    <PurchaseOperationHistoryDialog
+      v-model="operationHistoryVisible"
+      :resource="resource"
       :document-id="traceRow.id || ''"
       :document-no="String(traceNo)"
     />
@@ -3069,6 +3486,21 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.quick-catalog-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.quick-catalog-cell .el-select {
+  width: 100%;
+}
+.goods-select-empty {
+  padding: 8px 12px;
+  color: #8791a5;
+  font-size: var(--hs-font-helper);
+  text-align: center;
 }
 .number-cell {
   text-align: right;
