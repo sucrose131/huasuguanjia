@@ -1024,22 +1024,29 @@ async function save(submit = true) {
       });
     }
     if (isMoney.value) form.requestKey = '';
-    ElMessage.success(
+    const resultMessage =
       result?.message ??
-        (isMoney.value
-          ? resource.value === 'payments'
-            ? '收款成功'
-            : '退款成功'
-          : submit
-            ? '保存成功'
-            : '草稿已保存'),
-    );
+      (isMoney.value
+        ? resource.value === 'payments'
+          ? '收款成功'
+          : '退款成功'
+        : submit
+          ? '保存成功'
+          : '草稿已保存');
+    if (result?.oaStatus === 'PUSH_FAILED') ElMessage.warning(resultMessage);
+    else ElMessage.success(resultMessage);
     query.page = 1;
     dialog.value = false;
     await load();
   } finally {
     saving.value = false;
   }
+}
+async function retryOa(row: B) {
+  const result: any = await api.post(`/requisitions/applications/${row.id}/submit-oa`, {});
+  if (result?.procStatus === 'PUSH_FAILED') ElMessage.warning(result?.message ?? '提交OA失败');
+  else ElMessage.success(result?.message ?? '已提交OA审批');
+  await load();
 }
 async function action(
   row: B,
@@ -1137,6 +1144,7 @@ async function remove(row: B) {
 }
 const canApprove = (r: B) =>
   key.value !== 'sales/orders' &&
+  !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(r.oaStatus ?? '')) &&
   Number(r.approveStatus ?? r.approve_status) === 0 &&
   (Number(r.status) === 1 || Number(r.planStatus) === 1 || group.value === 'sales');
 const canRejectReverseGeneratedApplication = (r: B) =>
@@ -1150,6 +1158,7 @@ const canConfirmSourcedDiscount = (r: B) =>
   Number(r.deliveryStatus ?? r.delivery_status) !== 3;
 const canEdit = (r: B) =>
   !isMoney.value &&
+  !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(r.oaStatus ?? '')) &&
   !(isService.value && r.sourceSystem) &&
   key.value !== 'production/inputs' &&
   Number(r.confirmStatus ?? r.comfirm_status) !== 1 &&
@@ -1741,6 +1750,12 @@ watch(key, async () => {
                   >业务链路</el-dropdown-item
                 >
                 -->
+                <el-dropdown-item
+                  v-if="key === 'requisitions/applications' && s.row.oaStatus === 'PUSH_FAILED'"
+                  class="table-action-warning"
+                  @click="retryOa(s.row)"
+                  >重新提交OA</el-dropdown-item
+                >
                 <el-dropdown-item
                   v-if="canApprove(s.row) || canConfirmSourcedDiscount(s.row)"
                   class="table-action-success"

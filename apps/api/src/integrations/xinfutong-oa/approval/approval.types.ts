@@ -17,11 +17,50 @@ export const FILE_UPLOAD_MAX_SIZE = 20 * 1024 * 1024;
 
 /** 允许上传的文件扩展名集合 */
 export const FILE_UPLOAD_ALLOWED_EXTENSIONS = new Set([
-  'BMP', 'DAT', 'DMG', 'DOC', 'DOCX', 'DPS', 'ET', 'GIF', 'JFIF', 'JPEG',
-  'JPG', 'MP3', 'MP4', 'P12', 'PDF', 'PEM', 'PNG', 'PPT', 'PPTX', 'RAR',
-  'TXT', 'WPS', 'XEC', 'XLS', 'XLSX', 'ZIP', 'DWG', 'MOV', 'BW', 'AI',
-  'CDR', 'COL', 'DXB', 'DXF', 'EPS', 'QT', 'AVI', 'MPEG', 'MPE', 'RM',
-  'ASF', 'STP', 'CSV', 'STEP',
+  'BMP',
+  'DAT',
+  'DMG',
+  'DOC',
+  'DOCX',
+  'DPS',
+  'ET',
+  'GIF',
+  'JFIF',
+  'JPEG',
+  'JPG',
+  'MP3',
+  'MP4',
+  'P12',
+  'PDF',
+  'PEM',
+  'PNG',
+  'PPT',
+  'PPTX',
+  'RAR',
+  'TXT',
+  'WPS',
+  'XEC',
+  'XLS',
+  'XLSX',
+  'ZIP',
+  'DWG',
+  'MOV',
+  'BW',
+  'AI',
+  'CDR',
+  'COL',
+  'DXB',
+  'DXF',
+  'EPS',
+  'QT',
+  'AVI',
+  'MPEG',
+  'MPE',
+  'RM',
+  'ASF',
+  'STP',
+  'CSV',
+  'STEP',
 ]);
 
 /** 文件名最大长度 */
@@ -34,13 +73,7 @@ export type ProcStartType = 'start' | 'trialStart' | 'restart';
 
 /** 流程状态 */
 export type ProcStatus =
-  | 'RUNNING'
-  | 'BACKTOSTART'
-  | 'PASSED'
-  | 'CANCELED'
-  | 'REJECTED'
-  | 'DELETED'
-  | 'WITHDRAWN';
+  'RUNNING' | 'BACKTOSTART' | 'PASSED' | 'CANCELED' | 'REJECTED' | 'DELETED' | 'WITHDRAWN';
 
 /** 发起流程v2 请求参数 */
 export interface FormStartParams {
