@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { dateText } from '@/utils/format';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import { createRequestId } from '@/utils/random-id';
 
 type B = Record<string, any>;
 
@@ -46,7 +47,7 @@ async function load() {
   attachmentDocumentId.value = '';
   attachmentDocumentNo.value = '';
   Object.assign(form, {
-    requestKey: crypto.randomUUID(),
+    requestKey: createRequestId(),
     returnDate: localDate(),
     returnReason: '',
     remark: '',

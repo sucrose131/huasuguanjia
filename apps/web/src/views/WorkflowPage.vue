@@ -7,6 +7,8 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { workflowDocumentType } from '@/utils/document-type';
+import { lineUnitName } from '@/utils/unit-name';
+import { createRequestId } from '@/utils/random-id';
 import { businessConfigs } from './business-config';
 import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
@@ -57,6 +59,7 @@ const key = computed(() => `${group.value}/${resource.value}`),
     applications: [],
     outputs: [],
     stocks: [],
+    units: [],
     dictionaries: {},
   });
 const temporaryCreateMode = ref(false);
@@ -190,7 +193,7 @@ function reset() {
     if (key.value === 'requisitions/applications' && form.details[0])
       form.details[0].returnable = false;
   }
-  if (isMoney.value) form.requestKey = crypto.randomUUID();
+  if (isMoney.value) form.requestKey = createRequestId();
   if (key.value === 'sales/discount-orders') form.propertyType = 2;
   serviceProgresses.value = [];
   resetProgressForm();
@@ -233,7 +236,7 @@ async function load() {
   }
 }
 async function loadOptions() {
-  const [o, w, d, c, u, g, bo, pl, so, ra, ro, st] = (await Promise.all([
+  const [o, w, d, c, u, g, bo, pl, so, ra, ro, st, units] = (await Promise.all([
     api.get('/base-data/organizations/options'),
     api.get('/base-data/warehouses/options'),
     api.get('/base-data/departments/options'),
@@ -246,6 +249,7 @@ async function loadOptions() {
     api.get('/requisitions/application-options'),
     api.get('/requisitions/output-options'),
     api.get('/inventory/stock-options'),
+    api.get('/base-data/units/options'),
   ])) as any[];
   Object.assign(options, {
     orgs: o,
@@ -260,6 +264,7 @@ async function loadOptions() {
     applications: ra,
     outputs: ro,
     stocks: st,
+    units,
   });
 }
 async function loadRequisitionFormOptions(orgId: unknown) {
@@ -321,7 +326,7 @@ const productionDialogRows = computed<B[]>(() => {
       goodsCode: line.goodsCode ?? goods.queryCode ?? '—',
       goodsName: line.goodsName ?? goods.goodsName ?? '—',
       skuSpec: line.skuSpec ?? line.goodsSpec ?? line.specModels ?? line.skuId ?? '—',
-      unitName: line.unitName ?? line.unitTypeName ?? line.unitType ?? '—',
+      unitName: lineUnitName(options.units, line),
       bomUnitQty: line.bomUnitQty ?? '—',
       totalDemand: line.standardQty ?? line.planOutQty ?? line.quantity ?? 0,
       stockQty: line.currentStock ?? 0,
@@ -970,7 +975,7 @@ async function save(submit = true) {
       ElMessage.warning('请至少选择一条完整的库存批次并填写出库数量');
       return;
     }
-    form.requestKey = form.requestKey || crypto.randomUUID();
+    form.requestKey = form.requestKey || createRequestId();
   }
   if (serviceNeedsBatch.value) {
     const selected = (form.details ?? []).filter((line: B) => Number(line.quantity) > 0);
@@ -1001,7 +1006,7 @@ async function save(submit = true) {
     if (isPlan.value || key.value === 'requisitions/applications')
       payload.submit = isPlan.value ? true : submit;
     if (isMoney.value) {
-      form.requestKey = form.requestKey || crypto.randomUUID();
+      form.requestKey = form.requestKey || createRequestId();
       payload.requestKey = form.requestKey;
       if (resource.value === 'refunds') payload.remark = String(form.remark ?? '').trim();
     }
@@ -1058,10 +1063,10 @@ async function action(
   }
   const url =
     type === 'terminate' && key.value === 'production/shortages'
-        ? `/production/plans/${row.planId}/terminate`
-        : type === 'undo-confirm'
-          ? `/${group.value}/${resource.value}/${row.id}/undo-confirm`
-          : `/${group.value}/${resource.value}/${row.id}/${type}`;
+      ? `/production/plans/${row.planId}/terminate`
+      : type === 'undo-confirm'
+        ? `/${group.value}/${resource.value}/${row.id}/undo-confirm`
+        : `/${group.value}/${resource.value}/${row.id}/${type}`;
   let body: B = {};
   if (type === 'approve') {
     let approveComment = '';
@@ -1282,7 +1287,7 @@ async function openDirectRequisitionOutput() {
   reset();
   mode.value = 'create';
   form.directOutput = true;
-  form.requestKey = crypto.randomUUID();
+  form.requestKey = createRequestId();
   form.drawType = 2;
   form.details = [{ ...blank(), returnable: true }];
   await loadRequisitionFormOptions(form.orgId);
@@ -1697,11 +1702,7 @@ watch(key, async () => {
                         type="primary"
                         @click="confirmPendingSupplement(d.row)"
                         >确认出库</el-button
-                      ><el-button
-                        v-else
-                        link
-                        type="success"
-                        @click="openBomReturn(d.row)"
+                      ><el-button v-else link type="success" @click="openBomReturn(d.row)"
                         >BOM退库</el-button
                       ></template
                     ></el-table-column
@@ -2860,7 +2861,7 @@ watch(key, async () => {
           >
           <el-table-column label="单位" width="90"
             ><template #default="s">{{
-              s.row.unitName || s.row.unitType || '—'
+              lineUnitName(options.units, s.row)
             }}</template></el-table-column
           >
           <el-table-column
@@ -3282,7 +3283,7 @@ watch(key, async () => {
                       ? '保存并提交审核'
                       : key === 'sales/orders'
                         ? '保存销售订单'
-                      : '保存'
+                        : '保存'
           }}</el-button
         >
       </template>
@@ -3293,8 +3294,13 @@ watch(key, async () => {
       :outDoc="selectedOutRow"
       @done="onDialogDone"
     />
-    <EditOutboundDialog v-model="editOutVisible" :outRow="selectedOutRow" @done="onDialogDone" />
-    <ViewOutboundDialog v-model="viewOutVisible" :outRow="selectedOutRow" />
+    <EditOutboundDialog
+      v-model="editOutVisible"
+      :outRow="selectedOutRow"
+      :units="options.units"
+      @done="onDialogDone"
+    />
+    <ViewOutboundDialog v-model="viewOutVisible" :outRow="selectedOutRow" :units="options.units" />
     <BomReturnDialog v-model="bomReturnVisible" :outRow="selectedOutRow" @done="onDialogDone" />
     <LabOutboundDialog v-model="labOutVisible" @done="onDialogDone" />
     <InputDialog
