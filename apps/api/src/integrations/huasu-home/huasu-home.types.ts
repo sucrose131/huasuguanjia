@@ -271,6 +271,49 @@ export interface HuasuHomeOrderPayment {
   [key: string]: unknown;
 }
 
+/** 售后权益扣减记录（回库数量 = gift_number + buy_number） */
+export interface HuasuHomeRightsDeductedRecord {
+  id?: number;
+  after_sales_id?: number;
+  user_id?: number;
+  /** 1-个人权益 2-家庭组权益 */
+  rights_type?: number;
+  /** 退回商品 id（华溯 product_id） */
+  product_id: number;
+  family_code?: string;
+  buy_number?: number;
+  gift_number?: number;
+  remark?: string;
+  operator_id?: number;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+/** 售后单（列表/详情嵌套 after_sales） */
+export interface HuasuHomeAfterSales {
+  id?: number;
+  order_id?: number;
+  order_sn?: string;
+  user_id?: number;
+  after_sales_no?: string;
+  /** 1-退款 2-退货退款 3-换货 4-异常售后 */
+  type?: number;
+  initiator_type?: number;
+  reason?: string;
+  remark?: string;
+  /** 0-待处理 1-处理中 2-已完成 3-已拒绝 */
+  status?: number;
+  images?: string;
+  amount?: string | number;
+  operator_id?: number;
+  operator_type?: number;
+  processed_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  rights_deducted_records?: HuasuHomeRightsDeductedRecord[] | null;
+}
+
 /** 订单快照（列表单条 / 详情主体字段一致；个别字段类型可能略有差异） */
 export interface HuasuHomeOrder {
   actual_amount: number | string;
@@ -279,6 +322,7 @@ export interface HuasuHomeOrder {
   after_sales_amount?: number;
   after_sales_status?: number;
   after_sales_type?: number;
+  after_sales?: HuasuHomeAfterSales | null;
   auto_ship_time?: number;
   cancel_reason?: string;
   consignee?: string;

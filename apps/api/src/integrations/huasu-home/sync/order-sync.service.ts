@@ -26,6 +26,7 @@ import type {
   HuasuHomeOrder,
   HuasuHomeOrderItem,
   HuasuHomeOrderPackageItem,
+  HuasuHomeRightsDeductedRecord,
 } from '../huasu-home.types';
 import { HuasuHomeExternalInventoryPostingService } from './external-inventory-posting.service';
 import type { HuasuHomeOrderSyncOptions, HuasuHomeOrderSyncStats } from './order-sync.types';
@@ -401,12 +402,7 @@ export class HuasuHomeOrderSyncService {
       approve_comment: '华溯之家已支付订单同步',
       approve_by: operatorId,
       approve_date: now,
-      remark: this.clip(
-        [order.remark, order.cancel_reason ? `取消原因:${order.cancel_reason}` : '']
-          .filter(Boolean)
-          .join('；'),
-        255,
-      ),
+      remark: this.clip(order.remark ?? '', 255),
       updated_by: operatorId,
       updated_at: now,
     };
@@ -515,7 +511,7 @@ export class HuasuHomeOrderSyncService {
           this.parseDate(input.order.created_at) ??
           input.now,
         request_key: key,
-        remark: `华溯之家同步收款 payment_method=${input.order.payment_method}`,
+        remark: '',
         created_by: input.operatorId,
         updated_by: input.operatorId,
         created_at: input.now,
@@ -550,7 +546,6 @@ export class HuasuHomeOrderSyncService {
 
     const eventType = this.eventTypeForStatus(Number(input.order.order_status), input.order);
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    const firstLine = (input.order.items ?? [])[0];
     await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
@@ -559,10 +554,7 @@ export class HuasuHomeOrderSyncService {
         goods_id: 0,
         sku_id: 0,
         event_type: eventType,
-        event_content: this.clip(
-          `华溯状态=${input.order.order_status}; 售后类型=${input.order.after_sales_type ?? 0}; 售后状态=${input.order.after_sales_status ?? 0}; 售后金额=${input.order.after_sales_amount ?? 0}; 行id=${firstLine?.id ?? 0}`,
-          255,
-        ),
+        event_content: this.resolveEventContent(input.order, 'status'),
         event_status: 2,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -672,7 +664,7 @@ export class HuasuHomeOrderSyncService {
           sourceNo: outputNo,
           operationBy: input.userId,
           idempotencyKey: `huasu-home-output:${item.key}:v1`,
-          remark: '华溯之家外部发货同步出库（允许负库存）',
+          remark: '',
           lines: shipLines.map((line) => ({
             goodsId: line.goodsId,
             skuId: line.skuId,
@@ -779,7 +771,7 @@ export class HuasuHomeOrderSyncService {
             fact_pay_amount: this.dec(refundAmount),
             pay_date: input.now,
             request_key: key,
-            remark: `华溯之家售后退款 type=${type}`,
+            remark: '',
             created_by: input.operatorId,
             updated_by: input.operatorId,
             created_at: input.now,
@@ -790,6 +782,7 @@ export class HuasuHomeOrderSyncService {
       }
     }
 
+    // 仅退款不回库；退货退款 / 异常售后(曾发货)按权益扣减回库
     const needReturn =
       type === HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND ||
       (type === HUASU_HOME_AFTER_SALES_TYPE.ABNORMAL &&
@@ -801,88 +794,92 @@ export class HuasuHomeOrderSyncService {
         where: { so_id: input.soId, remark: exitKey, deleted_at: null },
       });
       if (!existed) {
-        const output = await tx.hspsi_sale_order_output.findFirst({
-          where: { so_id: input.soId, comfirm_status: 1, deleted_at: null },
-          orderBy: { so_output_id: 'asc' },
-        });
-        if (!output) throw new BadRequestException('售后回库失败：缺少已确认出库单');
-        const details = await tx.hspsi_sale_order_output_detail.findMany({
-          where: { so_output_id: output.so_output_id },
-        });
-        if (!details.length) throw new BadRequestException('售后回库失败：出库明细为空');
-
-        const exitNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
-        const order = await tx.hspsi_sale_order.findUniqueOrThrow({ where: { so_id: input.soId } });
-        const exitQty = details.reduce((sum, line) => sum + Number(line.output_qty), 0);
-        const exit = await tx.hspsi_sale_order_exit.create({
-          data: {
-            so_exit_no: exitNo,
-            so_id: input.soId,
-            source_output_id: output.so_output_id,
-            exit_reson: `华溯之家售后退货 type=${type}`,
-            exit_qty: exitQty,
-            disposal_type: 1,
-            org_id: input.orgId,
-            warehouse_id: input.warehouseId,
-            exit_date: input.now,
-            dept_id: 0n,
-            receiver_id: input.operatorId,
-            customer_id: order.customer_id,
-            customer_name: order.customer_name,
-            customer_mobile: order.customer_mobile,
-            customer_address: order.customer_address,
-            sales_name: order.sales_name,
-            sales_mobile: order.sales_mobile,
-            status: true,
-            comfirm_status: 1,
-            comfirm_comment: '华溯之家售后退货同步自动确认',
-            comfirm_by: input.operatorId,
-            comfirm_date: input.now,
-            posting_version: 1,
-            remark: exitKey,
-            created_by: input.operatorId,
-            updated_by: input.operatorId,
-            created_at: input.now,
-            updated_at: input.now,
-          },
-        });
-        await tx.hspsi_sale_order_exit_detail.createMany({
-          data: details.map((line) => ({
-            so_exit_id: exit.so_exit_id,
-            so_id: input.soId,
-            goods_id: line.goods_id,
-            sku_id: line.sku_id,
-            batch_no: line.batch_no,
-            unit_type: line.unit_type,
-            so_qty: line.sale_qty,
-            exit_qty: line.output_qty,
-            remark: '',
-          })),
-        });
-        await this.externalPosting.post(
-          {
-            orgId: input.orgId,
-            warehouseId: input.warehouseId,
-            direction: 1,
-            operationType: 1,
-            inventoryMode: INVENTORY_BUSINESS_MODE.SALES_RETURN,
-            sourceId: exit.so_exit_id,
-            sourceType: 'sales_return',
-            sourceNo: exitNo,
-            operationBy: input.userId,
-            idempotencyKey: `huasu-home-exit:${exitKey}:v1`,
-            remark: '华溯之家售后退货同步入库',
-            lines: details.map((line) => ({
-              goodsId: line.goods_id,
-              skuId: line.sku_id,
-              batchNo: line.batch_no,
-              unitType: line.unit_type,
-              quantity: String(line.output_qty),
-            })),
-          },
+        // 回库明细来自 rights_deducted_records；为空则跳过回库、只记账
+        const returnLines = await this.buildReturnLinesFromRights(
           tx,
+          input.sourceId,
+          input.order.after_sales?.rights_deducted_records,
         );
-        result.exits += 1;
+        if (returnLines.length > 0) {
+          const output = await tx.hspsi_sale_order_output.findFirst({
+            where: { so_id: input.soId, comfirm_status: 1, deleted_at: null },
+            orderBy: { so_output_id: 'asc' },
+          });
+          const exitNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
+          const order = await tx.hspsi_sale_order.findUniqueOrThrow({
+            where: { so_id: input.soId },
+          });
+          const exitQty = returnLines.reduce((sum, line) => sum + line.quantity, 0);
+          const exit = await tx.hspsi_sale_order_exit.create({
+            data: {
+              so_exit_no: exitNo,
+              so_id: input.soId,
+              source_output_id: output?.so_output_id ?? 0n,
+              exit_reson: this.clip(input.order.remark ?? '', 255),
+              exit_qty: exitQty,
+              disposal_type: 1,
+              org_id: input.orgId,
+              warehouse_id: input.warehouseId,
+              exit_date: input.now,
+              dept_id: 0n,
+              receiver_id: input.operatorId,
+              customer_id: order.customer_id,
+              customer_name: order.customer_name,
+              customer_mobile: order.customer_mobile,
+              customer_address: order.customer_address,
+              sales_name: order.sales_name,
+              sales_mobile: order.sales_mobile,
+              status: true,
+              comfirm_status: 1,
+              comfirm_comment: '华溯之家售后退货同步自动确认',
+              comfirm_by: input.operatorId,
+              comfirm_date: input.now,
+              posting_version: 1,
+              remark: exitKey,
+              created_by: input.operatorId,
+              updated_by: input.operatorId,
+              created_at: input.now,
+              updated_at: input.now,
+            },
+          });
+          await tx.hspsi_sale_order_exit_detail.createMany({
+            data: returnLines.map((line) => ({
+              so_exit_id: exit.so_exit_id,
+              so_id: input.soId,
+              goods_id: line.goodsId,
+              sku_id: line.skuId,
+              batch_no: line.batchNo,
+              unit_type: line.unitType,
+              so_qty: line.quantity,
+              exit_qty: line.quantity,
+              remark: '',
+            })),
+          });
+          await this.externalPosting.post(
+            {
+              orgId: input.orgId,
+              warehouseId: input.warehouseId,
+              direction: 1,
+              operationType: 1,
+              inventoryMode: INVENTORY_BUSINESS_MODE.SALES_RETURN,
+              sourceId: exit.so_exit_id,
+              sourceType: 'sales_return',
+              sourceNo: exitNo,
+              operationBy: input.userId,
+              idempotencyKey: `huasu-home-exit:${exitKey}:v1`,
+              remark: '',
+              lines: returnLines.map((line) => ({
+                goodsId: line.goodsId,
+                skuId: line.skuId,
+                batchNo: line.batchNo,
+                unitType: line.unitType,
+                quantity: String(line.quantity),
+              })),
+            },
+            tx,
+          );
+          result.exits += 1;
+        }
       }
     }
 
@@ -936,10 +933,7 @@ export class HuasuHomeOrderSyncService {
         goods_id: 0,
         sku_id: 0,
         event_type: eventType,
-        event_content: this.clip(
-          `售后类型=${type}; 售后状态=${input.order.after_sales_status}; 金额=${input.order.after_sales_amount ?? 0}`,
-          255,
-        ),
+        event_content: this.resolveEventContent(input.order, 'after_sales', input.eventStatus),
         event_status: input.eventStatus,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -1065,7 +1059,49 @@ export class HuasuHomeOrderSyncService {
     }));
   }
 
-  /** package_items.product_id → 平台默认规格（is_default=1，否则取映射中首个） */
+  /**
+   * 售后退货入库明细：按 after_sales.rights_deducted_records 展开。
+   * 数量 = gift_number + buy_number；同 product_id 合并；规格取默认 SKU。
+   * 记录为空 / 数量均为 0 时返回空数组（调用方跳过回库、只记账）。
+   */
+  private async buildReturnLinesFromRights(
+    tx: Tx,
+    sourceId: bigint,
+    records: HuasuHomeRightsDeductedRecord[] | null | undefined,
+  ): Promise<ShipLine[]> {
+    const merged = new Map<
+      string,
+      { goodsId: bigint; skuId: bigint; unitType: number; quantity: number }
+    >();
+
+    for (const rec of records ?? []) {
+      const productId = Number(rec.product_id);
+      const quantity = Number(rec.gift_number || 0) + Number(rec.buy_number || 0);
+      if (!(productId > 0) || !(quantity > 0)) continue;
+
+      const target = await this.resolveDefaultStandardSku(tx, sourceId, productId);
+      const key = `${target.goodsId}:${target.skuId}`;
+      const cur = merged.get(key);
+      if (cur) cur.quantity += quantity;
+      else
+        merged.set(key, {
+          goodsId: target.goodsId,
+          skuId: target.skuId,
+          unitType: target.unitType,
+          quantity,
+        });
+    }
+
+    return [...merged.values()].map((line) => ({
+      goodsId: line.goodsId,
+      skuId: line.skuId,
+      unitType: line.unitType,
+      quantity: line.quantity,
+      batchNo: '',
+    }));
+  }
+
+  /** product_id → 平台默认规格（is_default=1，否则取映射中首个） */
   private async resolveDefaultStandardSku(
     tx: Tx,
     sourceId: bigint,
@@ -1082,7 +1118,7 @@ export class HuasuHomeOrderSyncService {
     });
     if (!mappings.length) {
       throw new BadRequestException(
-        `发货单品未映射: product_id=${sourceProductId}`,
+        `单品未映射: product_id=${sourceProductId}`,
       );
     }
     const goodsId = mappings[0]!.goods_id;
@@ -1230,7 +1266,7 @@ export class HuasuHomeOrderSyncService {
         source_type: sourceType,
         related_customer_id: userId,
         status: 1,
-        remark: '华溯之家订单同步创建',
+        remark: '',
         created_by: input.operatorId,
         updated_by: input.operatorId,
         created_at: input.now,
@@ -1378,6 +1414,22 @@ export class HuasuHomeOrderSyncService {
     if (!mapped) throw new BadRequestException(`支付方式无效: ${method}`);
     // 余额/线下字典可能未配置，落库仍写目标值；收款不走字典强校验
     return mapped;
+  }
+
+  /**
+   * 事件内容只取源端备注类文本：有则写，无则空。
+   * - 售后拒绝/用户取消 → cancel_reason
+   * - 其余状态/售后事件 → remark
+   */
+  private resolveEventContent(
+    order: HuasuHomeOrder,
+    kind: 'status' | 'after_sales',
+    eventStatus?: number,
+  ): string {
+    if (kind === 'after_sales' && eventStatus === 3) {
+      return this.clip(order.cancel_reason ?? '', 255);
+    }
+    return this.clip(order.remark ?? '', 255);
   }
 
   private eventTypeForStatus(status: number, order: HuasuHomeOrder): number {

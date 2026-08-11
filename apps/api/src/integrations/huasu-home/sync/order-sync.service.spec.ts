@@ -108,7 +108,7 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
 
     redis = new RedisService(config);
     await redis.ensureConnected();
-    const businessNumber = new BusinessNumberService(redis, config);
+    const businessNumber = new BusinessNumberService(redis, prisma as never, config);
     const externalPosting = new HuasuHomeExternalInventoryPostingService(prisma as never);
 
     service = new HuasuHomeOrderSyncService(
@@ -259,6 +259,81 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
       });
     }
     return targets;
+  }
+
+  async function isRightsGoodsMapped(order: HuasuHomeOrder) {
+    if (!(sourceId > 0n)) return false;
+    for (const rec of order.after_sales?.rights_deducted_records ?? []) {
+      const productId = Number(rec.product_id);
+      const qty = Number(rec.gift_number || 0) + Number(rec.buy_number || 0);
+      if (!(productId > 0) || !(qty > 0)) continue;
+      const mapping = await prisma.hspsi_goods_source_mapping.findFirst({
+        where: {
+          source_id: sourceId,
+          source_type: HUASU_HOME_SOURCE_TYPE.STANDARD,
+          source_goods_id: String(productId),
+          mapping_status: HUASU_HOME_MAPPING_STATUS.MAPPED,
+          deleted_at: null,
+        },
+      });
+      if (!mapping) return false;
+    }
+    return true;
+  }
+
+  /** 回库目标：rights_deducted_records，数量 gift+buy，同 product 合并，默认规格 */
+  async function resolveReturnTargets(order: HuasuHomeOrder): Promise<ShipTarget[]> {
+    const merged = new Map<string, ShipTarget>();
+    for (const rec of order.after_sales?.rights_deducted_records ?? []) {
+      const productId = Number(rec.product_id);
+      const qty = Number(rec.gift_number || 0) + Number(rec.buy_number || 0);
+      if (!(productId > 0) || !(qty > 0)) continue;
+      const mappings = await prisma.hspsi_goods_source_mapping.findMany({
+        where: {
+          source_id: sourceId,
+          source_type: HUASU_HOME_SOURCE_TYPE.STANDARD,
+          source_goods_id: String(productId),
+          mapping_status: HUASU_HOME_MAPPING_STATUS.MAPPED,
+          deleted_at: null,
+        },
+      });
+      if (!mappings.length) {
+        throw new Error(`权益扣减单品未映射 product_id=${productId}`);
+      }
+      const goodsId = mappings[0]!.goods_id;
+      const defaultSku = await prisma.hspsi_goods_info_sku.findFirst({
+        where: { good_id: goodsId, is_default: 1, deleted_at: null },
+        orderBy: { sku_id: 'asc' },
+      });
+      const skuId = defaultSku?.sku_id ?? mappings[0]!.sku_id;
+      const sku =
+        defaultSku ??
+        (await prisma.hspsi_goods_info_sku.findFirst({
+          where: { sku_id: skuId, good_id: goodsId, deleted_at: null },
+        }));
+      const key = `${goodsId}:${skuId}`;
+      const cur = merged.get(key);
+      if (cur) cur.quantity += qty;
+      else
+        merged.set(key, {
+          goodsId,
+          skuId,
+          unitType: Number(sku?.unit_type ?? 0),
+          quantity: qty,
+        });
+    }
+    return [...merged.values()];
+  }
+
+  function mergeTargets(targets: ShipTarget[]): ShipTarget[] {
+    const merged = new Map<string, ShipTarget>();
+    for (const row of targets) {
+      const key = `${row.goodsId}:${row.skuId}`;
+      const cur = merged.get(key);
+      if (cur) cur.quantity += row.quantity;
+      else merged.set(key, { ...row });
+    }
+    return [...merged.values()];
   }
 
   /**
@@ -554,10 +629,14 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
           where: { id: mappingAfterFirst!.id },
         });
         expect(mappingAfterSecond!.so_id).toBe(mappingAfterFirst!.so_id);
-      } else {
-        expect(first.failed).toBe(1);
+      } else if (first.failed > 0) {
         expect(mappingAfterFirst!.sync_status).toBe(HUASU_HOME_ORDER_SYNC_STATUS.FAILED);
         expect(mappingAfterFirst!.remark).toBeTruthy();
+      } else {
+        // skipped：订单已在前面批量同步中处理过，映射应为成功状态
+        expect(first.skipped).toBeGreaterThanOrEqual(1);
+        expect(mappingAfterFirst!.sync_status).toBe(HUASU_HOME_ORDER_SYNC_STATUS.SUCCESS);
+        expect(mappingAfterFirst!.so_id).toBeGreaterThan(0n);
       }
     },
     180_000,
@@ -652,7 +731,7 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
   );
 
   it(
-    '售后退货成功：真实退货入库加库',
+    '售后退货成功：按权益扣减记录回库加库',
     async () => {
       if (!(HUASU_HOME_GOODS_CATEGORY_ID > 0n)) {
         console.warn('[skip] HUASU_HOME_GOODS_CATEGORY_ID 未配置');
@@ -674,27 +753,42 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
         if (!orgId) continue;
         const warehouse = await resolveSaleWarehouse(orgId);
         if (!warehouse) continue;
-        candidate = order;
+
+        // 列表可能缺 after_sales 明细；以详情里的权益扣减为准
+        const detailProbe = await huasuHome.getOrderInfo(order.order_sn);
+        const rights = detailProbe.after_sales?.rights_deducted_records ?? [];
+        const hasRightsQty = rights.some(
+          (row) =>
+            Number(row.product_id) > 0 &&
+            Number(row.gift_number || 0) + Number(row.buy_number || 0) > 0,
+        );
+        if (!hasRightsQty) continue;
+        if (!(await isRightsGoodsMapped(detailProbe))) continue;
+        candidate = detailProbe;
         break;
       }
 
       if (!candidate) {
-        console.warn('[skip] 无「退货退款已完成 + 映射齐全」的候选订单');
+        console.warn(
+          '[skip] 无「退货退款已完成 + rights_deducted_records 有数量 + 映射齐全」的候选订单',
+        );
         return;
       }
 
-      const detail = await huasuHome.getOrderInfo(candidate.order_sn);
+      const detail = candidate;
       const orgId = (await resolvePlatformOrgId(Number(detail.service_org_id)))!;
       const warehouse = (await resolveSaleWarehouse(orgId))!;
-      const targets = await resolveShipTargets(detail);
-      expect(targets.length).toBeGreaterThan(0);
+      const shipTargets = await resolveShipTargets(detail);
+      const returnTargets = await resolveReturnTargets(detail);
+      expect(returnTargets.length).toBeGreaterThan(0);
 
-      await prepareGoodsForPosting(orgId, targets);
+      const stockTargets = mergeTargets([...shipTargets, ...returnTargets]);
+      await prepareGoodsForPosting(orgId, stockTargets);
       await resetFulfillmentForResync(detail);
-      await clearStock(orgId, warehouse.warehouse_id, targets);
+      await clearStock(orgId, warehouse.warehouse_id, stockTargets);
 
-      const beforeStock = await Promise.all(
-        targets.map(async (t) => ({
+      const beforeReturnStock = await Promise.all(
+        returnTargets.map(async (t) => ({
           goodsId: t.goodsId,
           skuId: t.skuId,
           qty: await readStockQty(orgId, warehouse.warehouse_id, t.goodsId, t.skuId),
@@ -732,7 +826,14 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
       const exitDetails = await prisma.hspsi_sale_order_exit_detail.findMany({
         where: { so_exit_id: exit!.so_exit_id },
       });
-      expect(exitDetails.length).toBeGreaterThan(0);
+      expect(exitDetails.length).toBe(returnTargets.length);
+      for (const target of returnTargets) {
+        const line = exitDetails.find(
+          (row) => row.goods_id === target.goodsId && row.sku_id === target.skuId,
+        );
+        expect(line, `缺少回库明细 goods=${target.goodsId} sku=${target.skuId}`).toBeTruthy();
+        expect(Number(line!.exit_qty)).toBe(target.quantity);
+      }
 
       const returnLedger = await prisma.hspsi_inventory_total_detail.findFirst({
         where: {
@@ -744,10 +845,16 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
       expect(returnLedger).toBeTruthy();
       expect(Number(returnLedger!.operation_qty)).toBeGreaterThan(0);
 
-      // 同事务先出库再入库，期末库存应回到出库前水平
-      for (const row of beforeStock) {
+      // 回库按权益扣减数加库；与出库数量可不一致
+      for (const row of beforeReturnStock) {
+        const target = returnTargets.find(
+          (t) => t.goodsId === row.goodsId && t.skuId === row.skuId,
+        )!;
+        const shipQty =
+          shipTargets.find((t) => t.goodsId === row.goodsId && t.skuId === row.skuId)
+            ?.quantity ?? 0;
         const after = await readStockQty(orgId, warehouse.warehouse_id, row.goodsId, row.skuId);
-        expect(after).toBe(row.qty);
+        expect(after).toBe(row.qty - shipQty + target.quantity);
       }
 
       // 幂等：再次同步不应重复入库

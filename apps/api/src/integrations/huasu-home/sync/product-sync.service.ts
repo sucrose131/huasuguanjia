@@ -1,5 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { buildQueryCodeFromName } from '../../../common/query-code';
 import { PrismaService } from '../../../database/prisma.service';
 import {
   HUASU_HOME_COMBO_UNIT_NAME,
@@ -212,7 +213,7 @@ export class HuasuHomeProductSyncService {
 
     const goodsData = {
       org_id: 0n,
-      query_code: `HH-P-${product.id}`,
+      query_code: buildQueryCodeFromName(product.name),
       goods_name: this.clip(product.name, 100),
       goods_image: this.clip(product.cover ?? '', 255),
       spec_models: defaultSpecModels,
@@ -448,7 +449,7 @@ export class HuasuHomeProductSyncService {
 
     const goodsData = {
       org_id: 0n,
-      query_code: `HH-C-${pkg.id}`,
+      query_code: buildQueryCodeFromName(pkg.name),
       goods_name: this.clip(pkg.name, 100),
       goods_image: this.clip(pkg.cover ?? '', 255),
       spec_models: specModels,

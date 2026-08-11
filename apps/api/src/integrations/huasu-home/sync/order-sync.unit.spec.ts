@@ -18,6 +18,8 @@ vi.mock('../huasu-home.constants', async (importOriginal) => {
 });
 
 import {
+  HUASU_HOME_AFTER_SALES_STATUS,
+  HUASU_HOME_AFTER_SALES_TYPE,
   HUASU_HOME_DATA_SOURCE_CODE,
   HUASU_HOME_ORDER_STATUS,
   HUASU_HOME_ORDER_SYNC_STATUS,
@@ -58,6 +60,7 @@ function baseOrder(overrides: Partial<HuasuHomeOrder> = {}): HuasuHomeOrder {
     after_sales_type: 0,
     after_sales_status: 0,
     after_sales_amount: 0,
+    after_sales: null,
     remark: '',
     ...overrides,
   };
@@ -118,9 +121,21 @@ function createService() {
         sku_id: 201n,
         mapping_status: 1,
       }),
+      findMany: vi.fn().mockResolvedValue([
+        {
+          goods_id: 101n,
+          sku_id: 201n,
+          mapping_status: 1,
+        },
+      ]),
     },
     hspsi_goods_info_sku: {
-      findFirst: vi.fn().mockResolvedValue({ sku_id: 201n, good_id: 101n, unit_type: 1 }),
+      findFirst: vi.fn().mockResolvedValue({
+        sku_id: 201n,
+        good_id: 101n,
+        unit_type: 1,
+        is_default: 1,
+      }),
     },
     hspsi_goods_info: {
       findFirst: vi.fn().mockResolvedValue({ goods_id: 101n, goods_type: 1 }),
@@ -175,10 +190,19 @@ function createService() {
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockResolvedValue(null),
       count: vi.fn().mockResolvedValue(0),
-      create: vi.fn(),
+      create: vi.fn().mockImplementation(async ({ data }) => ({
+        so_output_id: 8001n,
+        ...data,
+      })),
     },
     hspsi_sale_order_output_detail: { createMany: vi.fn(), findMany: vi.fn() },
-    hspsi_sale_order_exit: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
+    hspsi_sale_order_exit: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockImplementation(async ({ data }) => ({
+        so_exit_id: 5001n,
+        ...data,
+      })),
+    },
     hspsi_sale_order_exit_detail: { createMany: vi.fn() },
     hspsi_goods_sku_conversion_rule: { findMany: vi.fn().mockResolvedValue([]) },
     hspsi_inventory_batch_total: { findMany: vi.fn().mockResolvedValue([]) },
@@ -346,5 +370,107 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     const stats = await ctx.service.syncOrderBySn(baseOrder().order_sn, '1');
     expect(stats.failed).toBe(1);
     expect(stats.failures[0]!.reason).toMatch(/机构未映射/);
+  });
+
+  it('退货退款：rights 为空时只记账不回库', async () => {
+    const ctx = createService();
+    const order = baseOrder({
+      order_status: HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE,
+      after_sales_type: HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND,
+      after_sales_status: HUASU_HOME_AFTER_SALES_STATUS.DONE,
+      after_sales_amount: 50,
+      after_sales: {
+        id: 901,
+        type: HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND,
+        status: 2,
+        rights_deducted_records: [],
+      },
+      updated_at: '2026-08-08T12:00:00+08:00',
+    });
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(order);
+
+    const stats = await ctx.service.syncOrderBySn(order.order_sn, '1');
+    expect(stats.failed, JSON.stringify(stats.failures)).toBe(0);
+    expect(stats.payments).toBeGreaterThanOrEqual(2); // 收款 + 退款
+    expect(stats.exits).toBe(0);
+    expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
+    // 出库可能过账；回库不应出现 sales_return
+    expect(
+      ctx.posting.post.mock.calls.some(
+        (call: unknown[]) => (call[0] as { sourceType?: string }).sourceType === 'sales_return',
+      ),
+    ).toBe(false);
+  });
+
+  it('退货退款：按权益扣减合并回库并过账', async () => {
+    const ctx = createService();
+    const order = baseOrder({
+      order_status: HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE,
+      after_sales_type: HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND,
+      after_sales_status: HUASU_HOME_AFTER_SALES_STATUS.DONE,
+      after_sales_amount: 50,
+      after_sales: {
+        id: 902,
+        type: HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND,
+        status: 2,
+        rights_deducted_records: [
+          { product_id: 11, buy_number: 1, gift_number: 1 },
+          { product_id: 11, buy_number: 2, gift_number: 0 },
+        ],
+      },
+      updated_at: '2026-08-08T12:00:00+08:00',
+    });
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(order);
+    ctx.tx.hspsi_sale_order_output.findFirst.mockResolvedValue({ so_output_id: 8001n });
+
+    const stats = await ctx.service.syncOrderBySn(order.order_sn, '1');
+    expect(stats.failed, JSON.stringify(stats.failures)).toBe(0);
+    expect(stats.exits).toBe(1);
+    expect(ctx.tx.hspsi_sale_order_exit.create).toHaveBeenCalled();
+    expect(ctx.tx.hspsi_sale_order_exit_detail.createMany).toHaveBeenCalled();
+
+    const detailArg = ctx.tx.hspsi_sale_order_exit_detail.createMany.mock.calls[0][0].data;
+    expect(detailArg).toHaveLength(1);
+    expect(detailArg[0].goods_id).toBe(101n);
+    expect(detailArg[0].sku_id).toBe(201n);
+    expect(detailArg[0].exit_qty).toBe(4); // (1+1)+(2+0)
+
+    const exitArg = ctx.tx.hspsi_sale_order_exit.create.mock.calls[0][0].data;
+    expect(exitArg.source_output_id).toBe(8001n);
+    expect(exitArg.exit_qty).toBe(4);
+
+    expect(ctx.posting.post).toHaveBeenCalled();
+    const postArg = ctx.posting.post.mock.calls[0][0];
+    expect(postArg.direction).toBe(1);
+    expect(postArg.lines).toEqual([
+      expect.objectContaining({
+        goodsId: 101n,
+        skuId: 201n,
+        quantity: '4',
+      }),
+    ]);
+  });
+
+  it('仅退款即使有权益扣减也不回库', async () => {
+    const ctx = createService();
+    const order = baseOrder({
+      order_status: HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE,
+      after_sales_type: HUASU_HOME_AFTER_SALES_TYPE.REFUND_ONLY,
+      after_sales_status: HUASU_HOME_AFTER_SALES_STATUS.DONE,
+      after_sales_amount: 30,
+      after_sales: {
+        id: 903,
+        type: HUASU_HOME_AFTER_SALES_TYPE.REFUND_ONLY,
+        status: 2,
+        rights_deducted_records: [{ product_id: 11, buy_number: 1, gift_number: 0 }],
+      },
+      updated_at: '2026-08-08T12:00:00+08:00',
+    });
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(order);
+
+    const stats = await ctx.service.syncOrderBySn(order.order_sn, '1');
+    expect(stats.failed).toBe(0);
+    expect(stats.exits).toBe(0);
+    expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
   });
 });
