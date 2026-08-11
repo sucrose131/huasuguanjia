@@ -6,6 +6,9 @@ import { buildSortedJson, generateNonce, loadPublicKey, signWithPublicKey } from
 import {
   HUASU_HOME_SUCCESS_CODE,
   type HuasuHomeProductListData,
+  type HuasuHomeOrder,
+  type HuasuHomeOrderListData,
+  type HuasuHomeOrderListQuery,
   type HuasuHomeRequestOptions,
   type HuasuHomeResponse,
 } from './huasu-home.types';
@@ -178,5 +181,39 @@ export class HuasuHomeService {
       {},
     );
     return response.data!;
+  }
+
+  /**
+   * 获取订单列表
+   *
+   * POST /hspsi/order/list
+   * 必填 updated_at（Y-m-d H:i:s）；分页字段已作废
+   * 对应 docs/integrations/huasu-home/订单列表.md
+   */
+  async getOrderList(query: HuasuHomeOrderListQuery): Promise<HuasuHomeOrderListData> {
+    if (!query?.updated_at) {
+      throw new Error('华溯订单列表必须传 updated_at（格式 Y-m-d H:i:s）');
+    }
+    const response = await this.post<HuasuHomeOrderListData>('/hspsi/order/list', {
+      updated_at: String(query.updated_at),
+    });
+    return response.data!;
+  }
+
+  /**
+   * 获取订单详情（POST /hspsi/order/info，按 order_sn 查询）
+   *
+   * 对应 docs/integrations/huasu-home/订单详情.md
+   */
+  async getOrderInfo(orderSn: string): Promise<HuasuHomeOrder> {
+    const response = await this.post<HuasuHomeOrder>('/hspsi/order/info', {
+      order_sn: String(orderSn),
+    });
+    return response.data!;
+  }
+
+  /** @deprecated 使用 getOrderInfo(orderSn) */
+  async getOrderDetail(orderIdOrSn: number | string): Promise<HuasuHomeOrder> {
+    return this.getOrderInfo(String(orderIdOrSn));
   }
 }
