@@ -205,7 +205,7 @@ Content-Type: multipart/form-data
 POST /api/integrations/xinfutong-oa/events/XFTOAFPS
 ```
 
-根据 OA 技术人员确认，该事件回调无需鉴权。平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致；重复通知通过状态机幂等处理并记录原始回调日志。
+根据 OA 技术人员确认，该事件回调无需鉴权。任何到达接口的报文都会先写入 `hspsi_oa_approval_callback_log`；平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致。校验或处理失败时保留 `processed=0` 和失败原因，成功后更新为 `processed=1`；重复通知通过状态机幂等处理。
 
 ## 3. 表单控件数据格式速查表
 
