@@ -1011,16 +1011,19 @@ describe('PurchaseService production-shortage guards', () => {
         deliveryType: 1,
         paymentType: 1,
         planPayDate: '—',
-        details: [{ goodsId: 10, skuId: 11, quantity: 2, unitType: 1, unitPrice: 5 }],
+        details: [{ goodsId: 10, skuId: 11, quantity: 3, unitType: 1, totalAmount: 100 }],
       },
       '9',
     );
 
     expect(orderCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ plan_pay_date: null }),
+        data: expect.objectContaining({ plan_pay_date: null, pay_amout: new Prisma.Decimal(100) }),
       }),
     );
+    const detail = tx.hspsi_purchase_order_detail.createMany.mock.calls[0]![0].data[0];
+    expect(Number(detail.unit_price)).toBe(33.33);
+    expect(Number(detail.total_amout)).toBe(100);
   });
 
   it('creates the first payment in the same transaction when a new order includes a current payment', async () => {
@@ -1074,7 +1077,7 @@ describe('PurchaseService production-shortage guards', () => {
         currentPaymentChannel: 2,
         currentPaymentDate: '2026-08-02',
         currentPaymentRemark: '首笔付款',
-        details: [{ goodsId: 10, skuId: 11, quantity: 2, unitType: 1, unitPrice: 5 }],
+        details: [{ goodsId: 10, skuId: 11, quantity: 2, unitType: 1, totalAmount: 10 }],
       },
       '9',
     );
@@ -1138,7 +1141,7 @@ describe('PurchaseService production-shortage guards', () => {
           planArrivalDate: '2026-08-02',
           deliveryType: 1,
           paymentType: 1,
-          details: [{ goodsId: 10, skuId: 11, quantity: 2, unitType: 1, unitPrice: 5 }],
+          details: [{ goodsId: 10, skuId: 11, quantity: 2, unitType: 1, totalAmount: 10 }],
         },
         '9',
       ),
@@ -1186,8 +1189,8 @@ describe('PurchaseService production-shortage guards', () => {
           deliveryType: 1,
           paymentType: 1,
           details: [
-            { goodsId: 10, skuId: 11, quantity: 1, unitType: 1, unitPrice: 5 },
-            { goodsId: 20, skuId: 21, quantity: 1, unitType: 1, unitPrice: 5 },
+            { goodsId: 10, skuId: 11, quantity: 1, unitType: 1, totalAmount: 5 },
+            { goodsId: 20, skuId: 21, quantity: 1, unitType: 1, totalAmount: 5 },
           ],
         },
         '9',

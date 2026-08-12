@@ -16,6 +16,7 @@ function aggregatePostingLines(lines: InventoryLine[]) {
     undefined as never,
     undefined as never,
     undefined as never,
+    undefined as never,
   );
   return (
     service as unknown as { aggregatePostingLines: AggregatePostingLines }
@@ -33,6 +34,10 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     link: vi.fn(),
     removeForDocument: vi.fn(),
   };
+  const attachmentsService = {
+    uploadSignatureDataUrlForIntegration: vi.fn(),
+    discardUncommittedObjectForIntegration: vi.fn(),
+  };
   return {
     service: new RequisitionService(
       prisma as never,
@@ -41,10 +46,12 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
       documentTrace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       { submit: vi.fn() } as never,
+      attachmentsService as never,
     ),
     prisma,
     posting,
     documentTrace,
+    attachmentsService,
   };
 }
 
@@ -81,6 +88,58 @@ describe('RequisitionService inventory posting line aggregation', () => {
 });
 
 describe('RequisitionService locked requisition mutations', () => {
+  it('stores a new handwritten signature as OSS attachment metadata without database base64', async () => {
+    const tx = {
+      hspsi_draw_approve: {
+        create: vi.fn().mockResolvedValue({ draw_id: 7n }),
+      },
+      hspsi_draw_approve_detail: {
+        deleteMany: vi.fn(),
+        createMany: vi.fn(),
+      },
+    };
+    const { service, attachmentsService } = serviceWithTransaction(tx);
+    vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
+    const signature = {
+      id: 'signature-1',
+      objectKey: 'documents/requisition_application/signatures/signature-1.png',
+      fileName: '领用人签名-signature-1.png',
+      contentType: 'image/png',
+      size: 3,
+      uploadedBy: '3',
+      uploadedAt: '2026-08-11T00:00:00.000Z',
+      category: 'signature',
+    };
+    attachmentsService.uploadSignatureDataUrlForIntegration.mockResolvedValue(signature);
+
+    await service.saveApplication(
+      null,
+      {
+        orgId: 1,
+        warehouseId: 2,
+        deptId: 3,
+        applicantId: 3,
+        drawType: 2,
+        reason: '借用测试',
+        signatureContent: 'data:image/png;base64,YWJj',
+        signedBy: 3,
+        details: [{ goodsId: 4, skuId: 5, quantity: 1, returnable: true }],
+      },
+      '3',
+      false,
+    );
+
+    expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          signature_content: null,
+          signature_attachment: 'signature-1',
+          attachments: [signature],
+        }),
+      }),
+    );
+  });
+
   it('rechecks the application approval state after acquiring the row lock', async () => {
     const tx = {
       $queryRawUnsafe: vi.fn(),

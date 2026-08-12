@@ -12,6 +12,7 @@ import {
 } from '../inventory/inventory-posting.service';
 import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
+import { Attachment, AttachmentsService } from '../attachments/attachments.service';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -33,7 +34,20 @@ export class RequisitionService {
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
     @Inject(RequisitionOaApprovalService)
     private readonly oaApproval: RequisitionOaApprovalService,
+    @Inject(AttachmentsService)
+    private readonly attachmentsService: AttachmentsService,
   ) {}
+
+  private attachmentItems(value: unknown): Attachment[] {
+    if (Array.isArray(value)) return value as Attachment[];
+    if (typeof value !== 'string') return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as Attachment[]) : [];
+    } catch {
+      return [];
+    }
+  }
 
   private decimal(value: unknown) {
     return new Prisma.Decimal(String(value ?? 0));
@@ -567,153 +581,193 @@ export class RequisitionService {
       remark: String(line.remark ?? ''),
     }));
 
-    const drawId = await this.prisma.$transaction(async (tx) => {
-      const requestedId = id ? this.bigint(id, '领用申请') : null;
-      if (requestedId !== null)
-        await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', requestedId);
-      const current =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve.findFirst({
-              where: { draw_id: requestedId, deleted_at: null },
-            })
-          : null;
-      if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
-      if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
-      if (requestedId !== null) {
-        const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
-          where: {
-            business_type: 'requisition_application',
-            business_id: requestedId,
-            proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
-            deleted_at: null,
-          },
-          select: { id: true },
-        });
-        if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可修改');
-      }
+    const submittedSignature =
+      body.signatureContent !== undefined ? String(body.signatureContent ?? '').trim() : '';
+    const uploadedSignature = submittedSignature
+      ? await this.attachmentsService.uploadSignatureDataUrlForIntegration(
+          'requisition_application',
+          submittedSignature,
+          userId,
+        )
+      : null;
 
-      const currentDetails =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve_detail.findMany({
-              where: { draw_id: requestedId },
-              orderBy: { draw_detail_id: 'asc' },
-            })
-          : [];
-      if (requestedId !== null) {
-        const confirmed = await this.confirmedOutputUsage(tx, requestedId);
-        for (const line of lines) {
-          const source = currentDetails.find(
-            (detail) => detail.goods_id === line.goodsId && detail.sku_id === line.skuId,
-          );
-          if (!source) continue;
-          const used =
-            (confirmed.get(`detail:${source.draw_detail_id}`) ?? 0) +
-            (confirmed.get(`legacy:${line.goodsId}:${line.skuId}`) ?? 0);
-          if (line.quantity < used)
-            throw new BadRequestException('申请数量不得低于累计已确认出库数量');
+    let drawId: bigint;
+    try {
+      drawId = await this.prisma.$transaction(async (tx) => {
+        const requestedId = id ? this.bigint(id, '领用申请') : null;
+        if (requestedId !== null)
+          await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', requestedId);
+        const current =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve.findFirst({
+                where: { draw_id: requestedId, deleted_at: null },
+              })
+            : null;
+        if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
+        if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+        if (requestedId !== null) {
+          const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+            where: {
+              business_type: 'requisition_application',
+              business_id: requestedId,
+              proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+              deleted_at: null,
+            },
+            select: { id: true },
+          });
+          if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可修改');
         }
-      }
 
-      const applicantId = this.bigint(body.applicantId ?? current?.applicant_id, '领用人');
-      const signatureContent =
-        body.signatureContent !== undefined
-          ? String(body.signatureContent ?? '').trim()
-          : String(current?.signature_content ?? '').trim();
-      const signatureAttachment =
-        body.signatureAttachment !== undefined
-          ? String(body.signatureAttachment ?? '').trim()
-          : String(current?.signature_attachment ?? '').trim();
-      const hasSignature = Boolean(signatureContent || signatureAttachment);
-      if (submit && !hasSignature)
-        throw new BadRequestException('提交申请前必须完成领用人签字确认');
-      const previousSignedBy = current?.signed_by ?? 0n;
-      const signedBy = hasSignature
-        ? this.bigint(
-            body.signedBy ?? (previousSignedBy > 0n ? previousSignedBy : applicantId),
-            '签署人',
-          )
-        : 0n;
-      if (hasSignature && signedBy !== applicantId) {
-        throw new BadRequestException('签署人必须与领用人一致');
-      }
-      const signedAt = hasSignature
-        ? new Date(body.signedAt ?? current?.signed_at ?? Date.now())
-        : null;
-      if (signedAt && Number.isNaN(signedAt.getTime()))
-        throw new BadRequestException('签署时间无效');
+        const currentDetails =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve_detail.findMany({
+                where: { draw_id: requestedId },
+                orderBy: { draw_detail_id: 'asc' },
+              })
+            : [];
+        if (requestedId !== null) {
+          const confirmed = await this.confirmedOutputUsage(tx, requestedId);
+          for (const line of lines) {
+            const source = currentDetails.find(
+              (detail) => detail.goods_id === line.goodsId && detail.sku_id === line.skuId,
+            );
+            if (!source) continue;
+            const used =
+              (confirmed.get(`detail:${source.draw_detail_id}`) ?? 0) +
+              (confirmed.get(`legacy:${line.goodsId}:${line.skuId}`) ?? 0);
+            if (line.quantity < used)
+              throw new BadRequestException('申请数量不得低于累计已确认出库数量');
+          }
+        }
 
-      const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
-      const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
-      const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
-      const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
-      const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
-      if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
-      if (drawType === 1 && lines.some((line) => line.returnable === 1)) {
-        throw new BadRequestException('直接领用的明细必须选择“无需归还”');
-      }
-      if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
-        throw new BadRequestException('借用的明细必须选择“可归还”');
-      }
-      await this.validateApplicationReferences(tx, {
-        orgId,
-        warehouseId,
-        deptId,
-        applicantId,
-        drawType,
+        const applicantId = this.bigint(body.applicantId ?? current?.applicant_id, '领用人');
+        const currentAttachments = this.attachmentItems(current?.attachments);
+        const signatureWasExplicitlyCleared =
+          body.signatureContent !== undefined &&
+          !submittedSignature &&
+          body.signatureAttachment !== undefined &&
+          !String(body.signatureAttachment ?? '').trim();
+        const attachments = uploadedSignature
+          ? [
+              ...currentAttachments.filter((item) => item.category !== 'signature'),
+              uploadedSignature,
+            ]
+          : signatureWasExplicitlyCleared
+            ? currentAttachments.filter((item) => item.category !== 'signature')
+            : currentAttachments;
+        const signatureAttachment = uploadedSignature
+          ? uploadedSignature.id
+          : signatureWasExplicitlyCleared
+            ? ''
+            : String(current?.signature_attachment ?? '').trim();
+        const hasHistoricalSignature = Boolean(current?.signature_content);
+        const hasSignature = Boolean(
+          uploadedSignature ||
+          signatureAttachment ||
+          (!signatureWasExplicitlyCleared && hasHistoricalSignature),
+        );
+        if (submit && !hasSignature)
+          throw new BadRequestException('提交申请前必须完成领用人签字确认');
+        const previousSignedBy = current?.signed_by ?? 0n;
+        const signedBy = hasSignature
+          ? this.bigint(
+              body.signedBy ?? (previousSignedBy > 0n ? previousSignedBy : applicantId),
+              '签署人',
+            )
+          : 0n;
+        if (hasSignature && signedBy !== applicantId) {
+          throw new BadRequestException('签署人必须与领用人一致');
+        }
+        const signedAt = hasSignature
+          ? new Date(body.signedAt ?? current?.signed_at ?? Date.now())
+          : null;
+        if (signedAt && Number.isNaN(signedAt.getTime()))
+          throw new BadRequestException('签署时间无效');
+
+        const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
+        const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
+        const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
+        const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
+        const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
+        if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
+        if (drawType === 1 && lines.some((line) => line.returnable === 1)) {
+          throw new BadRequestException('直接领用的明细必须选择“无需归还”');
+        }
+        if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
+          throw new BadRequestException('借用的明细必须选择“可归还”');
+        }
+        await this.validateApplicationReferences(tx, {
+          orgId,
+          warehouseId,
+          deptId,
+          applicantId,
+          drawType,
+        });
+
+        const total = lines.reduce((sum, line) => sum + line.quantity, 0);
+        const data = {
+          draw_qty: total,
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          dept_id: deptId,
+          applicant_id: applicantId,
+          draw_type: drawType,
+          draw_date: new Date(body.date ?? current?.draw_date ?? Date.now()),
+          draw_reason: reason,
+          attachments,
+          signature_content:
+            uploadedSignature || signatureWasExplicitlyCleared
+              ? null
+              : (current?.signature_content ?? null),
+          signature_attachment: signatureAttachment,
+          signed_by: signedBy,
+          signed_at: signedAt,
+          status: submit ? 1 : 0,
+          approve_status: 0,
+          approve_comment: '',
+          approve_by: 0n,
+          approve_date: null,
+          remark: String(body.remark ?? current?.remark ?? ''),
+          updated_by: BigInt(userId),
+        };
+        const newApplicationNo =
+          requestedId === null
+            ? await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION)
+            : '';
+        const header =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve.update({ where: { draw_id: requestedId }, data })
+            : await tx.hspsi_draw_approve.create({
+                data: {
+                  ...data,
+                  draw_no: newApplicationNo,
+                  fact_draw_qty: 0,
+                  created_by: BigInt(userId),
+                },
+              });
+        await tx.hspsi_draw_approve_detail.deleteMany({ where: { draw_id: header.draw_id } });
+        await tx.hspsi_draw_approve_detail.createMany({
+          data: lines.map((line) => ({
+            draw_id: header.draw_id,
+            goods_id: line.goodsId,
+            sku_id: line.skuId,
+            batch_no: line.batchNo,
+            unit_type: line.unitType,
+            draw_qty: line.quantity,
+            is_returnable: line.returnable,
+            remark: line.remark,
+          })),
+        });
+        return header.draw_id;
       });
-
-      const total = lines.reduce((sum, line) => sum + line.quantity, 0);
-      const data = {
-        draw_qty: total,
-        org_id: orgId,
-        warehouse_id: warehouseId,
-        dept_id: deptId,
-        applicant_id: applicantId,
-        draw_type: drawType,
-        draw_date: new Date(body.date ?? current?.draw_date ?? Date.now()),
-        draw_reason: reason,
-        signature_content: signatureContent || null,
-        signature_attachment: signatureAttachment,
-        signed_by: signedBy,
-        signed_at: signedAt,
-        status: submit ? 1 : 0,
-        approve_status: 0,
-        approve_comment: '',
-        approve_by: 0n,
-        approve_date: null,
-        remark: String(body.remark ?? current?.remark ?? ''),
-        updated_by: BigInt(userId),
-      };
-      const newApplicationNo =
-        requestedId === null
-          ? await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION)
-          : '';
-      const header =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve.update({ where: { draw_id: requestedId }, data })
-          : await tx.hspsi_draw_approve.create({
-              data: {
-                ...data,
-                draw_no: newApplicationNo,
-                fact_draw_qty: 0,
-                created_by: BigInt(userId),
-              },
-            });
-      await tx.hspsi_draw_approve_detail.deleteMany({ where: { draw_id: header.draw_id } });
-      await tx.hspsi_draw_approve_detail.createMany({
-        data: lines.map((line) => ({
-          draw_id: header.draw_id,
-          goods_id: line.goodsId,
-          sku_id: line.skuId,
-          batch_no: line.batchNo,
-          unit_type: line.unitType,
-          draw_qty: line.quantity,
-          is_returnable: line.returnable,
-          remark: line.remark,
-        })),
-      });
-      return header.draw_id;
-    });
+    } catch (error) {
+      if (uploadedSignature) {
+        await this.attachmentsService.discardUncommittedObjectForIntegration(
+          uploadedSignature.objectKey,
+        );
+      }
+      throw error;
+    }
     if (!submit) return { id: drawId, message: '草稿已保存' };
     const oa = await this.oaApproval.submit(drawId, userId);
     return {

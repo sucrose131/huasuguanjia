@@ -135,3 +135,59 @@ describe('AttachmentsService OSS verification', () => {
     );
   });
 });
+
+describe('AttachmentsService OA integration cache', () => {
+  it('preserves the OSS original metadata and adds an OA upload cache entry', async () => {
+    const attachment = {
+      id: 'attachment-1',
+      objectKey: 'documents/requisition_application/7/source.pdf',
+      fileName: 'source.pdf',
+      contentType: 'application/pdf',
+      size: 10,
+      uploadedBy: '9',
+      uploadedAt: '2026-08-11T00:00:00.000Z',
+    };
+    const { service, prisma } = setup({ attachments: [attachment] });
+
+    await service.cacheOaUpload('requisition_application', '7', 'attachment-1', {
+      accountSetId: '1',
+      fileId: 'OA-FILE-1',
+      objectKey: 'OA-OBJECT-1',
+      uploadedAt: '2026-08-11T01:00:00.000Z',
+      size: 10,
+    });
+
+    const stored = JSON.parse(prisma.$executeRawUnsafe.mock.calls[0]![1]);
+    expect(stored[0]).toMatchObject({
+      objectKey: attachment.objectKey,
+      oaUploads: [expect.objectContaining({ accountSetId: '1', fileId: 'OA-FILE-1', size: 10 })],
+    });
+  });
+});
+
+describe('AttachmentsService handwritten signatures', () => {
+  it('uploads PNG signature bytes to OSS and returns attachment metadata only', async () => {
+    const { service } = setup({ status: 0, approve_status: 0 });
+    const oss = { put: vi.fn().mockResolvedValue({}) };
+    (service as any).client = oss;
+
+    const result = await service.uploadSignatureDataUrlForIntegration(
+      'requisition_application',
+      'data:image/png;base64,YWJj',
+      '9',
+    );
+
+    expect(result).toMatchObject({
+      contentType: 'image/png',
+      size: 3,
+      uploadedBy: '9',
+      category: 'signature',
+    });
+    expect(result).not.toHaveProperty('base64');
+    expect(oss.put).toHaveBeenCalledWith(
+      expect.stringMatching(/^documents\/requisition_application\/signatures\/.+\.png$/),
+      Buffer.from('abc'),
+      { headers: { 'Content-Type': 'image/png' } },
+    );
+  });
+});

@@ -330,10 +330,7 @@ const summaryItems = computed(() => {
 });
 const orderTotalAmount = computed(() =>
   Number(
-    (form.details ?? []).reduce(
-      (sum: number, item: any) => sum + Number(item.quantity ?? 0) * Number(item.unitPrice ?? 0),
-      0,
-    ),
+    (form.details ?? []).reduce((sum: number, item: any) => sum + Number(item.totalAmount ?? 0), 0),
   ),
 );
 const orderEffectivePayable = computed(() =>
@@ -515,8 +512,8 @@ function blankLine() {
     goodsSearchFailed: false,
     quantity: 1,
     unitType: 0,
-    referencePrice: 0,
     unitPrice: 0,
+    totalAmount: 0,
     orderQuantity: 0,
     arrivedQuantity: 0,
     unarrivedQuantity: 0,
@@ -637,10 +634,11 @@ async function enrichLine(line: any) {
   line.skuLabel = selected?.label;
   if (selected?.unitType) line.unitType = selected.unitType;
   else if (!Number(line.unitType) && product.unitType) line.unitType = product.unitType;
-  if (
-    (resource.value === 'orders' || (resource.value === 'receipts' && form.directReceipt)) &&
-    !Number(line.unitPrice)
-  )
+  if (resource.value === 'orders' && !Number(line.totalAmount)) {
+    const referencePrice = Number(selected?.costPrice ?? product.costPrice ?? 0);
+    line.totalAmount = Number(line.quantity ?? 0) * referencePrice;
+  }
+  if (resource.value === 'receipts' && form.directReceipt && !Number(line.unitPrice))
     line.unitPrice = Number(selected?.costPrice ?? product.costPrice ?? 0);
 }
 async function goodsChanged(line: any) {
@@ -671,7 +669,7 @@ function openQuickCatalog(line: any, kind: 'goods' | 'sku', goodsName = '') {
     categoryId: '',
     unitType: Number(line.unitType || goods?.unitType || 0) || '',
     specModels: '',
-    costPrice: Number(line.referencePrice ?? line.unitPrice ?? 0),
+    costPrice: Number(line.unitPrice ?? 0),
     salePrice: 0,
     pcsQty: 1,
   });
@@ -818,7 +816,7 @@ async function sourceApplicationChanged() {
     ...blankLine(),
     ...line,
     quantity: Number(line.quantity),
-    unitPrice: Number(line.referencePrice ?? 0),
+    totalAmount: 0,
   }));
   await Promise.all(form.details.map(enrichLine));
 }
@@ -1060,6 +1058,10 @@ function validateLines() {
           : line.quantity;
     if (Number(amount) <= 0) {
       ElMessage.warning('明细数量必须大于 0');
+      return false;
+    }
+    if (resource.value === 'orders' && Number(line.totalAmount ?? 0) <= 0) {
+      ElMessage.warning('采购订单明细总价必须大于 0');
       return false;
     }
     if (resource.value === 'receipts' && !String(line.batchNo ?? '').trim()) {
@@ -1462,10 +1464,12 @@ function canApprove(row: any) {
   );
 }
 function amount(row: any) {
-  return (
-    Number(row.quantity ?? 0) *
-    Number(resource.value === 'applications' ? row.referencePrice : (row.unitPrice ?? 0))
-  );
+  if (resource.value === 'orders') return Number(row.totalAmount ?? 0);
+  return Number(row.quantity ?? 0) * Number(row.unitPrice ?? 0);
+}
+function calculatedOrderUnitPrice(row: any) {
+  const quantity = Number(row.quantity ?? 0);
+  return quantity > 0 ? Number(row.totalAmount ?? 0) / quantity : 0;
 }
 function orderOf(id: unknown) {
   return byId('orders', id);
@@ -1763,10 +1767,6 @@ onMounted(async () => {
               show-overflow-tooltip
             /><el-table-column label="申请数量" width="104" align="right"
               ><template #default="s">{{ s.row.quantity ?? 0 }}</template></el-table-column
-            ><el-table-column label="参考金额" width="120" align="right"
-              ><template #default="s"
-                >¥ {{ moneyText(s.row.referenceAmount) }}</template
-              ></el-table-column
             ><el-table-column label="创建人" width="96"
               ><template #default="s">{{ creator(s.row) }}</template></el-table-column
             ><el-table-column label="创建时间" width="160"
@@ -3045,48 +3045,30 @@ onMounted(async () => {
                 ></el-table-column
               >
               <el-table-column
-                v-if="resource === 'applications'"
-                label="预计单价"
-                width="112"
+                v-if="resource === 'orders'"
+                label="明细总价"
+                width="128"
                 align="right"
                 ><template #default="s"
                   ><el-input-number
                     v-if="mode !== 'view'"
-                    v-model="s.row.referencePrice"
-                    :min="0"
+                    v-model="s.row.totalAmount"
+                    :min="0.01"
                     :precision="2"
                     controls-position="right"
                   /><span v-else class="readonly-cell number-cell"
-                    >¥ {{ moneyText(s.row.referencePrice) }}</span
+                    >¥ {{ moneyText(s.row.totalAmount) }}</span
                   ></template
                 ></el-table-column
-              >
-              <el-table-column
-                v-if="resource === 'applications'"
-                label="预计金额"
-                width="120"
-                align="right"
-                ><template #default="s">¥ {{ moneyText(amount(s.row)) }}</template></el-table-column
               >
               <el-table-column
                 v-if="resource === 'orders'"
-                label="采购单价"
-                width="112"
+                label="反算单价"
+                width="120"
                 align="right"
                 ><template #default="s"
-                  ><el-input-number
-                    v-if="mode !== 'view'"
-                    v-model="s.row.unitPrice"
-                    :min="0"
-                    :precision="2"
-                    controls-position="right"
-                  /><span v-else class="readonly-cell number-cell"
-                    >¥ {{ moneyText(s.row.unitPrice) }}</span
-                  ></template
+                  >¥ {{ moneyText(calculatedOrderUnitPrice(s.row)) }}</template
                 ></el-table-column
-              >
-              <el-table-column v-if="resource === 'orders'" label="金额" width="120" align="right"
-                ><template #default="s">¥ {{ moneyText(amount(s.row)) }}</template></el-table-column
               >
               <el-table-column
                 v-if="resource === 'returns'"
