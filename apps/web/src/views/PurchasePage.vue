@@ -999,6 +999,12 @@ async function open(modeValue: Mode, row: any) {
     detail.value = data;
     resetForm();
     Object.assign(form, data);
+    if (resource.value === 'receipts' && modeValue === 'edit' && Array.isArray(form.details)) {
+      form.details = form.details.map((line: any) => ({
+        ...line,
+        batchNo: String(line.batchNo ?? '').trim() || generateBatchNo(),
+      }));
+    }
     if (resource.value === 'returns') {
       if (form.receiptId) {
         const receipt: any = await api.get(`/purchase/receipts/${form.receiptId}`);
@@ -1064,10 +1070,8 @@ function validateLines() {
       ElMessage.warning('采购订单明细总价必须大于 0');
       return false;
     }
-    if (resource.value === 'receipts' && !String(line.batchNo ?? '').trim()) {
-      ElMessage.warning('请填写批次号');
-      return false;
-    }
+    if (resource.value === 'receipts' && !String(line.batchNo ?? '').trim())
+      line.batchNo = generateBatchNo();
     if (
       resource.value === 'receipts' &&
       !form.directReceipt &&
@@ -2812,7 +2816,11 @@ onMounted(async () => {
               >
               <el-table-column label="批号" width="120"
                 ><template #default="s"
-                  ><el-input v-if="mode !== 'view'" v-model="s.row.batchNo" /><span
+                  ><el-input
+                    v-if="mode !== 'view'"
+                    v-model="s.row.batchNo"
+                    placeholder="系统自动生成"
+                  /><span
                     v-else
                     class="readonly-cell"
                     >{{ display(s.row.batchNo) }}</span
