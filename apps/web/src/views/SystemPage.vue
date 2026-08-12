@@ -7,6 +7,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
 type Resource = 'roles' | 'users' | 'config';
 type Mode = 'create' | 'edit' | 'view';
@@ -24,6 +25,15 @@ const rows = ref<any[]>([]);
 const menus = ref<any[]>([]);
 const roleOptions = ref<any[]>([]);
 const orgOptions = ref<any[]>([]);
+const organizationTree = computed(() =>
+  buildOrganizationTree(
+    orgOptions.value.map((item) => ({
+      ...item,
+      value: item.id,
+      label: item.name,
+    })) as OrganizationTreeNode[],
+  ),
+);
 const deptOptions = ref<any[]>([]);
 const dicts = reactive<Record<string, any[]>>({});
 const loading = ref(false);
@@ -726,13 +736,17 @@ onMounted(async () => {
               ><el-input v-model="form.phone" maxlength="20"
             /></el-form-item>
             <el-form-item label="所属公司 *"
-              ><el-select v-model="form.orgId" filterable style="width: 100%"
-                ><el-option
-                  v-for="item in orgOptions"
-                  :key="item.id"
-                  :label="item.name"
-                  :value="item.id" /></el-select
-            ></el-form-item>
+              ><el-tree-select
+                v-model="form.orgId"
+                :data="organizationTree"
+                filterable
+                check-strictly
+                node-key="value"
+                :props="{ label: 'label', children: 'children' }"
+                style="width: 100%"
+              />
+              ></el-form-item
+            >
             <el-form-item label="所属部门"
               ><el-select v-model="form.deptId" clearable filterable style="width: 100%"
                 ><el-option

@@ -36,6 +36,12 @@ type Column = {
   kind?:
     'date' | 'status' | 'org' | 'parent' | 'department' | 'position' | 'user' | 'customer' | 'dict';
 };
+type OrganizationOption = {
+  value: string | number;
+  label: string;
+  raw?: { parentId?: string | number; sort?: number };
+};
+type OrganizationTreeNode = OrganizationOption & { children?: OrganizationTreeNode[] };
 const configs: Record<
   string,
   {
@@ -303,12 +309,42 @@ const query = reactive<any>({
 const form = reactive<any>({}),
   dicts = reactive<Record<string, any[]>>({}),
   options = reactive({
-    organizations: [] as any[],
+    organizations: [] as OrganizationOption[],
     departments: [] as any[],
     positions: [] as any[],
     users: [] as any[],
     customers: [] as any[],
   });
+const organizationTree = computed<OrganizationTreeNode[]>(() => {
+  const nodes = new Map<string, OrganizationTreeNode>();
+  for (const option of options.organizations)
+    nodes.set(String(option.value), { ...option, children: [] });
+
+  const roots: OrganizationTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parentId = String(node.raw?.parentId ?? 0);
+    const parent = parentId !== '0' ? nodes.get(parentId) : undefined;
+    if (parent) parent.children!.push(node);
+    else roots.push(node);
+  }
+
+  const sortNodes = (items: OrganizationTreeNode[]) => {
+    items.sort(
+      (left, right) =>
+        Number(left.raw?.sort ?? 0) - Number(right.raw?.sort ?? 0) ||
+        left.label.localeCompare(right.label, 'zh-CN'),
+    );
+    for (const item of items) {
+      if (item.children?.length) sortNodes(item.children);
+      else delete item.children;
+    }
+  };
+  sortNodes(roots);
+  return roots;
+});
+const organizationParentTree = computed<OrganizationTreeNode[]>(() => [
+  { value: 0, label: '顶级公司', children: organizationTree.value },
+]);
 const rules = computed<FormRules>(() =>
   Object.fromEntries(
     config.value.fields
@@ -496,21 +532,20 @@ onMounted(async () => {
           clearable
           :placeholder="config.keyword"
           @keyup.enter="search"
-        /><el-select
+        /><el-tree-select
           v-if="
             ['customers', 'warehouses', 'departments', 'positions', 'employees'].includes(resource)
           "
           v-model="query.orgId"
+          :data="organizationTree"
           class="query-field"
           clearable
           filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           placeholder="所属公司"
-          ><el-option
-            v-for="item in options.organizations"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value" /></el-select
-        ><el-select
+        /><el-select
           v-if="resource === 'customers'"
           v-model="query.sourceType"
           class="query-field"
@@ -724,18 +759,16 @@ onMounted(async () => {
                 :key="item.value"
                 :label="item.label"
                 :value="Number(item.value)" /></el-select
-            ><el-select
+            ><el-tree-select
               v-else-if="field.type === 'organization'"
               v-model="form[field.key]"
+              :data="field.key === 'parentId' ? organizationParentTree : organizationTree"
               filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
               :disabled="mode === 'view' || (mode === 'edit' && field.immutable)"
-              style="width: 100%"
-              ><el-option v-if="field.key === 'parentId'" label="顶级公司" :value="0" /><el-option
-                v-for="item in options.organizations"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value" /></el-select
-            ><el-select
+              style="width: 100%" /><el-select
               v-else-if="field.type === 'department'"
               v-model="form[field.key]"
               clearable

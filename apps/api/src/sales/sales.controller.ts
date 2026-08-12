@@ -16,12 +16,16 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { SalesService } from './sales.service';
+import { SalesOaApprovalService } from './sales-oa-approval.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApproveOrderDto } from './dto/approve-order.dto';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('sales')
 export class SalesController {
-  constructor(@Inject(SalesService) private readonly s: SalesService) {}
+  constructor(
+    @Inject(SalesService) private readonly s: SalesService,
+    @Inject(SalesOaApprovalService) private readonly oa: SalesOaApprovalService,
+  ) {}
   @RequirePermissions('sales')
   @Get('orders')
   orders(@Query() q: any) {
@@ -199,13 +203,19 @@ export class SalesController {
   }
   @RequirePermissions('sales')
   @Post('discount-orders')
-  createDiscount(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
-    return this.s.saveOrder(null, dto as any, u.id, 2);
+  async createDiscount(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
+    const result = await this.s.saveOrder(null, dto as any, u.id, 2);
+    return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }
   @RequirePermissions('sales')
   @Patch('discount-orders/:id')
-  updateDiscount(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
-    return this.s.saveOrder(id, dto as any, u.id, 2);
+  async updateDiscount(
+    @Param('id') id: string,
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() u: AuthUser,
+  ) {
+    const result = await this.s.saveOrder(id, dto as any, u.id, 2);
+    return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }
   @RequirePermissions('sales')
   @Delete('discount-orders/:id')

@@ -22,6 +22,7 @@ import LabOutboundDialog from '@/components/production/LabOutboundDialog.vue';
 import BatchMaterialTable from '@/components/production/BatchMaterialTable.vue';
 import InputDialog from '@/components/production/InputDialog.vue';
 import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 type B = Record<string, any>;
 const route = useRoute(),
   router = useRouter(),
@@ -63,6 +64,9 @@ const key = computed(() => `${group.value}/${resource.value}`),
     dictionaries: {},
   });
 const temporaryCreateMode = ref(false);
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
+);
 const attachmentType = computed(() => workflowDocumentType(group.value, resource.value, form));
 const serviceProgresses = ref<B[]>([]);
 const progressSaving = ref(false);
@@ -2161,13 +2165,16 @@ watch(key, async () => {
             v-if="isOutput && group === 'production' && form.outType === 3"
             label="所属组织"
           >
-            <el-select v-model="form.orgId" filterable
-              ><el-option
-                v-for="x in options.orgs"
-                :key="x.value"
-                :label="x.label"
-                :value="x.value" /></el-select
-          ></el-form-item>
+            <el-tree-select
+              v-model="form.orgId"
+              :data="organizationTree"
+              filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
+            />
+            ></el-form-item
+          >
           <el-form-item
             v-if="isOutput && group === 'production' && form.outType === 3"
             label="仓库"
@@ -2447,13 +2454,16 @@ watch(key, async () => {
             <el-input v-model="form.reason" />
           </el-form-item>
           <el-form-item v-if="isBom" label="所属组织"
-            ><el-select v-model="form.orgId"
-              ><el-option
-                v-for="x in options.orgs"
-                :key="x.value"
-                :label="x.label"
-                :value="x.value" /></el-select
-          ></el-form-item>
+            ><el-tree-select
+              v-model="form.orgId"
+              :data="organizationTree"
+              filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
+            />
+            ></el-form-item
+          >
           <el-form-item v-if="isBom" label="状态"
             ><el-select v-model="form.status"
               ><el-option
@@ -2513,15 +2523,17 @@ watch(key, async () => {
                 :value="Number(x.value)" /></el-select
           ></el-form-item>
           <el-form-item v-if="isOrder" label="所属组织"
-            ><el-select
+            ><el-tree-select
               v-model="form.orgId"
+              :data="organizationTree"
+              filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
               :disabled="mode === 'view' || discountOrderSourceLocked"
-              ><el-option
-                v-for="x in options.orgs"
-                :key="x.value"
-                :label="x.label"
-                :value="x.value" /></el-select
-          ></el-form-item>
+            />
+            ></el-form-item
+          >
           <el-form-item v-if="isOrder && key !== 'sales/discount-orders'" label="客户手机"
             ><el-input v-model="form.customerMobile"
           /></el-form-item>

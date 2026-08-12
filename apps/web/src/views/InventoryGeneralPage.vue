@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { createRequestId } from '@/utils/random-id';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
 type Row = Record<string, any>;
 type Option = { value: string | number; label: string; raw?: Row };
@@ -28,6 +29,9 @@ const canManageInitialInput = computed(
   () => auth.user?.permissions.includes('*') || auth.user?.permissions.includes('system:update'),
 );
 const organizations = ref<Option[]>([]);
+const organizationTree = computed(() =>
+  buildOrganizationTree(organizations.value as OrganizationTreeNode[]),
+);
 const warehouses = ref<Option[]>([]);
 const departments = ref<Option[]>([]);
 const users = ref<Option[]>([]);
@@ -249,14 +253,16 @@ onMounted(async () => {
     <el-card shadow="never">
       <div class="filters">
         <el-input v-model="query.keyword" clearable placeholder="业务单号" @keyup.enter="load" />
-        <el-select v-model="query.orgId" clearable placeholder="组织">
-          <el-option
-            v-for="item in organizations"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
+        <el-tree-select
+          v-model="query.orgId"
+          :data="organizationTree"
+          clearable
+          filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
+          placeholder="组织"
+        />
         <el-select v-model="query.warehouseId" clearable placeholder="仓库">
           <el-option
             v-for="item in warehouses"
@@ -322,13 +328,15 @@ onMounted(async () => {
             ><el-date-picker v-model="form.businessDate" type="date" value-format="YYYY-MM-DD"
           /></el-form-item>
           <el-form-item label="组织" required
-            ><el-select v-model="form.orgId" filterable @change="loadSelectableRows"
-              ><el-option
-                v-for="item in organizations"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value" /></el-select
-          ></el-form-item>
+            ><el-tree-select
+              v-model="form.orgId"
+              :data="organizationTree"
+              filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
+              @change="loadSelectableRows"
+          /></el-form-item>
           <el-form-item label="仓库" required
             ><el-select v-model="form.warehouseId" filterable @change="loadSelectableRows"
               ><el-option

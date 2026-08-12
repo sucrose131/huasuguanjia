@@ -7,22 +7,24 @@ import { Attachment, AttachmentsService } from '../attachments/attachments.servi
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalService } from '../integrations/xinfutong-oa/approval/approval.service';
 import { XinfutongOaCredentialService } from '../integrations/xinfutong-oa/core/credential.service';
+import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
 const BUSINESS_TYPE = 'requisition_application';
-const FORM_KEY = 'AAC15400_NFORM_380014832305831937';
+const REQUISITION_FORM = OA_FORM_MAPPINGS.requisition_application;
+const FORM_KEY = REQUISITION_FORM.formKey;
 
 const OA_FIELDS = {
-  drawType: 'vwzkeepgpoz8',
-  warehouse: '405ncqs7i1t1',
-  applicantName: 'h79q090vsr0x',
-  applicant: 'tmsbylvkrr78',
-  applicationDate: 'ig65sy4c1pr2',
-  reason: 'nvm0e6c6sezz',
-  details: '92c4it1x97yp',
-  goodsName: '6a30y3q8ar2v',
-  quantity: 'xn9kyuz6yi46',
-  images: 'jie0xqxvlelg',
-  attachments: '9d9x9fg3tmg4',
+  organization: REQUISITION_FORM.fields.organization.uniqueName,
+  department: REQUISITION_FORM.fields.department.uniqueName,
+  drawType: REQUISITION_FORM.fields.drawType.uniqueName,
+  warehouse: REQUISITION_FORM.fields.warehouse.uniqueName,
+  applicant: REQUISITION_FORM.fields.applicant.uniqueName,
+  applicationDate: REQUISITION_FORM.fields.applicationDate.uniqueName,
+  reason: REQUISITION_FORM.fields.reason.uniqueName,
+  details: REQUISITION_FORM.fields.details.uniqueName,
+  goodsName: REQUISITION_FORM.fields.goodsName.uniqueName,
+  quantity: REQUISITION_FORM.fields.quantity.uniqueName,
+  attachments: REQUISITION_FORM.fields.attachments.uniqueName,
 } as const;
 
 type OaSubmissionResult = {
@@ -175,8 +177,7 @@ export class RequisitionOaApprovalService {
     );
     if (!attachments.length) return {};
 
-    const imageFiles: Array<{ id: string; objectKey: string; name: string }> = [];
-    const otherFiles: Array<{ id: string; objectKey: string; name: string }> = [];
+    const files: Array<{ id: string; objectKey: string; name: string }> = [];
     const tempDirectory = await mkdtemp(join(tmpdir(), 'hspsi-oa-upload-'));
     try {
       for (const attachment of attachments) {
@@ -199,15 +200,12 @@ export class RequisitionOaApprovalService {
             tempDirectory,
           );
         }
-        (this.isImage(attachment) ? imageFiles : otherFiles).push(oaFile);
+        files.push(oaFile);
       }
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-    return {
-      ...(imageFiles.length ? { [OA_FIELDS.images]: imageFiles } : {}),
-      ...(otherFiles.length ? { [OA_FIELDS.attachments]: otherFiles } : {}),
-    };
+    return files.length ? { [OA_FIELDS.attachments]: files } : {};
   }
 
   private async uploadAttachmentToOa(
@@ -241,45 +239,47 @@ export class RequisitionOaApprovalService {
     return { id: fileId, objectKey, name: attachment.fileName };
   }
 
-  private isImage(attachment: Attachment) {
-    return (
-      attachment.contentType.startsWith('image/') ||
-      ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(
-        extname(attachment.fileName).toLowerCase(),
-      )
-    );
-  }
-
   private async buildSubmissionContext(drawId: bigint) {
     const application = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
     });
     if (!application) throw new BadRequestException('领用申请不存在');
-    const [details, warehouse, applicant, drawTypeCategory] = await Promise.all([
-      this.prisma.hspsi_draw_approve_detail.findMany({
-        where: { draw_id: drawId },
-        orderBy: { draw_detail_id: 'asc' },
-      }),
-      this.prisma.hspsi_basic_warehouse.findFirst({
-        where: { warehouse_id: application.warehouse_id, status: 1, deleted_at: null },
-        select: { name: true },
-      }),
-      this.prisma.hspsi_basic_staff.findFirst({
-        where: { id: application.applicant_id, status: 1, deleted_at: null },
-        select: {
-          id: true,
-          name: true,
-          account_set_id: true,
-          outer_ref_id: true,
-          out_staff_id: true,
-        },
-      }),
-      this.prisma.hspsi_sys_dictionary_category.findFirst({
-        where: { dict_catg_code: 'draw_type', deleted_at: null },
-        select: { dict_catg_id: true },
-      }),
-    ]);
+    const [details, organization, department, warehouse, applicant, drawTypeCategory] =
+      await Promise.all([
+        this.prisma.hspsi_draw_approve_detail.findMany({
+          where: { draw_id: drawId },
+          orderBy: { draw_detail_id: 'asc' },
+        }),
+        this.prisma.hspsi_basic_organization.findFirst({
+          where: { org_id: application.org_id, deleted_at: null },
+          select: { name: true },
+        }),
+        this.prisma.hspsi_basic_dept.findFirst({
+          where: { dept_id: application.dept_id, deleted_at: null },
+          select: { name: true },
+        }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
+          where: { warehouse_id: application.warehouse_id, status: 1, deleted_at: null },
+          select: { name: true },
+        }),
+        this.prisma.hspsi_basic_staff.findFirst({
+          where: { id: application.applicant_id, status: 1, deleted_at: null },
+          select: {
+            id: true,
+            name: true,
+            account_set_id: true,
+            outer_ref_id: true,
+            out_staff_id: true,
+          },
+        }),
+        this.prisma.hspsi_sys_dictionary_category.findFirst({
+          where: { dict_catg_code: 'draw_type', deleted_at: null },
+          select: { dict_catg_id: true },
+        }),
+      ]);
     if (!details.length) throw new BadRequestException('领用申请没有商品明细');
+    if (!organization) throw new BadRequestException('领用申请所属组织不存在');
+    if (!department) throw new BadRequestException('领用部门不存在');
     if (!warehouse) throw new BadRequestException('领用仓库不存在或已停用');
     if (!applicant) throw new BadRequestException('领用人不存在或已停用');
     if (!applicant.account_set_id || !applicant.outer_ref_id || !applicant.out_staff_id) {
@@ -341,9 +341,10 @@ export class RequisitionOaApprovalService {
       starterId: applicant.outer_ref_id,
       starterOrgId: primaryOrg.outer_ref_id,
       formData: {
+        [OA_FIELDS.organization]: organization.name,
+        [OA_FIELDS.department]: department.name,
         [OA_FIELDS.drawType]: drawType.dict_name,
         [OA_FIELDS.warehouse]: warehouse.name,
-        [OA_FIELDS.applicantName]: applicant.name,
         [OA_FIELDS.applicant]: [
           {
             USRNAM: applicant.name,

@@ -5,6 +5,8 @@ import { RequisitionOaApprovalService } from './requisition-oa-approval.service'
 function createFixture(options: { existingStatus?: string; startError?: Error } = {}) {
   const application = {
     draw_id: 7n,
+    org_id: 2n,
+    dept_id: 6n,
     warehouse_id: 3n,
     applicant_id: 9n,
     draw_type: 2,
@@ -64,6 +66,12 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
         .fn()
         .mockResolvedValue([{ draw_detail_id: 70n, draw_id: 7n, goods_id: 101n, draw_qty: 3 }]),
     },
+    hspsi_basic_organization: {
+      findFirst: vi.fn().mockResolvedValue({ name: '华溯科技', outer_ref_id: 'ORG-2' }),
+    },
+    hspsi_basic_dept: {
+      findFirst: vi.fn().mockResolvedValue({ name: '研发部', outer_ref_id: 'DEPT-6' }),
+    },
     hspsi_basic_warehouse: { findFirst: vi.fn().mockResolvedValue({ name: '行政耗材仓' }) },
     hspsi_basic_staff: {
       findFirst: vi.fn().mockResolvedValue({
@@ -80,8 +88,6 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
     hspsi_basic_staff_organizations: {
       findFirst: vi.fn().mockResolvedValue({ id: 1n, org_id: 6n, org_type: 2, type: 1 }),
     },
-    hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ outer_ref_id: 'DEPT-6' }) },
-    hspsi_basic_organization: { findFirst: vi.fn() },
     hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_name: '借用' }) },
     hspsi_goods_info: {
       findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, goods_name: '办公电脑' }]),
@@ -150,10 +156,11 @@ describe('RequisitionOaApprovalService', () => {
       starterOrgId: 'DEPT-6',
     });
     expect(JSON.parse(params.formData)).toEqual({
-      vwzkeepgpoz8: '借用',
+      vwzkeepgpoz8: '华溯科技',
+      zewg1fv7smsj: '研发部',
+      gnhh5hy450ko: '借用',
       '405ncqs7i1t1': '行政耗材仓',
-      h79q090vsr0x: '张三',
-      tmsbylvkrr78: [{ USRNAM: '张三', STFSEQ: 'STAFF-9', USRNBR: 'MEMBER-9', ORGSEQ: 'DEPT-6' }],
+      '51c0cg9xhbzv': [{ USRNAM: '张三', STFSEQ: 'STAFF-9', USRNBR: 'MEMBER-9', ORGSEQ: 'DEPT-6' }],
       ig65sy4c1pr2: '2026-08-11',
       nvm0e6c6sezz: '项目借用',
       '92c4it1x97yp': [{ '6a30y3q8ar2v': '办公电脑', xn9kyuz6yi46: 3 }],
@@ -182,7 +189,7 @@ describe('RequisitionOaApprovalService', () => {
     );
   });
 
-  it('downloads originals, uploads image and file controls, caches OA ids, then clears temp files', async () => {
+  it('downloads originals, uploads all files to the attachment control, caches OA ids, then clears temp files', async () => {
     const { service, approvalService, attachmentsService } = createFixture();
     const localPaths: string[] = [];
     attachmentsService.listForIntegration.mockResolvedValue([
@@ -219,10 +226,8 @@ describe('RequisitionOaApprovalService', () => {
 
     expect(result.procStatus).toBe('RUNNING');
     const formData = JSON.parse(approvalService.startFormProcess.mock.calls[0]![1].formData);
-    expect(formData.jie0xqxvlelg).toEqual([
-      { id: 'OA-IMAGE', objectKey: 'OA-IMAGE-KEY', name: '现场.png' },
-    ]);
     expect(formData['9d9x9fg3tmg4']).toEqual([
+      { id: 'OA-IMAGE', objectKey: 'OA-IMAGE-KEY', name: '现场.png' },
       { id: 'OA-FILE', objectKey: 'OA-FILE-KEY', name: '说明.pdf' },
     ]);
     expect(attachmentsService.cacheOaUpload).toHaveBeenCalledTimes(2);

@@ -14,6 +14,7 @@ import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
@@ -919,120 +920,235 @@ export class PurchaseService {
   }
   async approveApplication(id: string, approved: boolean, comment: string, userId: string) {
     const purId = BigInt(id);
-    return this.guardedTransaction(async (tx) => {
-      await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
-      const app = await tx.hspsi_purchase_approve.findFirst({
-        where: { pur_id: purId, deleted_at: null },
+    return this.guardedTransaction((tx) =>
+      this.applyApplicationApproval(tx, purId, approved, comment, userId, false),
+    );
+  }
+
+  private async applyApplicationApproval(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(purId);
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const app = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!app) throw new NotFoundException('采购申请不存在');
+    if (!fromOa) {
+      const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'purchase_application',
+          business_id: purId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+        select: { id: true },
       });
-      if (!app) throw new NotFoundException('采购申请不存在');
-      if (app.status !== 1 || app.approve_status !== 0)
-        throw new BadRequestException('仅待审批申请可执行此操作');
-      let effectiveDeptId = app.dept_id;
-      if (approved && app.source_type === 'production_plan' && effectiveDeptId <= 0n) {
-        effectiveDeptId = await this.resolveProductionPurchaseDepartment(tx, app.org_id);
-        await tx.hspsi_purchase_approve.update({
-          where: { pur_id: purId },
-          data: { dept_id: effectiveDeptId, updated_by: BigInt(userId), updated_at: new Date() },
-        });
-      }
-      if (approved)
-        await this.assertOrganizationScope(tx, app.org_id, effectiveDeptId, app.warehouse_id);
-      if (!approved) {
-        await tx.hspsi_purchase_approve.update({
-          where: { pur_id: purId },
-          data: {
-            approve_status: 2,
-            approve_comment: comment,
-            approve_by: BigInt(userId),
-            approve_date: new Date(),
-            updated_by: BigInt(userId),
-          },
-        });
-        await this.rollbackProductionShortageApplication(tx, purId, userId);
-        return { id, message: '已驳回，生产缺料已退回待处理' };
-      }
-      const existing = await tx.hspsi_purchase_order.count({
-        where: { pur_id: purId, deleted_at: null },
-      });
-      if (existing) throw new BadRequestException('该申请已生成采购订单');
-      const appLines = await tx.hspsi_purchase_approve_detail.findMany({
+      if (activeOa) throw new BadRequestException('该采购申请正在OA审批，不能在本系统审批');
+    }
+    if (app.status !== 1 || app.approve_status !== 0)
+      throw new BadRequestException('仅待审批申请可执行此操作');
+    const businessActorId = fromOa ? app.created_by : BigInt(userId);
+    let effectiveDeptId = app.dept_id;
+    if (approved && app.source_type === 'production_plan' && effectiveDeptId <= 0n) {
+      effectiveDeptId = await this.resolveProductionPurchaseDepartment(tx, app.org_id);
+      await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
+        data: { dept_id: effectiveDeptId, updated_by: BigInt(userId), updated_at: new Date() },
       });
-      if (approved) await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
-      const quantity = appLines.reduce((s, l) => s + l.qty, 0);
-      const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
-      const order = await tx.hspsi_purchase_order.create({
-        data: {
-          po_no: orderNo,
-          pur_id: purId,
-          org_id: app.org_id,
-          warehouse_id: app.warehouse_id,
-          dept_id: effectiveDeptId,
-          receiver_id: BigInt(userId),
-          vendor_id: 0n,
-          pcs_qty: quantity,
-          arrival_type: 1,
-          plan_arrival_date: new Date(),
-          delivery_type: 1,
-          delivery_no: '',
-          arrival_qty: 0,
-          is_all_arrival: 0,
-          pay_amout: new Prisma.Decimal(0),
-          pay_type: 1,
-          plan_pay_date: null,
-          pay_amount_done: 0,
-          pay_status: 0,
-          status: 1,
-          approve_status: 0,
-          approve_comment: '',
-          approve_by: 0n,
-          remark: String(app.remark ?? ''),
-          created_by: BigInt(userId),
-          updated_by: BigInt(userId),
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-      const poId = order.po_id;
-      await tx.hspsi_purchase_order_detail.createMany({
-        data: appLines.map((line) => ({
-          po_id: poId,
-          goods_id: line.goods_id,
-          sku_id: line.sku_id,
-          qty: line.qty,
-          actual_qty: 0,
-          cancel_qty: 0,
-          unit_type: line.unit_type,
-          unit_price: new Prisma.Decimal(0),
-          total_amout: new Prisma.Decimal(0),
-          remark: line.remark,
-        })),
-      });
-      await this.assertProductionShortageOrderCapacity(tx, purId);
-      await this.documentTrace.link(
-        {
-          upstreamType: 'purchase_application',
-          upstreamId: id,
-          upstreamNo: app.pur_no,
-          downstreamType: 'purchase_order',
-          downstreamId: poId,
-          downstreamNo: orderNo,
-          createdBy: userId,
-        },
-        tx,
-      );
+    }
+    if (approved)
+      await this.assertOrganizationScope(tx, app.org_id, effectiveDeptId, app.warehouse_id);
+    if (!approved) {
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
         data: {
-          approve_status: 1,
+          approve_status: 2,
           approve_comment: comment,
           approve_by: BigInt(userId),
           approve_date: new Date(),
           updated_by: BigInt(userId),
         },
       });
-      return { id, orderId: poId, orderNo, message: '审批通过，已自动生成采购订单' };
+      await this.rollbackProductionShortageApplication(tx, purId, userId);
+      return { id, message: '已驳回，生产缺料已退回待处理' };
+    }
+    const existing = await tx.hspsi_purchase_order.count({
+      where: { pur_id: purId, deleted_at: null },
     });
+    if (existing) throw new BadRequestException('该申请已生成采购订单');
+    const appLines = await tx.hspsi_purchase_approve_detail.findMany({
+      where: { pur_id: purId },
+    });
+    if (approved) await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
+    const quantity = appLines.reduce((s, l) => s + l.qty, 0);
+    const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
+    const order = await tx.hspsi_purchase_order.create({
+      data: {
+        po_no: orderNo,
+        pur_id: purId,
+        org_id: app.org_id,
+        warehouse_id: app.warehouse_id,
+        dept_id: effectiveDeptId,
+        receiver_id: businessActorId,
+        vendor_id: 0n,
+        pcs_qty: quantity,
+        arrival_type: 1,
+        plan_arrival_date: new Date(),
+        delivery_type: 1,
+        delivery_no: '',
+        arrival_qty: 0,
+        is_all_arrival: 0,
+        pay_amout: new Prisma.Decimal(0),
+        pay_type: 1,
+        plan_pay_date: null,
+        pay_amount_done: 0,
+        pay_status: 0,
+        status: 1,
+        approve_status: 0,
+        approve_comment: '',
+        approve_by: 0n,
+        remark: String(app.remark ?? ''),
+        created_by: businessActorId,
+        updated_by: businessActorId,
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+    const poId = order.po_id;
+    await tx.hspsi_purchase_order_detail.createMany({
+      data: appLines.map((line) => ({
+        po_id: poId,
+        goods_id: line.goods_id,
+        sku_id: line.sku_id,
+        qty: line.qty,
+        actual_qty: 0,
+        cancel_qty: 0,
+        unit_type: line.unit_type,
+        unit_price: new Prisma.Decimal(0),
+        total_amout: new Prisma.Decimal(0),
+        remark: line.remark,
+      })),
+    });
+    await this.assertProductionShortageOrderCapacity(tx, purId);
+    await this.documentTrace.link(
+      {
+        upstreamType: 'purchase_application',
+        upstreamId: id,
+        upstreamNo: app.pur_no,
+        downstreamType: 'purchase_order',
+        downstreamId: poId,
+        downstreamNo: orderNo,
+        createdBy: String(businessActorId),
+      },
+      tx,
+    );
+    await tx.hspsi_purchase_approve.update({
+      where: { pur_id: purId },
+      data: {
+        approve_status: 1,
+        approve_comment: comment,
+        approve_by: BigInt(userId),
+        approve_date: new Date(),
+        updated_by: BigInt(userId),
+      },
+    });
+    return { id, orderId: poId, orderNo, message: '审批通过，已自动生成采购订单' };
+  }
+
+  async handleApplicationOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    callbackLogId: bigint,
+  ) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'purchase_application',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的采购申请OA审批实例');
+
+    return this.guardedTransaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const application = await tx.hspsi_purchase_approve.findFirst({
+        where: { pur_id: current.business_id, deleted_at: null },
+      });
+      if (!application) throw new NotFoundException('OA审批对应的采购申请不存在');
+      const expectedStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const duplicate =
+        current.proc_status === payload.procStatus && application.approve_status === expectedStatus;
+      let result: Record<string, unknown> = { id: String(application.pur_id) };
+      if (!duplicate) {
+        result = await this.applyApplicationApproval(
+          tx,
+          application.pur_id,
+          payload.procStatus === 'PASSED',
+          this.oaApprovalComment(payload.procStatus),
+          '0',
+          true,
+        );
+      }
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: callbackLogId },
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '采购申请审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        applicationId: application.pur_id,
+        procStatus: payload.procStatus,
+        ...result,
+      };
+    });
+  }
+
+  private oaApprovalComment(status: ApprovalCallbackPayload['procStatus']) {
+    return (
+      {
+        PASSED: 'OA审批通过',
+        REJECTED: 'OA审批驳回',
+        CANCELED: 'OA审批取消',
+        DELETED: 'OA审批流程删除',
+      }[status] ?? `OA审批状态：${status}`
+    );
   }
   async removeApplication(id: string, userId: string) {
     const purId = BigInt(id);
@@ -2764,137 +2880,239 @@ export class PurchaseService {
   }
   async approveReturn(id: string, approved: boolean, comment: string, userId: string) {
     const exitId = BigInt(id);
-    await this.guardedTransaction(async (tx) => {
-      await tx.$queryRaw`SELECT po_exit_id FROM hspsi_purchase_order_input_exit WHERE po_exit_id=${exitId} FOR UPDATE`;
-      const item = await tx.hspsi_purchase_order_input_exit.findFirst({
+    return this.guardedTransaction((tx) =>
+      this.applyReturnApproval(tx, exitId, approved, comment, userId, false),
+    );
+  }
+
+  private async applyReturnApproval(
+    tx: Prisma.TransactionClient,
+    exitId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(exitId);
+    await tx.$queryRaw`SELECT po_exit_id FROM hspsi_purchase_order_input_exit WHERE po_exit_id=${exitId} FOR UPDATE`;
+    const item = await tx.hspsi_purchase_order_input_exit.findFirst({
+      where: { po_exit_id: exitId, deleted_at: null },
+    });
+    if (item && !fromOa) {
+      const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'purchase_return',
+          business_id: exitId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (activeOa) throw new BadRequestException('该采购退货正在OA审批，不能在本系统审批');
+    }
+    if (!item || !item.status || item.approve_status !== 0)
+      throw new BadRequestException('仅待审批退货可操作');
+    const businessActorId = fromOa ? item.created_by : BigInt(userId);
+    const businessActor = String(businessActorId);
+    const returnNo = item.po_exit_no;
+    if (approved) {
+      await tx.$queryRaw`SELECT po_input_id FROM hspsi_purchase_order_input WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM hspsi_purchase_order_input_detail WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
+      const receipt = await tx.hspsi_purchase_order_input.findFirst({
+        where: { po_input_id: item.po_input_id, deleted_at: null },
+      });
+      if (!receipt || receipt.comfirm_status !== 1)
+        throw new BadRequestException('来源采购入库单不存在或已撤销确认');
+      const details = await tx.hspsi_purchase_order_input_exit_detail.findMany({
         where: { po_exit_id: exitId, deleted_at: null },
       });
-      if (!item || !item.status || item.approve_status !== 0)
-        throw new BadRequestException('仅待审批退货可操作');
-      const returnNo = item.po_exit_no;
-      if (approved) {
-        await tx.$queryRaw`SELECT po_input_id FROM hspsi_purchase_order_input WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
-        await tx.$queryRaw`SELECT id FROM hspsi_purchase_order_input_detail WHERE po_input_id=${item.po_input_id} FOR UPDATE`;
-        const receipt = await tx.hspsi_purchase_order_input.findFirst({
-          where: { po_input_id: item.po_input_id, deleted_at: null },
-        });
-        if (!receipt || receipt.comfirm_status !== 1)
-          throw new BadRequestException('来源采购入库单不存在或已撤销确认');
-        const details = await tx.hspsi_purchase_order_input_exit_detail.findMany({
-          where: { po_exit_id: exitId, deleted_at: null },
-        });
-        const sourceDetails = await tx.hspsi_purchase_order_input_detail.findMany({
-          where: { po_input_id: item.po_input_id, deleted_at: null },
-        });
-        const approvedHeaders = await tx.hspsi_purchase_order_input_exit.findMany({
-          where: {
-            po_input_id: item.po_input_id,
-            approve_status: 1,
-            deleted_at: null,
-            NOT: { po_exit_id: exitId },
-          },
-          select: { po_exit_id: true },
-        });
-        const approvedDetails = approvedHeaders.length
-          ? await tx.hspsi_purchase_order_input_exit_detail.findMany({
-              where: {
-                po_exit_id: { in: approvedHeaders.map((header) => header.po_exit_id) },
-                deleted_at: null,
-              },
-            })
-          : [];
-        const sourceQty = new Map<string, number>(),
-          approvedQty = new Map<string, number>(),
-          currentQty = new Map<string, number>();
-        for (const line of sourceDetails) {
-          const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
-          sourceQty.set(key, (sourceQty.get(key) ?? 0) + Number(line.input_qty));
-        }
-        for (const line of approvedDetails) {
-          const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
-          approvedQty.set(key, (approvedQty.get(key) ?? 0) + Number(line.exit_qty));
-        }
-        for (const line of details) {
-          const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`,
-            qty = Number(line.exit_qty);
-          if (!(qty > 0)) throw new BadRequestException('采购退货数量必须大于0');
-          currentQty.set(key, (currentQty.get(key) ?? 0) + qty);
-        }
-        for (const [key, qty] of currentQty) {
-          const allowed = sourceQty.get(key);
-          if (allowed === undefined)
-            throw new BadRequestException('采购退货商品、SKU及批次必须来自来源入库单');
-          if ((approvedQty.get(key) ?? 0) + qty > allowed + 0.000001)
-            throw new BadRequestException('累计采购退货数量超过来源确认入库数量');
-        }
-        await this.documentTrace.link(
-          {
-            upstreamType: 'purchase_receipt',
-            upstreamId: receipt.po_input_id,
-            upstreamNo: receipt.po_input_no,
-            downstreamType: 'purchase_return',
-            downstreamId: item.po_exit_id,
-            downstreamNo: returnNo,
-            createdBy: userId,
-          },
-          tx,
-        );
-        await this.inventoryPosting.post(
-          {
-            orgId: receipt.org_id,
-            warehouseId: receipt.warehouse_id,
-            direction: -1,
-            operationType: 2,
-            inventoryMode: INVENTORY_BUSINESS_MODE.PURCHASE_RETURN,
-            sourceId: item.po_exit_id,
-            sourceType: 'purchase_return',
-            sourceNo: returnNo,
-            operationBy: userId,
-            idempotencyKey: `purchase-return:${id}`,
-            remark: '采购退货审批过账',
-            lines: details.map((line) => ({
-              goodsId: line.goods_id,
-              skuId: line.sku_id,
-              batchNo: line.batch_no,
-              unitType: Number(line.unit_type),
-              quantity: String(line.exit_qty),
-            })),
-          },
-          tx,
-        );
+      const sourceDetails = await tx.hspsi_purchase_order_input_detail.findMany({
+        where: { po_input_id: item.po_input_id, deleted_at: null },
+      });
+      const approvedHeaders = await tx.hspsi_purchase_order_input_exit.findMany({
+        where: {
+          po_input_id: item.po_input_id,
+          approve_status: 1,
+          deleted_at: null,
+          NOT: { po_exit_id: exitId },
+        },
+        select: { po_exit_id: true },
+      });
+      const approvedDetails = approvedHeaders.length
+        ? await tx.hspsi_purchase_order_input_exit_detail.findMany({
+            where: {
+              po_exit_id: { in: approvedHeaders.map((header) => header.po_exit_id) },
+              deleted_at: null,
+            },
+          })
+        : [];
+      const sourceQty = new Map<string, number>(),
+        approvedQty = new Map<string, number>(),
+        currentQty = new Map<string, number>();
+      for (const line of sourceDetails) {
+        const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
+        sourceQty.set(key, (sourceQty.get(key) ?? 0) + Number(line.input_qty));
       }
-      await tx.hspsi_purchase_order_input_exit.update({
-        where: { po_exit_id: item.po_exit_id },
+      for (const line of approvedDetails) {
+        const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`;
+        approvedQty.set(key, (approvedQty.get(key) ?? 0) + Number(line.exit_qty));
+      }
+      for (const line of details) {
+        const key = `${line.goods_id}:${line.sku_id}:${line.batch_no}`,
+          qty = Number(line.exit_qty);
+        if (!(qty > 0)) throw new BadRequestException('采购退货数量必须大于0');
+        currentQty.set(key, (currentQty.get(key) ?? 0) + qty);
+      }
+      for (const [key, qty] of currentQty) {
+        const allowed = sourceQty.get(key);
+        if (allowed === undefined)
+          throw new BadRequestException('采购退货商品、SKU及批次必须来自来源入库单');
+        if ((approvedQty.get(key) ?? 0) + qty > allowed + 0.000001)
+          throw new BadRequestException('累计采购退货数量超过来源确认入库数量');
+      }
+      await this.documentTrace.link(
+        {
+          upstreamType: 'purchase_receipt',
+          upstreamId: receipt.po_input_id,
+          upstreamNo: receipt.po_input_no,
+          downstreamType: 'purchase_return',
+          downstreamId: item.po_exit_id,
+          downstreamNo: returnNo,
+          createdBy: businessActor,
+        },
+        tx,
+      );
+      await this.inventoryPosting.post(
+        {
+          orgId: receipt.org_id,
+          warehouseId: receipt.warehouse_id,
+          direction: -1,
+          operationType: 2,
+          inventoryMode: INVENTORY_BUSINESS_MODE.PURCHASE_RETURN,
+          sourceId: item.po_exit_id,
+          sourceType: 'purchase_return',
+          sourceNo: returnNo,
+          operationBy: businessActor,
+          idempotencyKey: `purchase-return:${id}`,
+          remark: '采购退货审批过账',
+          lines: details.map((line) => ({
+            goodsId: line.goods_id,
+            skuId: line.sku_id,
+            batchNo: line.batch_no,
+            unitType: Number(line.unit_type),
+            quantity: String(line.exit_qty),
+          })),
+        },
+        tx,
+      );
+    }
+    await tx.hspsi_purchase_order_input_exit.update({
+      where: { po_exit_id: item.po_exit_id },
+      data: {
+        approve_status: approved ? 1 : 2,
+        approve_comment: comment,
+        approve_by: fromOa ? 0n : BigInt(userId),
+        approve_date: new Date(),
+        updated_by: BigInt(userId),
+      },
+    });
+    if (
+      !approved &&
+      item.auto_created === 1 &&
+      item.source_document_type === 'inventory_loss' &&
+      item.source_document_id
+    ) {
+      await tx.hspsi_inventory_loss.updateMany({
+        where: { loss_id: item.source_document_id, deleted_at: null },
         data: {
-          approve_status: approved ? 1 : 2,
-          approve_comment: comment,
-          approve_by: BigInt(userId),
-          approve_date: new Date(),
+          status: 1,
+          approve_status: 0,
+          approve_comment: `自动采购退货单${returnNo}被驳回，已恢复待审批`,
           updated_by: BigInt(userId),
         },
       });
-      if (
-        !approved &&
-        item.auto_created === 1 &&
-        item.source_document_type === 'inventory_loss' &&
-        item.source_document_id
-      ) {
-        await tx.hspsi_inventory_loss.updateMany({
-          where: { loss_id: item.source_document_id, deleted_at: null },
-          data: {
-            status: 1,
-            approve_status: 0,
-            approve_comment: `自动采购退货单${returnNo}被驳回，已恢复待审批`,
-            updated_by: BigInt(userId),
-          },
-        });
-      }
-      if (approved) {
-        await this.recalcOrderStatus(tx, item.po_id);
-        await this.createRefundTask(tx, item.po_exit_id, userId);
-      }
-    });
+    }
+    if (approved) {
+      await this.recalcOrderStatus(tx, item.po_id);
+      await this.createRefundTask(tx, item.po_exit_id, businessActor);
+    }
     return { id, message: approved ? '退货审批通过，库存已扣减' : '退货已驳回' };
+  }
+
+  async handleReturnOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    callbackLogId: bigint,
+  ) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'purchase_return',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的采购退货OA审批实例');
+    return this.guardedTransaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const document = await tx.hspsi_purchase_order_input_exit.findFirst({
+        where: { po_exit_id: current.business_id, deleted_at: null },
+      });
+      if (!document) throw new NotFoundException('OA审批对应的采购退货不存在');
+      const expectedStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const duplicate =
+        current.proc_status === payload.procStatus && document.approve_status === expectedStatus;
+      if (!duplicate) {
+        await this.applyReturnApproval(
+          tx,
+          document.po_exit_id,
+          payload.procStatus === 'PASSED',
+          this.oaApprovalComment(payload.procStatus),
+          '0',
+          true,
+        );
+      }
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: callbackLogId },
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '采购退货审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        returnId: document.po_exit_id,
+        procStatus: payload.procStatus,
+      };
+    });
   }
   async removeReturn(id: string, userId: string) {
     const item = await this.returnDetail(id);

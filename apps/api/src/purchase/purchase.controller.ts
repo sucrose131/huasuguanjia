@@ -16,10 +16,17 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { PurchaseService } from './purchase.service';
+import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
+import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
 export class PurchaseController {
-  constructor(@Inject(PurchaseService) private service: PurchaseService) {}
+  constructor(
+    @Inject(PurchaseService) private service: PurchaseService,
+    @Inject(PurchaseOaApprovalService) private oaApproval: PurchaseOaApprovalService,
+    @Inject(PurchaseReturnOaApprovalService)
+    private returnOaApproval: PurchaseReturnOaApprovalService,
+  ) {}
   @RequirePermissions('purchase')
   @Get(':resource/:id/operation-history')
   operationHistory(@Param('resource') resource: string, @Param('id') id: string) {
@@ -51,8 +58,18 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/submit')
-  submitApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.service.submitApplication(id, u.id);
+  async submitApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    await this.service.submitApplication(id, u.id);
+    const oa = await this.oaApproval.submit(BigInt(id), u.id);
+    return {
+      id,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购申请已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购申请已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/approve')
@@ -164,13 +181,23 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('receipts/:id/return')
-  executeReceiptReturn(
+  async executeReceiptReturn(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
     // 兼容旧入口，但只创建并提交审批，不再允许绕过OA/审批直接扣减库存。
-    return this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true);
+    const saved = await this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true);
+    const oa = await this.returnOaApproval.submit(saved.id, u.id);
+    return {
+      ...saved,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购退货已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购退货已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Delete('receipts/:id')
@@ -203,8 +230,18 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('returns/:id/submit')
-  submitReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.service.submitReturn(id, u.id);
+  async submitReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    await this.service.submitReturn(id, u.id);
+    const oa = await this.returnOaApproval.submit(BigInt(id), u.id);
+    return {
+      id,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购退货已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购退货已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Post('returns/:id/approve')
