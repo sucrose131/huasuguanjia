@@ -1426,8 +1426,22 @@ export class HuasuHomeOrderSyncService {
     kind: 'status' | 'after_sales',
     eventStatus?: number,
   ): string {
-    if (kind === 'after_sales' && eventStatus === 3) {
-      return this.clip(order.cancel_reason ?? '', 255);
+    if (kind === 'after_sales') {
+      if (eventStatus === 3) {
+        return this.clip(order.cancel_reason ?? '', 255);
+      }
+      const as = order.after_sales;
+      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
+    }
+    // kind === 'status'：售后相关状态优先取 after_sales.reason
+    const status = Number(order.order_status);
+    if (
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
+      status === HUASU_HOME_ORDER_STATUS.REFUNDED
+    ) {
+      const as = order.after_sales;
+      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
     }
     return this.clip(order.remark ?? '', 255);
   }
