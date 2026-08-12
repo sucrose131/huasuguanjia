@@ -57,6 +57,15 @@ export class PurchaseService {
       throw new BadRequestException(`${label}必须为${allowZero ? '非负' : '正'}整数`);
     return quantity;
   }
+  private orderLineUnitPrice(line: {
+    qty: number;
+    unit_price: Prisma.Decimal | number;
+    total_amout?: Prisma.Decimal | number | null;
+  }) {
+    const quantity = Number(line.qty);
+    const total = line.total_amout == null ? null : new Prisma.Decimal(line.total_amout);
+    return quantity > 0 && total ? total.div(quantity) : new Prisma.Decimal(line.unit_price);
+  }
   private date(value: unknown, label: string) {
     const result = new Date(String(value ?? ''));
     if (Number.isNaN(result.getTime())) throw new BadRequestException(`${label}格式无效`);
@@ -413,10 +422,7 @@ export class PurchaseService {
     ]);
     if (!order) throw new NotFoundException('采购订单不存在');
     const priceByGoods = new Map(
-      orderLines.map((line) => [
-        `${line.goods_id}:${line.sku_id}`,
-        new Prisma.Decimal(line.unit_price),
-      ]),
+      orderLines.map((line) => [`${line.goods_id}:${line.sku_id}`, this.orderLineUnitPrice(line)]),
     );
     const amountOf = (lines: Array<{ goods_id: bigint; sku_id: bigint; exit_qty: number }>) =>
       lines.reduce((sum, line) => {
@@ -757,7 +763,7 @@ export class PurchaseService {
     const lines = records.length
       ? await this.prisma.hspsi_purchase_approve_detail.findMany({
           where: { pur_id: { in: records.map((item) => item.pur_id) } },
-          select: { pur_id: true, qty: true, reference_price: true },
+          select: { pur_id: true, qty: true },
         })
       : [];
     const items = records.map((item) => {
@@ -770,10 +776,6 @@ export class PurchaseService {
         reason: item.pur_reson,
         warehouseId: item.warehouse_id,
         quantity: itemLines.reduce((sum, line) => sum + line.qty, 0),
-        referenceAmount: itemLines.reduce(
-          (sum, line) => sum + line.qty * Number(line.reference_price),
-          0,
-        ),
         status: item.status,
         approveStatus: item.approve_status,
         approveComment: item.approve_comment,
@@ -818,7 +820,6 @@ export class PurchaseService {
         sourceShortageId: item.source_shortage_id,
         quantity: item.qty,
         unitType: item.unit_type,
-        referencePrice: item.reference_price,
         remark: item.remark,
       })),
     };
@@ -880,7 +881,7 @@ export class PurchaseService {
           sku_id: BigInt(String(line.skuId)),
           qty: Number(line.quantity),
           unit_type: Number(line.unitType),
-          reference_price: new Prisma.Decimal(String(line.referencePrice ?? 0)),
+          reference_price: new Prisma.Decimal(0),
           remark: String(line.remark ?? ''),
         })),
       });
@@ -959,7 +960,6 @@ export class PurchaseService {
       });
       if (approved) await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
       const quantity = appLines.reduce((s, l) => s + l.qty, 0);
-      const total = appLines.reduce((s, l) => s + l.qty * Number(l.reference_price), 0);
       const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
       const order = await tx.hspsi_purchase_order.create({
         data: {
@@ -977,7 +977,7 @@ export class PurchaseService {
           delivery_no: '',
           arrival_qty: 0,
           is_all_arrival: 0,
-          pay_amout: new Prisma.Decimal(total),
+          pay_amout: new Prisma.Decimal(0),
           pay_type: 1,
           plan_pay_date: null,
           pay_amount_done: 0,
@@ -1003,8 +1003,8 @@ export class PurchaseService {
           actual_qty: 0,
           cancel_qty: 0,
           unit_type: line.unit_type,
-          unit_price: line.reference_price,
-          total_amout: new Prisma.Decimal(line.qty * Number(line.reference_price)),
+          unit_price: new Prisma.Decimal(0),
+          total_amout: new Prisma.Decimal(0),
           remark: line.remark,
         })),
       });
@@ -1096,10 +1096,7 @@ export class PurchaseService {
     return {
       items: items.map((item) => {
         const lines = details.filter((line) => line.po_id === item.po_id);
-        const detailAmount = lines.reduce(
-          (sum, line) => sum + Number(line.qty) * Number(line.unit_price),
-          0,
-        );
+        const detailAmount = lines.reduce((sum, line) => sum + Number(line.total_amout), 0);
         const totalCancelQty = lines.reduce((sum, line) => sum + Number(line.cancel_qty), 0);
         const vendor = vendors.find((v) => v.vendor_id === item.vendor_id);
         const position = positionMap.get(String(item.po_id));
@@ -1196,10 +1193,7 @@ export class PurchaseService {
         .filter((item) => item.comfirm_status === 1)
         .map((item) => String(item.po_input_id)),
     );
-    const detailAmount = details.reduce(
-      (sum, line) => sum + Number(line.qty) * Number(line.unit_price),
-      0,
-    );
+    const detailAmount = details.reduce((sum, line) => sum + Number(line.total_amout), 0);
     const position = await this.purchaseMoneyPosition(this.prisma, header.po_id);
     return {
       ...header,
@@ -1250,7 +1244,7 @@ export class PurchaseService {
           latestArrivalDate,
           unitType: line.unit_type,
           unitPrice: line.unit_price,
-          totalAmount: Number(line.qty) * Number(line.unit_price),
+          totalAmount: Number(line.total_amout),
           remark: line.remark,
         };
       }),
@@ -1308,11 +1302,22 @@ export class PurchaseService {
         };
       });
     }
-    for (const line of effectiveLines) this.quantity(line.quantity, '采购数量');
-    const quantity = effectiveLines.reduce((sum, line) => sum + Number(line.quantity), 0);
-    const total = effectiveLines.reduce(
-      (sum, line) => sum + Number(line.quantity) * Number(line.unitPrice),
-      0,
+    const pricedLines: Body[] = effectiveLines.map((line) => {
+      const quantity = this.quantity(line.quantity, '采购数量');
+      const totalAmount = new Prisma.Decimal(String(line.totalAmount ?? 0));
+      if (!totalAmount.isFinite() || totalAmount.lessThanOrEqualTo(0))
+        throw new BadRequestException('采购明细总价必须大于0');
+      return {
+        ...line,
+        quantity,
+        totalAmount,
+        unitPrice: totalAmount.div(quantity).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
+      };
+    });
+    const quantity = pricedLines.reduce((sum, line) => sum + line.quantity, 0);
+    const total = pricedLines.reduce<Prisma.Decimal>(
+      (sum, line) => sum.plus(line.totalAmount as Prisma.Decimal),
+      new Prisma.Decimal(0),
     );
     const currentPaymentAmount = new Prisma.Decimal(String(body.currentPaymentAmount ?? 0));
     if (currentPaymentAmount.lessThan(0)) throw new BadRequestException('本次付款金额不能小于 0');
@@ -1334,7 +1339,7 @@ export class PurchaseService {
       plan_arrival_date: this.date(body.planArrivalDate, '计划到货日'),
       delivery_type: Number(body.deliveryType),
       delivery_no: String(body.deliveryNo ?? ''),
-      pay_amout: new Prisma.Decimal(total),
+      pay_amout: total,
       pay_type: Number(body.paymentType),
       plan_pay_date: this.optionalDate(body.planPayDate, '计划付款日'),
       status: 1,
@@ -1343,9 +1348,9 @@ export class PurchaseService {
       updated_at: new Date(),
     };
     return this.guardedTransaction(async (tx) => {
-      await this.materializeQuickCatalog(tx, effectiveLines, userId);
+      await this.materializeQuickCatalog(tx, pricedLines, userId);
       await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
-      await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, effectiveLines);
+      await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, pricedLines);
       await this.assertDictionaryValue(tx, 'purchase_settlement_type', data.pay_type, '结算方式');
       if (id) {
         await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${poId} FOR UPDATE`;
@@ -1399,15 +1404,15 @@ export class PurchaseService {
       }
       await tx.hspsi_purchase_order_detail.deleteMany({ where: { po_id: poId } });
       await tx.hspsi_purchase_order_detail.createMany({
-        data: effectiveLines.map((line) => ({
+        data: pricedLines.map((line) => ({
           po_id: poId,
           goods_id: BigInt(String(line.goodsId)),
           sku_id: BigInt(String(line.skuId)),
           qty: Number(line.quantity),
           actual_qty: 0,
           unit_type: Number(line.unitType),
-          unit_price: new Prisma.Decimal(String(line.unitPrice)),
-          total_amout: new Prisma.Decimal(Number(line.quantity) * Number(line.unitPrice)),
+          unit_price: line.unitPrice,
+          total_amout: line.totalAmount,
           remark: String(line.remark ?? ''),
         })),
       });
@@ -1474,7 +1479,7 @@ export class PurchaseService {
             sku_id: BigInt(String(line.skuId)),
             qty: Number(line.quantity),
             unit_type: Number(line.unitType),
-            reference_price: new Prisma.Decimal(String(line.unitPrice)),
+            reference_price: new Prisma.Decimal(0),
             remark: String(line.remark ?? ''),
           })),
         });
@@ -1522,6 +1527,8 @@ export class PurchaseService {
       if (!vendor) throw new BadRequestException('所选供应商不存在或已停用');
       const lines = await tx.hspsi_purchase_order_detail.findMany({ where: { po_id: poId } });
       if (!lines.length) throw new BadRequestException('采购订单至少需要一条明细');
+      if (lines.some((line) => Number(line.total_amout) <= 0))
+        throw new BadRequestException('请先填写所有采购明细总价并保存订单');
       await this.assertOrganizationScope(tx, order.org_id, order.dept_id, order.warehouse_id);
       await this.assertPurchaseWarehouse(tx, order.org_id, order.warehouse_id, lines);
       let applicationId = order.pur_id;
@@ -1565,7 +1572,7 @@ export class PurchaseService {
             sku_id: line.sku_id,
             qty: line.qty,
             unit_type: line.unit_type,
-            reference_price: line.unit_price,
+            reference_price: new Prisma.Decimal(0),
             remark: line.remark,
           })),
         });
@@ -2094,7 +2101,7 @@ export class PurchaseService {
             sku_id: BigInt(String(line.skuId)),
             qty: Number(line.inputQuantity),
             unit_type: Number(line.unitType),
-            reference_price: new Prisma.Decimal(String(line.unitPrice ?? 0)),
+            reference_price: new Prisma.Decimal(0),
             remark: String(line.remark ?? ''),
           })),
         });
@@ -3233,10 +3240,7 @@ export class PurchaseService {
     ]);
     if (!order) throw new NotFoundException('采购订单不存在');
     const priceByGoods = new Map(
-      orderLines.map((line) => [
-        `${line.goods_id}:${line.sku_id}`,
-        new Prisma.Decimal(line.unit_price),
-      ]),
+      orderLines.map((line) => [`${line.goods_id}:${line.sku_id}`, this.orderLineUnitPrice(line)]),
     );
     const returnLines = returns.length
       ? await tx.hspsi_purchase_order_input_exit_detail.findMany({

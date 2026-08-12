@@ -5,10 +5,12 @@ const props = withDefaults(
   defineProps<{
     modelValue?: string;
     disabled?: boolean;
+    hasStoredSignature?: boolean;
   }>(),
   {
     modelValue: '',
     disabled: false,
+    hasStoredSignature: false,
   },
 );
 const emit = defineEmits<{ (event: 'update:modelValue', value: string): void }>();
@@ -111,7 +113,13 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
       @pointercancel.prevent="finish"
     />
     <div class="signature-actions">
-      <span>{{ modelValue ? '已签字' : '请领用人在框内签字确认' }}</span>
+      <span>{{
+        modelValue
+          ? '已签字'
+          : hasStoredSignature
+            ? '签名已保存至OSS，可在附件区预览'
+            : '请领用人在框内签字确认'
+      }}</span>
       <el-button v-if="!disabled" link type="danger" @click="clear">清除重签</el-button>
     </div>
   </div>

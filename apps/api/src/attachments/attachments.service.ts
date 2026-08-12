@@ -14,7 +14,15 @@ import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
 
 type Workflow = 'approval' | 'confirm' | 'plain' | 'completed' | 'bom-return';
-type Attachment = {
+export type OaUploadCache = {
+  accountSetId: string;
+  fileId: string;
+  objectKey: string;
+  uploadedAt: string;
+  size: number;
+};
+
+export type Attachment = {
   id: string;
   objectKey: string;
   fileName: string;
@@ -22,6 +30,8 @@ type Attachment = {
   size: number;
   uploadedBy: string;
   uploadedAt: string;
+  category?: 'signature';
+  oaUploads?: OaUploadCache[];
 };
 export type DocumentConfig = {
   table: string;
@@ -254,13 +264,9 @@ export class AttachmentsService {
     const configuredExtensions = csv(this.config.get('OSS_ALLOWED_EXTENSIONS')).map((item) =>
       item.startsWith('.') ? item : `.${item}`,
     );
-    this.allowedTypes = new Set(
-      configuredTypes.length ? configuredTypes : DEFAULT_ALLOWED_TYPES,
-    );
+    this.allowedTypes = new Set(configuredTypes.length ? configuredTypes : DEFAULT_ALLOWED_TYPES);
     this.allowedExtensions = new Set(
-      configuredExtensions.length
-        ? configuredExtensions
-        : Object.values(EXTENSIONS_BY_TYPE).flat(),
+      configuredExtensions.length ? configuredExtensions : Object.values(EXTENSIONS_BY_TYPE).flat(),
     );
     this.client =
       region && bucket && accessKeyId && accessKeySecret
@@ -317,6 +323,17 @@ export class AttachmentsService {
     return { config, row: rows[0], attachments: this.attachments(rows[0].attachments) };
   }
 
+  private async integrationRow(type: string, id: string, db: any = this.prisma, lock = false) {
+    const config = this.document(type);
+    if (!/^\d+$/.test(id)) throw new BadRequestException('单据ID无效');
+    const rows = await db.$queryRawUnsafe(
+      `SELECT * FROM \`${config.table}\` WHERE \`${config.id}\` = ? AND deleted_at IS NULL LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
+      BigInt(id),
+    );
+    if (!rows[0]) throw new NotFoundException('业务单据不存在');
+    return { config, attachments: this.attachments(rows[0].attachments) };
+  }
+
   private state(config: DocumentConfig, row: any) {
     if (config.workflow === 'completed') return 'approved';
     if (config.workflow === 'bom-return') {
@@ -370,6 +387,79 @@ export class AttachmentsService {
         extensions: [...this.allowedExtensions],
       },
     };
+  }
+
+  /** 仅供后端业务集成读取附件元数据，不绕过面向用户的权限接口。 */
+  async listForIntegration(type: string, id: string): Promise<Attachment[]> {
+    return (await this.integrationRow(type, id)).attachments;
+  }
+
+  /** 将 OSS 原件下载到调用方创建的临时文件；不会删除或移动 OSS 原件。 */
+  async downloadToFileForIntegration(objectKey: string, targetPath: string): Promise<void> {
+    if (!objectKey.startsWith('documents/')) throw new BadRequestException('附件对象标识无效');
+    await this.oss().get(objectKey, targetPath);
+  }
+
+  /** 将画布签名直接写入 OSS，返回可并入业务单据 attachments JSON 的元数据。 */
+  async uploadSignatureDataUrlForIntegration(
+    type: string,
+    dataUrl: string,
+    uploadedBy: string,
+  ): Promise<Attachment> {
+    this.document(type);
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+    if (!match) throw new BadRequestException('签名图片格式无效，仅支持PNG签名');
+    const buffer = Buffer.from(match[1]!, 'base64');
+    if (!buffer.length || buffer.length > this.maxSize) {
+      throw new BadRequestException('签名图片为空或超过附件大小限制');
+    }
+    const id = randomUUID();
+    const objectKey = `documents/${type}/signatures/${id}.png`;
+    await this.oss().put(objectKey, buffer, { headers: { 'Content-Type': 'image/png' } });
+    return {
+      id,
+      objectKey,
+      fileName: `领用人签名-${id}.png`,
+      contentType: 'image/png',
+      size: buffer.length,
+      uploadedBy,
+      uploadedAt: new Date().toISOString(),
+      category: 'signature',
+    };
+  }
+
+  /** 仅清理由当前请求上传、但尚未成功关联业务单据的 OSS 对象。 */
+  async discardUncommittedObjectForIntegration(objectKey: string): Promise<void> {
+    if (!objectKey.startsWith('documents/')) return;
+    await this.oss()
+      .delete(objectKey)
+      .catch(() => undefined);
+  }
+
+  /** 把 OA 文件标识缓存进原附件 JSON，便于同账套重试时复用。 */
+  async cacheOaUpload(
+    type: string,
+    id: string,
+    attachmentId: string,
+    cache: OaUploadCache,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const data = await this.integrationRow(type, id, tx, true);
+      const index = data.attachments.findIndex((item) => item.id === attachmentId);
+      if (index < 0) throw new NotFoundException('附件不存在');
+      const attachment = data.attachments[index]!;
+      if (attachment.size !== cache.size)
+        throw new BadRequestException('附件大小已变化，请重新上传OA');
+      const oaUploads = (attachment.oaUploads ?? []).filter(
+        (item) => item.accountSetId !== cache.accountSetId,
+      );
+      data.attachments[index] = { ...attachment, oaUploads: [...oaUploads, cache] };
+      await tx.$executeRawUnsafe(
+        `UPDATE \`${data.config.table}\` SET attachments = ? WHERE \`${data.config.id}\` = ?`,
+        JSON.stringify(data.attachments),
+        BigInt(id),
+      );
+    });
   }
 
   async createUploadUrl(type: string, id: string, body: Record<string, unknown>, user: AuthUser) {

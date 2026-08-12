@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile, writeFile } from 'node:fs/promises';
 import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 function createFixture(options: { existingStatus?: string; startError?: Error } = {}) {
@@ -100,6 +101,7 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
       .mockResolvedValue({ id: 1n, name: '华溯集团', appId: 'app', appSecret: 'secret' }),
   };
   const approvalService = {
+    uploadFile: vi.fn(),
     startFormProcess: options.startError
       ? vi.fn().mockRejectedValue(options.startError)
       : vi.fn().mockResolvedValue({
@@ -112,15 +114,22 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
           },
         }),
   };
+  const attachmentsService = {
+    listForIntegration: vi.fn().mockResolvedValue([]),
+    downloadToFileForIntegration: vi.fn(),
+    cacheOaUpload: vi.fn(),
+  };
   return {
     service: new RequisitionOaApprovalService(
       prisma as never,
       credentialService as never,
       approvalService as never,
+      attachmentsService as never,
     ),
     prisma,
     tx,
     approvalService,
+    attachmentsService,
   };
 }
 
@@ -171,5 +180,52 @@ describe('RequisitionOaApprovalService', () => {
         data: expect.objectContaining({ proc_status: 'PUSH_FAILED' }),
       }),
     );
+  });
+
+  it('downloads originals, uploads image and file controls, caches OA ids, then clears temp files', async () => {
+    const { service, approvalService, attachmentsService } = createFixture();
+    const localPaths: string[] = [];
+    attachmentsService.listForIntegration.mockResolvedValue([
+      {
+        id: 'image-1',
+        objectKey: 'documents/requisition_application/7/photo.png',
+        fileName: '现场.png',
+        contentType: 'image/png',
+        size: 3,
+        uploadedBy: '5',
+        uploadedAt: '2026-08-11T00:00:00.000Z',
+      },
+      {
+        id: 'file-1',
+        objectKey: 'documents/requisition_application/7/note.pdf',
+        fileName: '说明.pdf',
+        contentType: 'application/pdf',
+        size: 3,
+        uploadedBy: '5',
+        uploadedAt: '2026-08-11T00:00:00.000Z',
+      },
+    ]);
+    attachmentsService.downloadToFileForIntegration.mockImplementation(
+      async (_objectKey: string, localPath: string) => {
+        localPaths.push(localPath);
+        await writeFile(localPath, Buffer.from('abc'));
+      },
+    );
+    approvalService.uploadFile
+      .mockResolvedValueOnce({ body: { fileId: 'OA-IMAGE', objectKey: 'OA-IMAGE-KEY' } })
+      .mockResolvedValueOnce({ body: { fileId: 'OA-FILE', objectKey: 'OA-FILE-KEY' } });
+
+    const result = await service.submit(7n, '5');
+
+    expect(result.procStatus).toBe('RUNNING');
+    const formData = JSON.parse(approvalService.startFormProcess.mock.calls[0]![1].formData);
+    expect(formData.jie0xqxvlelg).toEqual([
+      { id: 'OA-IMAGE', objectKey: 'OA-IMAGE-KEY', name: '现场.png' },
+    ]);
+    expect(formData['9d9x9fg3tmg4']).toEqual([
+      { id: 'OA-FILE', objectKey: 'OA-FILE-KEY', name: '说明.pdf' },
+    ]);
+    expect(attachmentsService.cacheOaUpload).toHaveBeenCalledTimes(2);
+    await Promise.all(localPaths.map((path) => expect(readFile(path)).rejects.toThrow()));
   });
 });

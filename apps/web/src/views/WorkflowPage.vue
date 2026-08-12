@@ -2753,6 +2753,7 @@ watch(key, async () => {
           >
             <SignaturePad
               :model-value="form.signatureContent"
+              :has-stored-signature="Boolean(form.signatureAttachment)"
               :disabled="mode === 'view'"
               @update:model-value="signatureChanged"
             />

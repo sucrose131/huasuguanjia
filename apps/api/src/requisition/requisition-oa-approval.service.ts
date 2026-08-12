@@ -1,5 +1,9 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, join } from 'node:path';
+import { Attachment, AttachmentsService } from '../attachments/attachments.service';
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalService } from '../integrations/xinfutong-oa/approval/approval.service';
 import { XinfutongOaCredentialService } from '../integrations/xinfutong-oa/core/credential.service';
@@ -17,6 +21,8 @@ const OA_FIELDS = {
   details: '92c4it1x97yp',
   goodsName: '6a30y3q8ar2v',
   quantity: 'xn9kyuz6yi46',
+  images: 'jie0xqxvlelg',
+  attachments: '9d9x9fg3tmg4',
 } as const;
 
 type OaSubmissionResult = {
@@ -35,6 +41,8 @@ export class RequisitionOaApprovalService {
     private readonly credentialService: XinfutongOaCredentialService,
     @Inject(XinfutongOaApprovalService)
     private readonly approvalService: XinfutongOaApprovalService,
+    @Inject(AttachmentsService)
+    private readonly attachmentsService: AttachmentsService,
   ) {}
 
   async submit(drawId: bigint, userId: string): Promise<OaSubmissionResult> {
@@ -103,10 +111,15 @@ export class RequisitionOaApprovalService {
     }
 
     try {
+      const attachmentFields = await this.prepareOaAttachments(
+        drawId,
+        context.accountSetId,
+        credential,
+      );
       const commonParams = {
         formKey: FORM_KEY,
         busKey: context.busKey,
-        formData: JSON.stringify(context.formData),
+        formData: JSON.stringify({ ...context.formData, ...attachmentFields }),
         starterId: context.starterId,
         starterOrgId: context.starterOrgId,
       } as const;
@@ -149,6 +162,92 @@ export class RequisitionOaApprovalService {
         errorMessage: detail,
       };
     }
+  }
+
+  private async prepareOaAttachments(
+    drawId: bigint,
+    accountSetId: bigint,
+    credential: Parameters<XinfutongOaApprovalService['uploadFile']>[0],
+  ) {
+    const attachments = await this.attachmentsService.listForIntegration(
+      BUSINESS_TYPE,
+      String(drawId),
+    );
+    if (!attachments.length) return {};
+
+    const imageFiles: Array<{ id: string; objectKey: string; name: string }> = [];
+    const otherFiles: Array<{ id: string; objectKey: string; name: string }> = [];
+    const tempDirectory = await mkdtemp(join(tmpdir(), 'hspsi-oa-upload-'));
+    try {
+      for (const attachment of attachments) {
+        const cached = attachment.oaUploads?.find(
+          (item) =>
+            item.accountSetId === String(accountSetId) &&
+            item.size === attachment.size &&
+            item.fileId &&
+            item.objectKey,
+        );
+        let oaFile: { id: string; objectKey: string; name: string };
+        if (cached) {
+          oaFile = { id: cached.fileId, objectKey: cached.objectKey, name: attachment.fileName };
+        } else {
+          oaFile = await this.uploadAttachmentToOa(
+            drawId,
+            accountSetId,
+            attachment,
+            credential,
+            tempDirectory,
+          );
+        }
+        (this.isImage(attachment) ? imageFiles : otherFiles).push(oaFile);
+      }
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+    return {
+      ...(imageFiles.length ? { [OA_FIELDS.images]: imageFiles } : {}),
+      ...(otherFiles.length ? { [OA_FIELDS.attachments]: otherFiles } : {}),
+    };
+  }
+
+  private async uploadAttachmentToOa(
+    drawId: bigint,
+    accountSetId: bigint,
+    attachment: Attachment,
+    credential: Parameters<XinfutongOaApprovalService['uploadFile']>[0],
+    tempDirectory: string,
+  ) {
+    const localPath = join(tempDirectory, `${randomUUID()}${extname(attachment.fileName)}`);
+    await this.attachmentsService.downloadToFileForIntegration(attachment.objectKey, localPath);
+    const downloaded = await stat(localPath);
+    if (downloaded.size !== attachment.size) {
+      throw new Error(`附件 ${attachment.fileName} 下载后大小不一致`);
+    }
+    const response = await this.approvalService.uploadFile(credential, {
+      fileName: attachment.fileName,
+      fileBuffer: await readFile(localPath),
+      mimeType: attachment.contentType,
+    });
+    const fileId = response.body?.fileId;
+    const objectKey = response.body?.objectKey;
+    if (!fileId || !objectKey) throw new Error(`附件 ${attachment.fileName} 上传OA后缺少文件标识`);
+    await this.attachmentsService.cacheOaUpload(BUSINESS_TYPE, String(drawId), attachment.id, {
+      accountSetId: String(accountSetId),
+      fileId,
+      objectKey,
+      uploadedAt: new Date().toISOString(),
+      size: attachment.size,
+    });
+    return { id: fileId, objectKey, name: attachment.fileName };
+  }
+
+  private isImage(attachment: Attachment) {
+    return (
+      attachment.contentType.startsWith('image/') ||
+      ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(
+        extname(attachment.fileName).toLowerCase(),
+      )
+    );
   }
 
   private async buildSubmissionContext(drawId: bigint) {
