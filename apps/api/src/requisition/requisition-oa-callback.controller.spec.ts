@@ -1,9 +1,7 @@
-import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { RequisitionOaCallbackController } from './requisition-oa-callback.controller';
 
-function fixture(token = 'callback-secret') {
-  const config = { get: vi.fn().mockReturnValue(token) };
+function fixture() {
   const payload = {
     prjCod: 'AAC15400',
     procStatus: 'PASSED',
@@ -20,40 +18,48 @@ function fixture(token = 'callback-secret') {
       .fn()
       .mockResolvedValue({ processed: true, duplicate: false, procStatus: 'PASSED' }),
   };
+  const prisma = {
+    hspsi_oa_approval_callback_log: {
+      create: vi.fn().mockResolvedValue({ id: 9n }),
+      update: vi.fn(),
+    },
+  };
   return {
     controller: new RequisitionOaCallbackController(
-      config as never,
+      prisma as never,
       callback as never,
       requisition as never,
     ),
     payload,
     callback,
     requisition,
+    prisma,
   };
 }
 
 describe('RequisitionOaCallbackController', () => {
-  it('validates the token and dispatches a process-finish event', async () => {
+  it('accepts and dispatches a process-finish event without authentication', async () => {
     const { controller, payload, requisition } = fixture();
-    const result = await controller.processFinished(
-      { 'x-hspsi-webhook-token': 'callback-secret' },
-      payload,
-    );
-    expect(requisition.handleOaApprovalResult).toHaveBeenCalledWith(payload, payload);
+    const result = await controller.processFinished(payload);
+    expect(requisition.handleOaApprovalResult).toHaveBeenCalledWith(payload, payload, 9n);
     expect(result).toMatchObject({ eventCode: 'XFTOAFPS', processed: true });
   });
 
-  it('rejects an invalid token', async () => {
-    const { controller, payload } = fixture();
-    await expect(
-      controller.processFinished({ authorization: 'Bearer wrong' }, payload),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-  });
+  it('keeps the raw callback log when validation fails', async () => {
+    const { controller, callback, prisma } = fixture();
+    callback.handleProcessFinishEvent.mockImplementationOnce(() => {
+      throw new Error('回调载荷缺少必填字段：procInstId');
+    });
+    const raw = { anything: 'OA原始内容' };
 
-  it('stays unavailable until a callback token is configured', async () => {
-    const { controller, payload } = fixture('');
-    await expect(controller.processFinished({}, payload)).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    );
+    await expect(controller.processFinished(raw)).rejects.toThrow('缺少必填字段');
+
+    expect(prisma.hspsi_oa_approval_callback_log.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ raw_payload: JSON.stringify(raw), processed: 0 }),
+    });
+    expect(prisma.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
+      where: { id: 9n },
+      data: expect.objectContaining({ processed: 0 }),
+    });
   });
 });

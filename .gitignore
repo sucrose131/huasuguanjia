@@ -32,3 +32,4 @@ database/*
 .idea/
 .vscode/
 *.tsbuildinfo
+apps/api/tsconfig.tsbuildinfo

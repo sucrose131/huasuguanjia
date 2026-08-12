@@ -144,14 +144,19 @@ export class XinfutongOaSyncService {
 
           const existing = await tx.hspsi_basic_dept.findFirst({
             where: { outer_ref_id: outerRefId, account_set_id: credential.id },
-            select: { dept_id: true },
+            select: { dept_id: true, status: true },
           });
 
           let deptId: bigint;
           if (existing) {
+            // 本地已禁用的部门，保持禁用状态不被同步覆盖
+            const updateData = { ...data };
+            if (existing.status === 2) {
+              updateData.status = 2;
+            }
             await tx.hspsi_basic_dept.update({
               where: { dept_id: existing.dept_id },
-              data,
+              data: updateData,
             });
             deptId = existing.dept_id;
             stats.dept_updated++;
@@ -207,14 +212,19 @@ export class XinfutongOaSyncService {
 
           const existing = await tx.hspsi_basic_organization.findFirst({
             where: { outer_ref_id: outerRefId, account_set_id: credential.id },
-            select: { org_id: true },
+            select: { org_id: true, operation_status: true },
           });
 
           let orgId: bigint;
           if (existing) {
+            // 本地已禁用的组织，保持禁用状态不被同步覆盖
+            const updateData = { ...data };
+            if (existing.operation_status === 2) {
+              updateData.operation_status = 2;
+            }
             await tx.hspsi_basic_organization.update({
               where: { org_id: existing.org_id },
-              data,
+              data: updateData,
             });
             orgId = existing.org_id;
             stats.org_updated++;
