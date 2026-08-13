@@ -3,7 +3,7 @@ import { AuthModule } from '../../auth/auth.module';
 import { BusinessNumberModule } from '../../business-number/business-number.module';
 import { HuasuHomeController } from './huasu-home.controller';
 import { HuasuHomeService } from './huasu-home.service';
-import { HuasuHomeExternalInventoryPostingService } from './sync/external-inventory-posting.service';
+import { ExternalInventoryPostingService } from '../common/external-inventory-posting.service';
 import { HuasuHomeOrderSyncService } from './sync/order-sync.service';
 import { HuasuHomeProductSyncService } from './sync/product-sync.service';
 
@@ -13,7 +13,7 @@ import { HuasuHomeProductSyncService } from './sync/product-sync.service';
   providers: [
     HuasuHomeService,
     HuasuHomeProductSyncService,
-    HuasuHomeExternalInventoryPostingService,
+    ExternalInventoryPostingService,
     HuasuHomeOrderSyncService,
   ],
   exports: [HuasuHomeService, HuasuHomeProductSyncService, HuasuHomeOrderSyncService],

@@ -4,32 +4,37 @@ import { BUSINESS_PREFIX } from '../../../business-number/business-number.consta
 import { BusinessNumberService } from '../../../business-number/business-number.service';
 import { PrismaService } from '../../../database/prisma.service';
 import { INVENTORY_BUSINESS_MODE } from '../../../inventory/inventory-dictionary';
-import {
-  HUASU_HOME_AFTER_SALES_STATUS,
-  HUASU_HOME_AFTER_SALES_TYPE,
-  HUASU_HOME_DATA_SOURCE_CODE,
-  HUASU_HOME_DATA_SOURCE_NAME,
-  HUASU_HOME_GOODS_CATEGORY_ID,
-  HUASU_HOME_MAPPING_STATUS,
-  HUASU_HOME_ORDER_SHIPPED_STATUSES,
-  HUASU_HOME_ORDER_STATUS,
-  HUASU_HOME_ORDER_SYNC_STATUS,
-  HUASU_HOME_ORDER_SYNCABLE_STATUSES,
-  HUASU_HOME_ORDER_TYPE,
-  HUASU_HOME_PAY_MODE_MAP,
-  HUASU_HOME_PRODUCT_TYPE,
-  HUASU_HOME_RULE_STATUS,
-  HUASU_HOME_SOURCE_TYPE,
-} from '../huasu-home.constants';
-import { HuasuHomeService } from '../huasu-home.service';
-import type {
-  HuasuHomeOrder,
-  HuasuHomeOrderItem,
-  HuasuHomeOrderPackageItem,
-  HuasuHomeRightsDeductedRecord,
-} from '../huasu-home.types';
 import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
-import type { HuasuHomeOrderSyncOptions, HuasuHomeOrderSyncStats } from './order-sync.types';
+import {
+  SHIFANG_QINGYUAN_DATA_SOURCE_CODE,
+  SHIFANG_QINGYUAN_DATA_SOURCE_NAME,
+  SHIFANG_QINGYUAN_FEEDBACK,
+  SHIFANG_QINGYUAN_GOODS_CATEGORY_ID,
+  SHIFANG_QINGYUAN_MAPPING_STATUS,
+  SHIFANG_QINGYUAN_ORDER_SHIPPED_STATUSES,
+  SHIFANG_QINGYUAN_ORDER_STATUS,
+  SHIFANG_QINGYUAN_ORDER_SYNC_STATUS,
+  SHIFANG_QINGYUAN_ORDER_SYNCABLE_STATUSES,
+  SHIFANG_QINGYUAN_ORDER_TYPE,
+  SHIFANG_QINGYUAN_PAY_MODE_MAP,
+  SHIFANG_QINGYUAN_PAY_STATUS,
+  SHIFANG_QINGYUAN_REFUND_DONE_STATUSES,
+  SHIFANG_QINGYUAN_REFUND_REJECTED_STATUSES,
+  SHIFANG_QINGYUAN_REFUND_TYPE,
+  SHIFANG_QINGYUAN_RULE_STATUS,
+  SHIFANG_QINGYUAN_RULE_TYPE,
+} from '../shifang-qingyuan.constants';
+import { ShifangQingyuanService } from '../shifang-qingyuan.service';
+import type {
+  ShifangQingyuanOrder,
+  ShifangQingyuanOrderDetail,
+  ShifangQingyuanOrderDetailData,
+  ShifangQingyuanOrderRefund,
+} from '../shifang-qingyuan.types';
+import type {
+  ShifangQingyuanOrderSyncOptions,
+  ShifangQingyuanOrderSyncStats,
+} from './order-sync.types';
 
 type Tx = Prisma.TransactionClient;
 
@@ -41,6 +46,7 @@ type ResolvedOrderLine = {
   price: number;
   amount: number;
   goodsType: number;
+  sourceDetailId: number;
 };
 
 type ShipLine = {
@@ -51,43 +57,64 @@ type ShipLine = {
   batchNo: string;
 };
 
+type RefundPhase = 'PROCESSING' | 'REJECTED' | 'SUCCESS';
+
+/** 分页拉取每页条数（接口最大 100） */
+const PAGE_LIMIT = 100;
+
 /**
- * 华溯之家订单同步
+ * 十方清源订单同步
  *
- * 对应 docs/integrations/huasu-home/订单同步.md
+ * 对应 docs/global/integrations/shifang-qingyuan/订单同步.md
  */
 @Injectable()
-export class HuasuHomeOrderSyncService {
-  private static readonly logger = new Logger(HuasuHomeOrderSyncService.name);
+export class ShifangQingyuanOrderSyncService {
+  private static readonly logger = new Logger(ShifangQingyuanOrderSyncService.name);
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(HuasuHomeService) private readonly huasuHome: HuasuHomeService,
+    @Inject(ShifangQingyuanService) private readonly shifangQingyuan: ShifangQingyuanService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
     @Inject(ExternalInventoryPostingService)
     private readonly externalPosting: ExternalInventoryPostingService,
   ) {}
 
-  /** 批量同步：按 updated_at 增量拉列表 → 逐单 applyOrder */
+  /** 批量同步：按 start_time 增量拉列表（list 已含全量）→ applyOrder */
   async syncOrders(
     userId = '0',
-    options: HuasuHomeOrderSyncOptions = {},
-  ): Promise<HuasuHomeOrderSyncStats> {
+    options: ShifangQingyuanOrderSyncOptions = {},
+  ): Promise<ShifangQingyuanOrderSyncStats> {
     const stats = this.emptyStats();
     const sourceId = await this.ensureDataSource(userId);
-    const updatedAt =
-      options.updated_at?.trim() || (await this.resolveListUpdatedAt(sourceId));
+    const startTime =
+      options.start_time?.trim() || (await this.resolveListStartTime(sourceId));
+    const endTime = options.end_time?.trim() || undefined;
+    let page = options.page && options.page > 0 ? options.page : 1;
+    const limit = PAGE_LIMIT;
 
-    const data = await this.huasuHome.getOrderList({ updated_at: updatedAt });
-    const list = data.list ?? [];
-    for (const order of list) {
-      stats.fetched += 1;
-      await this.applyOrderSafe(order, sourceId, userId, stats);
+    for (;;) {
+      const data = await this.shifangQingyuan.getOrderList({
+        page,
+        limit,
+        start_time: startTime,
+        end_time: endTime,
+        pay_status: options.pay_status ?? SHIFANG_QINGYUAN_PAY_STATUS.PAID,
+        ...(options.order_status != null ? { order_status: options.order_status } : {}),
+        ...(options.order_no ? { order_no: options.order_no } : {}),
+      });
+      const list = data.list ?? [];
+      for (const item of list) {
+        stats.fetched += 1;
+        await this.applyOrderSafe(item, sourceId, userId, stats);
+      }
+      if (!list.length || list.length < limit) break;
+      page += 1;
     }
 
-    HuasuHomeOrderSyncService.logger.log(
-      `[huasu-home] order sync done: ${JSON.stringify({
-        updatedAt,
+    ShifangQingyuanOrderSyncService.logger.log(
+      `[shifang-qingyuan] order sync done: ${JSON.stringify({
+        startTime,
+        endTime,
         ...stats,
         failures: stats.failures.length,
         warnings: stats.warnings.length,
@@ -96,61 +123,76 @@ export class HuasuHomeOrderSyncService {
     return stats;
   }
 
-  /** 单笔同步：按华溯 order_sn 拉详情后 applyOrder */
-  async syncOrderBySn(orderSn: string, userId = '0'): Promise<HuasuHomeOrderSyncStats> {
+  /** 单笔同步：按十方 order_no 拉列表（list 已含全量）后 applyOrder */
+  async syncOrderByNo(orderNo: string, userId = '0'): Promise<ShifangQingyuanOrderSyncStats> {
     const stats = this.emptyStats();
     const sourceId = await this.ensureDataSource(userId);
-    const order = await this.huasuHome.getOrderInfo(orderSn);
+    const data = await this.shifangQingyuan.getOrderList({
+      order_no: orderNo,
+      limit: 1,
+    });
+    const item = data.list?.[0];
+    if (!item?.order?.id) {
+      throw new BadRequestException(`十方清源订单不存在: ${orderNo}`);
+    }
     stats.fetched = 1;
-    await this.applyOrderSafe(order, sourceId, userId, stats);
+    await this.applyOrderSafe(item, sourceId, userId, stats);
     return stats;
   }
 
-  /** @deprecated 使用 syncOrderBySn */
-  async syncOrderById(sourceOrderId: string, userId = '0'): Promise<HuasuHomeOrderSyncStats> {
-    return this.syncOrderBySn(sourceOrderId, userId);
-  }
-
   private async applyOrderSafe(
-    order: HuasuHomeOrder,
+    snapshot: ShifangQingyuanOrderDetailData,
     sourceId: bigint,
     userId: string,
-    stats: HuasuHomeOrderSyncStats,
+    stats: ShifangQingyuanOrderSyncStats,
   ) {
+    const order = snapshot.order;
     try {
-      await this.applyOrder(order, sourceId, userId, stats);
+      await this.applyOrder(snapshot, sourceId, userId, stats);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       stats.failed += 1;
       stats.failures.push({
         sourceOrderId: String(order.id),
-        orderSn: String(order.order_sn ?? ''),
+        orderNo: String(order.order_no ?? ''),
         reason,
       });
-      await this.markMappingFailed(sourceId, order, reason, userId).catch(() => undefined);
-      HuasuHomeOrderSyncService.logger.warn(
-        `[huasu-home] order ${order.id}/${order.order_sn} sync failed: ${reason}`,
+      await this.markMappingFailed(sourceId, snapshot, reason, userId).catch(() => undefined);
+      ShifangQingyuanOrderSyncService.logger.warn(
+        `[shifang-qingyuan] order ${order.id}/${order.order_no} sync failed: ${reason}`,
       );
     }
   }
 
   private async applyOrder(
-    order: HuasuHomeOrder,
+    snapshot: ShifangQingyuanOrderDetailData,
     sourceId: bigint,
     userId: string,
-    stats: HuasuHomeOrderSyncStats,
+    stats: ShifangQingyuanOrderSyncStats,
   ) {
-    if (!HUASU_HOME_ORDER_SYNCABLE_STATUSES.has(Number(order.order_status))) {
+    const order = snapshot.order;
+    const payStatus = Number(order.pay_status);
+    const orderStatus = Number(order.order_status);
+
+    if (
+      payStatus !== SHIFANG_QINGYUAN_PAY_STATUS.PAID ||
+      orderStatus === SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_PAY
+    ) {
+      stats.skipped += 1;
+      return;
+    }
+    if (!SHIFANG_QINGYUAN_ORDER_SYNCABLE_STATUSES.has(orderStatus)) {
       stats.skipped += 1;
       return;
     }
 
-    const orderType = HUASU_HOME_ORDER_TYPE.SALE_ORDER;
+    const orderType = SHIFANG_QINGYUAN_ORDER_TYPE.SALE_ORDER;
     const sourceOrderId = String(order.id);
-    const sourceUpdatedAt = this.parseDate(order.updated_at) ?? this.parseDate(order.created_at);
+    const sourceUpdatedAt =
+      this.parseUnix(order.updated_at) ?? this.parseUnix(order.created_at);
     const operatorId = BigInt(userId);
     const now = new Date();
-    const payload = JSON.stringify(order);
+    const payload = JSON.stringify(snapshot);
 
     const existing = await this.prisma.hspsi_sale_order_source_mapping.findFirst({
       where: {
@@ -163,12 +205,12 @@ export class HuasuHomeOrderSyncService {
 
     if (
       existing &&
-      existing.sync_status === HUASU_HOME_ORDER_SYNC_STATUS.SUCCESS &&
+      existing.sync_status === SHIFANG_QINGYUAN_ORDER_SYNC_STATUS.SUCCESS &&
       existing.so_id > 0n &&
       sourceUpdatedAt &&
       existing.source_updated_at &&
       existing.source_updated_at.getTime() === sourceUpdatedAt.getTime() &&
-      existing.source_status === Number(order.order_status)
+      existing.source_status === orderStatus
     ) {
       stats.skipped += 1;
       return;
@@ -186,7 +228,7 @@ export class HuasuHomeOrderSyncService {
 
     await this.prisma.$transaction(
       async (tx) => {
-        const orgId = await this.resolveOrgId(tx, sourceId, order.service_org_id);
+        const orgId = await this.resolveOrgId(tx, sourceId, order.mall_id);
         const warehouseId = await this.resolveWarehouseId(tx, orgId);
         const customerId = await this.ensureCustomer(tx, {
           sourceId,
@@ -195,9 +237,9 @@ export class HuasuHomeOrderSyncService {
           operatorId,
           now,
         });
-        const lines = await this.resolveOrderLines(tx, sourceId, order.items ?? []);
+        const lines = await this.resolveOrderLines(tx, sourceId, snapshot.details ?? []);
         const statusTriple = await this.mapPlatformStatus(
-          order,
+          snapshot,
           existing?.so_id ? existing : null,
           tx,
         );
@@ -211,10 +253,10 @@ export class HuasuHomeOrderSyncService {
                 source_id: sourceId,
                 source_order_type: orderType,
                 source_order_id: sourceOrderId,
-                source_order_no: String(order.order_sn ?? ''),
+                source_order_no: String(order.order_no ?? ''),
                 so_id: 0n,
                 source_status: 0,
-                sync_status: HUASU_HOME_ORDER_SYNC_STATUS.RETRY,
+                sync_status: SHIFANG_QINGYUAN_ORDER_SYNC_STATUS.RETRY,
                 created_by: operatorId,
                 updated_by: operatorId,
                 created_at: now,
@@ -229,7 +271,7 @@ export class HuasuHomeOrderSyncService {
           orgId,
           warehouseId,
           customerId,
-          order,
+          snapshot,
           lines,
           statusTriple,
           operatorId,
@@ -243,13 +285,22 @@ export class HuasuHomeOrderSyncService {
           where: { id: mapping.id },
           data: {
             so_id: soId,
-            source_order_no: String(order.order_sn ?? ''),
+            source_order_no: String(order.order_no ?? ''),
             updated_by: operatorId,
             updated_at: now,
           },
         });
 
-        if (await this.ensurePayment(tx, { soId, sourceId, orderType, order, operatorId, now })) {
+        if (
+          await this.ensurePayment(tx, {
+            soId,
+            sourceId,
+            orderType,
+            order,
+            operatorId,
+            now,
+          })
+        ) {
           delta.payments += 1;
         }
 
@@ -267,12 +318,16 @@ export class HuasuHomeOrderSyncService {
           delta.events += 1;
         }
 
-        if (HUASU_HOME_ORDER_SHIPPED_STATUSES.has(Number(order.order_status))) {
+        const shouldShip =
+          SHIFANG_QINGYUAN_ORDER_SHIPPED_STATUSES.has(orderStatus) ||
+          (snapshot.express?.length ?? 0) > 0 ||
+          Number(order.shipping_status) === 1;
+        if (shouldShip) {
           const shipped = await this.ensureShipments(tx, {
             soId,
             sourceId,
             orderType,
-            order,
+            snapshot,
             lines,
             orgId,
             warehouseId,
@@ -287,7 +342,8 @@ export class HuasuHomeOrderSyncService {
           soId,
           sourceId,
           orderType,
-          order,
+          snapshot,
+          lines,
           customerId,
           orgId,
           warehouseId,
@@ -303,11 +359,11 @@ export class HuasuHomeOrderSyncService {
           where: { id: mapping.id },
           data: {
             so_id: soId,
-            source_status: Number(order.order_status),
+            source_status: orderStatus,
             source_updated_at: sourceUpdatedAt,
             last_payload: payload,
             last_error_payload: null,
-            sync_status: HUASU_HOME_ORDER_SYNC_STATUS.SUCCESS,
+            sync_status: SHIFANG_QINGYUAN_ORDER_SYNC_STATUS.SUCCESS,
             last_sync_at: now,
             remark: '',
             updated_by: operatorId,
@@ -335,7 +391,7 @@ export class HuasuHomeOrderSyncService {
       orgId: bigint;
       warehouseId: bigint;
       customerId: bigint;
-      order: HuasuHomeOrder;
+      snapshot: ShifangQingyuanOrderDetailData;
       lines: ResolvedOrderLine[];
       statusTriple: { orderStatus: number; deliveryStatus: number; serviceStatus: number };
       operatorId: bigint;
@@ -349,20 +405,21 @@ export class HuasuHomeOrderSyncService {
       orgId,
       warehouseId,
       customerId,
-      order,
+      snapshot,
       lines,
       statusTriple,
       operatorId,
       now,
     } = input;
+    const order = snapshot.order;
     const totalQty = lines.reduce((sum, line) => sum + line.quantity, 0);
-    const totalAmount = this.dec(Number(order.total_amount ?? 0));
-    const factAmount = this.dec(Number(order.actual_amount ?? 0));
-    const priceoff = this.dec(
-      Math.max(Number(order.total_amount ?? 0) - Number(order.actual_amount ?? 0), 0),
-    );
+    const soAmountNum = Number(order.original_goods_price || order.goods_price || 0);
+    const factAmountNum = Number(order.pay_money || 0);
+    const totalAmount = this.dec(soAmountNum);
+    const factAmount = this.dec(factAmountNum);
+    const priceoff = this.dec(Math.max(soAmountNum - factAmountNum, 0));
     const address = this.formatAddress(order);
-    const tracking = this.formatTrackingNos(order);
+    const tracking = this.formatTrackingNos(snapshot);
     const soType = this.resolveSoType(lines);
     const customer = await tx.hspsi_basic_customer.findFirstOrThrow({
       where: { customer_id: customerId },
@@ -379,12 +436,12 @@ export class HuasuHomeOrderSyncService {
       business_source_no: '',
       so_property_type: 1,
       customer_id: customerId,
-      customer_name: this.clip(order.consignee || customer.name || '', 30),
+      customer_name: this.clip(order.receiver_name || customer.name || '', 30),
       customer_mobile: this.clip(order.mobile || customer.mobile || '', 20),
       customer_address: this.clip(address, 100),
-      order_date: this.parseDate(order.created_at) ?? now,
-      sales_name: this.clip(order.referrer?.nickname || '', 30),
-      sales_mobile: this.clip(order.referrer?.mobile || '', 20),
+      order_date: this.parseUnix(order.created_at) ?? now,
+      sales_name: '',
+      sales_mobile: '',
       so_qty: totalQty,
       so_amount: totalAmount,
       fact_amount: factAmount,
@@ -394,12 +451,10 @@ export class HuasuHomeOrderSyncService {
       service_status: statusTriple.serviceStatus,
       shipper: tracking,
       delivery_date:
-        statusTriple.deliveryStatus >= 3
-          ? (this.shipmentDate(order) ?? now)
-          : null,
+        statusTriple.deliveryStatus >= 3 ? (this.shipmentDate(snapshot) ?? now) : null,
       status: 1,
       approve_status: 1,
-      approve_comment: '华溯之家已支付订单同步',
+      approve_comment: '十方清源已支付订单同步',
       approve_by: operatorId,
       approve_date: now,
       remark: this.clip(order.remark ?? '', 255),
@@ -478,7 +533,7 @@ export class HuasuHomeOrderSyncService {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
-      order: HuasuHomeOrder;
+      order: ShifangQingyuanOrder;
       operatorId: bigint;
       now: Date;
     },
@@ -487,16 +542,17 @@ export class HuasuHomeOrderSyncService {
     const old = await tx.hspsi_sales_order_payment.findUnique({ where: { request_key: key } });
     if (old) return false;
 
-    const amount = input.order.payments?.amount
-      ? this.dec(Number(input.order.payments.amount))
-      : this.dec(Number(input.order.actual_amount ?? 0));
+    const amount = this.dec(Number(input.order.pay_money ?? 0));
     if (amount.lte(0)) return false;
+
+    const occurredAt =
+      this.parseUnix(input.order.pay_time) ??
+      this.parseUnix(input.order.created_at) ??
+      input.now;
 
     const order = await tx.hspsi_sale_order.findUniqueOrThrow({ where: { so_id: input.soId } });
     const payNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RECEIPT);
-    const payMode = this.resolvePayMode(
-      Number(input.order.payments?.payment_method ?? input.order.payment_method),
-    );
+    const payMode = this.resolvePayMode(Number(input.order.payment_type));
     await tx.hspsi_sales_order_payment.create({
       data: {
         org_id: order.org_id,
@@ -506,15 +562,12 @@ export class HuasuHomeOrderSyncService {
         so_pay_type: 1,
         pay_mode: payMode,
         fact_pay_amount: amount,
-        pay_date:
-          this.parseDate(input.order.payments?.pay_time) ??
-          this.parseDate(input.order.created_at) ??
-          input.now,
+        pay_date: occurredAt,
         request_key: key,
         remark: '',
         created_by: input.operatorId,
         updated_by: input.operatorId,
-        created_at: input.now,
+        created_at: occurredAt,
         updated_at: input.now,
       },
     });
@@ -527,22 +580,12 @@ export class HuasuHomeOrderSyncService {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
-      order: HuasuHomeOrder;
+      order: ShifangQingyuanOrder;
       customerId: bigint;
       operatorId: bigint;
       now: Date;
     },
   ): Promise<boolean> {
-    // 售后状态(7/8/6)由 ensureAfterSalesEvent 单独记录，避免重复
-    const status = Number(input.order.order_status);
-    if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
-    ) {
-      return false;
-    }
-
     const key = this.eventKey(
       input.sourceId,
       input.orderType,
@@ -554,7 +597,7 @@ export class HuasuHomeOrderSyncService {
     });
     if (old) return false;
 
-    const eventType = this.eventTypeForStatus(Number(input.order.order_status), input.order);
+    const eventType = this.eventTypeForStatus(Number(input.order.order_status));
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
     await tx.hspsi_sale_order_service.create({
       data: {
@@ -564,7 +607,7 @@ export class HuasuHomeOrderSyncService {
         goods_id: 0,
         sku_id: 0,
         event_type: eventType,
-        event_content: this.resolveEventContent(input.order, 'status'),
+        event_content: this.clip(input.order.remark ?? '', 255),
         event_status: 2,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -584,7 +627,7 @@ export class HuasuHomeOrderSyncService {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
-      order: HuasuHomeOrder;
+      snapshot: ShifangQingyuanOrderDetailData;
       lines: ResolvedOrderLine[];
       orgId: bigint;
       warehouseId: bigint;
@@ -593,14 +636,13 @@ export class HuasuHomeOrderSyncService {
       userId: string;
     },
   ): Promise<number> {
-    const shipments = input.order.shipments?.filter((item) => item && item.id != null) ?? [];
-    // shipments.items 当前为空，无法按包裹拆数量；整单只出一次库，幂等键取首包裹或 ALL
+    const expressList = input.snapshot.express?.filter((item) => item && item.id != null) ?? [];
     const keys =
-      shipments.length > 0
+      expressList.length > 0
         ? [
             {
-              key: this.shipKey(input.sourceId, input.orderType, shipments[0]!.id),
-              shipmentId: String(shipments[0]!.id),
+              key: this.shipKey(input.sourceId, input.orderType, expressList[0]!.id),
+              shipmentId: String(expressList[0]!.id),
             },
           ]
         : [
@@ -617,11 +659,7 @@ export class HuasuHomeOrderSyncService {
       });
       if (existed) continue;
 
-      const shipLines = await this.buildShipLines(tx, {
-        sourceId: input.sourceId,
-        items: input.order.items ?? [],
-        orderLines: input.lines,
-      });
+      const shipLines = await this.buildShipLines(tx, input.lines);
       if (!shipLines.length) throw new BadRequestException('发货明细为空');
 
       const outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_OUTPUT);
@@ -631,14 +669,14 @@ export class HuasuHomeOrderSyncService {
           so_id: input.soId,
           org_id: input.orgId,
           warehouse_id: input.warehouseId,
-          output_date: this.shipmentDate(input.order) ?? input.now,
+          output_date: this.shipmentDate(input.snapshot) ?? input.now,
           go_where: 1,
           dept_id: 0n,
           receiver_id: input.operatorId,
           output_sku_qty: new Set(shipLines.map((line) => `${line.goodsId}:${line.skuId}`)).size,
           status: true,
           comfirm_status: 1,
-          comfirm_comment: '华溯之家外部发货同步自动确认',
+          comfirm_comment: '十方清源外部发货同步自动确认',
           comfirm_by: input.operatorId,
           comfirm_date: input.now,
           posting_version: 1,
@@ -673,7 +711,7 @@ export class HuasuHomeOrderSyncService {
           sourceType: 'sales_output',
           sourceNo: outputNo,
           operationBy: input.userId,
-          idempotencyKey: `huasu-home-output:${item.key}:v1`,
+          idempotencyKey: `shifang-qingyuan-output:${item.key}:v1`,
           remark: '',
           lines: shipLines.map((line) => ({
             goodsId: line.goodsId,
@@ -690,8 +728,8 @@ export class HuasuHomeOrderSyncService {
         where: { so_id: input.soId },
         data: {
           delivery_status: 3,
-          delivery_date: this.shipmentDate(input.order) ?? input.now,
-          shipper: this.formatTrackingNos(input.order),
+          delivery_date: this.shipmentDate(input.snapshot) ?? input.now,
+          shipper: this.formatTrackingNos(input.snapshot),
           updated_by: input.operatorId,
           updated_at: input.now,
         },
@@ -707,7 +745,8 @@ export class HuasuHomeOrderSyncService {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
-      order: HuasuHomeOrder;
+      snapshot: ShifangQingyuanOrderDetailData;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       orgId: bigint;
       warehouseId: bigint;
@@ -717,194 +756,227 @@ export class HuasuHomeOrderSyncService {
     },
   ): Promise<{ payments: number; exits: number; events: number }> {
     const result = { payments: 0, exits: 0, events: 0 };
-    const type = Number(input.order.after_sales_type ?? 0);
-    const status = Number(input.order.after_sales_status ?? 0);
-    if (type === HUASU_HOME_AFTER_SALES_TYPE.NONE) return result;
+    const refunds = input.snapshot.refunds ?? [];
+    if (!refunds.length) return result;
 
-    if (status === HUASU_HOME_AFTER_SALES_STATUS.PROCESSING) {
-      if (
-        await this.ensureAfterSalesEvent(tx, {
-          ...input,
-          eventStatus: 1,
-          suffix: 'PROCESSING',
-        })
-      )
-        result.events += 1;
-      await tx.hspsi_sale_order.update({
-        where: { so_id: input.soId },
-        data: { service_status: 1, updated_by: input.operatorId, updated_at: input.now },
-      });
-      return result;
-    }
+    const order = input.snapshot.order;
 
-    if (
-      status === HUASU_HOME_AFTER_SALES_STATUS.REJECTED ||
-      status === HUASU_HOME_AFTER_SALES_STATUS.USER_CANCEL
-    ) {
-      if (
-        await this.ensureAfterSalesEvent(tx, {
-          ...input,
-          eventStatus: 3,
-          suffix: `CANCEL-${status}`,
-        })
-      )
-        result.events += 1;
-      return result;
-    }
+    for (const refund of refunds) {
+      const phase = this.resolveRefundPhase(refund);
+      const type = Number(refund.type);
 
-    if (status !== HUASU_HOME_AFTER_SALES_STATUS.DONE) return result;
-
-    if (
-      await this.ensureAfterSalesEvent(tx, {
-        ...input,
-        eventStatus: 2,
-        suffix: 'DONE',
-      })
-    )
-      result.events += 1;
-
-    const refundAmount = Number(input.order.after_sales_amount ?? 0);
-    if (refundAmount > 0) {
-      const key = this.refundKey(input.sourceId, input.orderType, input.order.id, status);
-      const old = await tx.hspsi_sales_order_payment.findUnique({ where: { request_key: key } });
-      if (!old) {
-        const order = await tx.hspsi_sale_order.findUniqueOrThrow({ where: { so_id: input.soId } });
-        const payNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_REFUND);
-        await tx.hspsi_sales_order_payment.create({
+      if (phase === 'PROCESSING') {
+        if (
+          await this.ensureAfterSalesEvent(tx, {
+            soId: input.soId,
+            sourceId: input.sourceId,
+            orderType: input.orderType,
+            order,
+            refund,
+            lines: input.lines,
+            customerId: input.customerId,
+            operatorId: input.operatorId,
+            now: input.now,
+            eventStatus: 1,
+            phase,
+          })
+        ) {
+          result.events += 1;
+        }
+        await tx.hspsi_sale_order.update({
+          where: { so_id: input.soId },
           data: {
-            org_id: order.org_id,
-            dept_id: 0n,
-            pay_no: payNo,
-            so_id: input.soId,
-            so_pay_type: 2,
-            pay_mode: this.resolvePayMode(input.order.payment_method),
-            fact_pay_amount: this.dec(refundAmount),
-            pay_date: input.now,
-            request_key: key,
-            remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
-            created_by: input.operatorId,
+            service_status: 1,
             updated_by: input.operatorId,
-            created_at: input.now,
             updated_at: input.now,
           },
         });
-        result.payments += 1;
+        continue;
       }
-    }
 
-    // 仅退款不回库；退货退款 / 异常售后(曾发货)按权益扣减回库
-    const needReturn =
-      type === HUASU_HOME_AFTER_SALES_TYPE.RETURN_REFUND ||
-      (type === HUASU_HOME_AFTER_SALES_TYPE.ABNORMAL &&
-        HUASU_HOME_ORDER_SHIPPED_STATUSES.has(Number(input.order.order_status)));
+      if (phase === 'REJECTED') {
+        if (
+          await this.ensureAfterSalesEvent(tx, {
+            soId: input.soId,
+            sourceId: input.sourceId,
+            orderType: input.orderType,
+            order,
+            refund,
+            lines: input.lines,
+            customerId: input.customerId,
+            operatorId: input.operatorId,
+            now: input.now,
+            eventStatus: 3,
+            phase,
+          })
+        ) {
+          result.events += 1;
+        }
+        continue;
+      }
 
-    if (needReturn) {
-      const exitKey = this.exitKey(input.sourceId, input.orderType, input.order.id, status);
-      const existed = await tx.hspsi_sale_order_exit.findFirst({
-        where: { so_id: input.soId, remark: exitKey, deleted_at: null },
-      });
-      if (!existed) {
-        // 回库明细来自 rights_deducted_records；为空则跳过回库、只记账
-        const returnLines = await this.buildReturnLinesFromRights(
-          tx,
-          input.sourceId,
-          input.order.after_sales?.rights_deducted_records,
-        );
-        if (returnLines.length > 0) {
-          const output = await tx.hspsi_sale_order_output.findFirst({
-            where: { so_id: input.soId, comfirm_status: 1, deleted_at: null },
-            orderBy: { so_output_id: 'asc' },
-          });
-          const exitNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
-          const order = await tx.hspsi_sale_order.findUniqueOrThrow({
+      // SUCCESS
+      if (
+        await this.ensureAfterSalesEvent(tx, {
+          soId: input.soId,
+          sourceId: input.sourceId,
+          orderType: input.orderType,
+          order,
+          refund,
+          lines: input.lines,
+          customerId: input.customerId,
+          operatorId: input.operatorId,
+          now: input.now,
+          eventStatus: 2,
+          phase,
+        })
+      ) {
+        result.events += 1;
+      }
+
+      const refundAmount =
+        Number(refund.reality_refund_price || 0) > 0
+          ? Number(refund.reality_refund_price)
+          : Number(refund.refund_price || 0);
+
+      if (type !== SHIFANG_QINGYUAN_REFUND_TYPE.EXCHANGE && refundAmount > 0) {
+        const key = this.refundKey(input.sourceId, input.orderType, order.id, refund.id);
+        const old = await tx.hspsi_sales_order_payment.findUnique({ where: { request_key: key } });
+        if (!old) {
+          const so = await tx.hspsi_sale_order.findUniqueOrThrow({
             where: { so_id: input.soId },
           });
-          const exitQty = returnLines.reduce((sum, line) => sum + line.quantity, 0);
-          const exit = await tx.hspsi_sale_order_exit.create({
+          const occurredAt = this.resolveRefundOccurredAt(refund, input.now);
+          const payNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_REFUND);
+          await tx.hspsi_sales_order_payment.create({
             data: {
-              so_exit_no: exitNo,
-              so_id: input.soId,
-              source_output_id: output?.so_output_id ?? 0n,
-              exit_reson: this.clip(input.order.remark ?? '', 255),
-              exit_qty: exitQty,
-              disposal_type: 1,
-              org_id: input.orgId,
-              warehouse_id: input.warehouseId,
-              exit_date: input.now,
+              org_id: so.org_id,
               dept_id: 0n,
-              receiver_id: input.operatorId,
-              customer_id: order.customer_id,
-              customer_name: order.customer_name,
-              customer_mobile: order.customer_mobile,
-              customer_address: order.customer_address,
-              sales_name: order.sales_name,
-              sales_mobile: order.sales_mobile,
-              status: true,
-              comfirm_status: 1,
-              comfirm_comment: '华溯之家售后退货同步自动确认',
-              comfirm_by: input.operatorId,
-              comfirm_date: input.now,
-              posting_version: 1,
-              remark: exitKey,
+              pay_no: payNo,
+              so_id: input.soId,
+              so_pay_type: 2,
+              pay_mode: this.resolvePayMode(Number(order.payment_type)),
+              fact_pay_amount: this.dec(refundAmount),
+              pay_date: occurredAt,
+              request_key: key,
+              remark: this.clip(refund.reason || refund.remark || order.remark || '', 255),
               created_by: input.operatorId,
               updated_by: input.operatorId,
-              created_at: input.now,
+              created_at: occurredAt,
               updated_at: input.now,
             },
           });
-          await tx.hspsi_sale_order_exit_detail.createMany({
-            data: returnLines.map((line) => ({
-              so_exit_id: exit.so_exit_id,
-              so_id: input.soId,
-              goods_id: line.goodsId,
-              sku_id: line.skuId,
-              batch_no: line.batchNo,
-              unit_type: line.unitType,
-              so_qty: line.quantity,
-              exit_qty: line.quantity,
-              remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
-            })),
-          });
-          await this.externalPosting.post(
-            {
-              orgId: input.orgId,
-              warehouseId: input.warehouseId,
-              direction: 1,
-              operationType: 1,
-              inventoryMode: INVENTORY_BUSINESS_MODE.SALES_RETURN,
-              sourceId: exit.so_exit_id,
-              sourceType: 'sales_return',
-              sourceNo: exitNo,
-              operationBy: input.userId,
-              idempotencyKey: `huasu-home-exit:${exitKey}:v1`,
-              remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
-              lines: returnLines.map((line) => ({
-                goodsId: line.goodsId,
-                skuId: line.skuId,
-                batchNo: line.batchNo,
-                unitType: line.unitType,
-                quantity: String(line.quantity),
-              })),
-            },
-            tx,
-          );
-          result.exits += 1;
+          result.payments += 1;
         }
       }
+
+      if (type === SHIFANG_QINGYUAN_REFUND_TYPE.RETURN_REFUND) {
+        const exitKey = this.exitKey(input.sourceId, input.orderType, order.id, refund.id);
+        const existed = await tx.hspsi_sale_order_exit.findFirst({
+          where: { so_id: input.soId, remark: exitKey, deleted_at: null },
+        });
+        if (!existed) {
+          const returnLines = await this.buildReturnLinesFromRefund(tx, {
+            sourceId: input.sourceId,
+            refund,
+            lines: input.lines,
+            details: input.snapshot.details ?? [],
+          });
+          if (returnLines.length > 0) {
+            const output = await tx.hspsi_sale_order_output.findFirst({
+              where: { so_id: input.soId, comfirm_status: 1, deleted_at: null },
+              orderBy: { so_output_id: 'asc' },
+            });
+            const exitNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_RETURN);
+            const so = await tx.hspsi_sale_order.findUniqueOrThrow({
+              where: { so_id: input.soId },
+            });
+            const exitQty = returnLines.reduce((sum, line) => sum + line.quantity, 0);
+            const exit = await tx.hspsi_sale_order_exit.create({
+              data: {
+                so_exit_no: exitNo,
+                so_id: input.soId,
+                source_output_id: output?.so_output_id ?? 0n,
+                exit_reson: this.clip(refund.reason || order.remark || '', 255),
+                exit_qty: exitQty,
+                disposal_type: 1,
+                org_id: input.orgId,
+                warehouse_id: input.warehouseId,
+                exit_date: input.now,
+                dept_id: 0n,
+                receiver_id: input.operatorId,
+                customer_id: so.customer_id,
+                customer_name: so.customer_name,
+                customer_mobile: so.customer_mobile,
+                customer_address: so.customer_address,
+                sales_name: so.sales_name,
+                sales_mobile: so.sales_mobile,
+                status: true,
+                comfirm_status: 1,
+                comfirm_comment: '十方清源售后退货同步自动确认',
+                comfirm_by: input.operatorId,
+                comfirm_date: input.now,
+                posting_version: 1,
+                remark: exitKey,
+                created_by: input.operatorId,
+                updated_by: input.operatorId,
+                created_at: input.now,
+                updated_at: input.now,
+              },
+            });
+            await tx.hspsi_sale_order_exit_detail.createMany({
+              data: returnLines.map((line) => ({
+                so_exit_id: exit.so_exit_id,
+                so_id: input.soId,
+                goods_id: line.goodsId,
+                sku_id: line.skuId,
+                batch_no: line.batchNo,
+                unit_type: line.unitType,
+                so_qty: line.quantity,
+                exit_qty: line.quantity,
+                remark: this.clip(refund.reason || refund.remark || '', 255),
+              })),
+            });
+            await this.externalPosting.post(
+              {
+                orgId: input.orgId,
+                warehouseId: input.warehouseId,
+                direction: 1,
+                operationType: 1,
+                inventoryMode: INVENTORY_BUSINESS_MODE.SALES_RETURN,
+                sourceId: exit.so_exit_id,
+                sourceType: 'sales_return',
+                sourceNo: exitNo,
+                operationBy: input.userId,
+                idempotencyKey: `shifang-qingyuan-exit:${exitKey}:v1`,
+                remark: this.clip(refund.reason || refund.remark || '', 255),
+                lines: returnLines.map((line) => ({
+                  goodsId: line.goodsId,
+                  skuId: line.skuId,
+                  batchNo: line.batchNo,
+                  unitType: line.unitType,
+                  quantity: String(line.quantity),
+                })),
+              },
+              tx,
+            );
+            result.exits += 1;
+          }
+        }
+      }
+
+      await tx.hspsi_sale_order.update({
+        where: { so_id: input.soId },
+        data: {
+          service_status: 2,
+          order_status:
+            Number(order.order_status) === SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED ? 3 : 2,
+          updated_by: input.operatorId,
+          updated_at: input.now,
+        },
+      });
     }
 
-    await tx.hspsi_sale_order.update({
-      where: { so_id: input.soId },
-      data: {
-        service_status: 2,
-        order_status:
-          Number(input.order.order_status) === HUASU_HOME_ORDER_STATUS.REFUNDED
-            ? 3
-            : 2,
-        updated_by: input.operatorId,
-        updated_at: input.now,
-      },
-    });
     return result;
   }
 
@@ -914,63 +986,80 @@ export class HuasuHomeOrderSyncService {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
-      order: HuasuHomeOrder;
+      order: ShifangQingyuanOrder;
+      refund: ShifangQingyuanOrderRefund;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       operatorId: bigint;
       now: Date;
       eventStatus: number;
-      suffix: string;
+      phase: RefundPhase;
     },
   ): Promise<boolean> {
-    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-AS-${input.suffix}`;
+    const key = `SFQY-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-AS-${input.refund.id}-${input.phase}`;
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
     if (old) return false;
-    const type = Number(input.order.after_sales_type ?? 0);
-    const eventType =
-      type === HUASU_HOME_AFTER_SALES_TYPE.EXCHANGE
-        ? 5
-        : type === HUASU_HOME_AFTER_SALES_TYPE.REFUND_ONLY
-          ? 4
-          : 4;
+
+    const type = Number(input.refund.type);
+    const eventType = type === SHIFANG_QINGYUAN_REFUND_TYPE.EXCHANGE ? 5 : 4;
+    const content =
+      input.eventStatus === 3
+        ? this.clip(input.refund.refuse_remark || input.refund.remark || '', 255)
+        : this.clip(input.refund.reason || input.refund.remark || input.order.remark || '', 255);
+
+    const goodsLine = this.resolveRefundGoodsLine(input.refund, input.lines);
+    const occurredAt = this.resolveRefundOccurredAt(input.refund, input.now);
+
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
     await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
         customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
+        goods_id: goodsLine ? Number(goodsLine.goodsId) : 0,
+        sku_id: goodsLine ? Number(goodsLine.skuId) : 0,
         event_type: eventType,
-        event_content: this.resolveEventContent(input.order, 'after_sales', input.eventStatus),
+        event_content: content,
         event_status: input.eventStatus,
         handler_id: input.operatorId,
-        event_date: input.now,
+        event_date: occurredAt,
         remark: key,
         created_by: input.operatorId,
         updated_by: input.operatorId,
-        created_at: input.now,
+        created_at: occurredAt,
         updated_at: input.now,
       },
     });
     return true;
   }
 
+  /** refund.order_detail_id → 已解析的平台下单行 */
+  private resolveRefundGoodsLine(
+    refund: ShifangQingyuanOrderRefund,
+    lines: ResolvedOrderLine[],
+  ): ResolvedOrderLine | null {
+    const detailId = Number(refund.order_detail_id);
+    if (!(detailId > 0)) return lines[0] ?? null;
+    return lines.find((line) => line.sourceDetailId === detailId) ?? lines[0] ?? null;
+  }
+
+  /** 售后/退款业务时间：打款时间 → 更新时间 → 创建时间 */
+  private resolveRefundOccurredAt(refund: ShifangQingyuanOrderRefund, fallback: Date): Date {
+    return (
+      this.parseUnix(refund.refund_at) ??
+      this.parseUnix(refund.updated_at) ??
+      this.parseUnix(refund.created_at) ??
+      fallback
+    );
+  }
+
   /**
-   * 出库明细：优先按 items.package_items 展开真实发货单品；
-   * 数量 = (number + gift_number) * items.quantity；
-   * package_items 为空时回退 conversion_rule / 原下单 SKU。
-   * 外部同步统一空批号，过账允许负库存（不走平台 FIFO 占批）。
+   * 出库明细：按订单行查 conversion_rule（启用 + REPLACE/COMBO_SPLIT）；
+   * 有则 qty * quantity_ratio，无则原下单 SKU。合并同 goods:sku；空批号。
    */
-  private async buildShipLines(
-    tx: Tx,
-    input: {
-      sourceId: bigint;
-      items: HuasuHomeOrderItem[];
-      orderLines: ResolvedOrderLine[];
-    },
-  ): Promise<ShipLine[]> {
+  private async buildShipLines(tx: Tx, orderLines: ResolvedOrderLine[]): Promise<ShipLine[]> {
     const expanded: Array<{
       goodsId: bigint;
       skuId: bigint;
@@ -978,51 +1067,24 @@ export class HuasuHomeOrderSyncService {
       quantity: number;
     }> = [];
 
-    for (let i = 0; i < input.items.length; i += 1) {
-      const item = input.items[i]!;
-      const orderLine = input.orderLines[i];
-      const buyQty = Number(item.quantity);
-      if (!(buyQty > 0)) continue;
+    for (const orderLine of orderLines) {
+      if (!(orderLine.quantity > 0)) continue;
 
-      const packageItems = (item.package_items ?? []).filter(
-        (row): row is HuasuHomeOrderPackageItem => !!row && Number(row.product_id) > 0,
-      );
-
-      if (packageItems.length > 0) {
-        for (const pkgItem of packageItems) {
-          const perSet =
-            Number(pkgItem.number || 0) + Number(pkgItem.gift_number || 0);
-          const quantity = perSet * buyQty;
-          if (!(quantity > 0)) continue;
-          const target = await this.resolveDefaultStandardSku(
-            tx,
-            input.sourceId,
-            Number(pkgItem.product_id),
-          );
-          expanded.push({
-            goodsId: target.goodsId,
-            skuId: target.skuId,
-            unitType: target.unitType,
-            quantity,
-          });
-        }
-        continue;
-      }
-
-      // 无 package_items：回退 conversion_rule / 原下单行
-      if (!orderLine) {
-        throw new BadRequestException(
-          `订单行 ${item.id} 无 package_items 且缺少已解析的下单明细`,
-        );
-      }
       const rules = await tx.hspsi_goods_sku_conversion_rule.findMany({
         where: {
           source_goods_id: orderLine.goodsId,
           source_sku_id: orderLine.skuId,
-          status: HUASU_HOME_RULE_STATUS.ENABLED,
+          rule_type: {
+            in: [
+              SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+              SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT,
+            ],
+          },
+          status: SHIFANG_QINGYUAN_RULE_STATUS.ENABLED,
           deleted_at: null,
         },
       });
+
       if (!rules.length) {
         expanded.push({
           goodsId: orderLine.goodsId,
@@ -1032,6 +1094,7 @@ export class HuasuHomeOrderSyncService {
         });
         continue;
       }
+
       for (const rule of rules) {
         const targetSku = await tx.hspsi_goods_info_sku.findFirst({
           where: {
@@ -1069,124 +1132,70 @@ export class HuasuHomeOrderSyncService {
     }));
   }
 
-  /**
-   * 售后退货入库明细：按 after_sales.rights_deducted_records 展开。
-   * 数量 = gift_number + buy_number；同 product_id 合并；规格取默认 SKU。
-   * 记录为空 / 数量均为 0 时返回空数组（调用方跳过回库、只记账）。
-   */
-  private async buildReturnLinesFromRights(
+  /** 售后退货入库：关联 order_detail_id → 平台 mapping + refund.num；无法解析返回空 */
+  private async buildReturnLinesFromRefund(
     tx: Tx,
-    sourceId: bigint,
-    records: HuasuHomeRightsDeductedRecord[] | null | undefined,
+    input: {
+      sourceId: bigint;
+      refund: ShifangQingyuanOrderRefund;
+      lines: ResolvedOrderLine[];
+      details: ShifangQingyuanOrderDetail[];
+    },
   ): Promise<ShipLine[]> {
-    const merged = new Map<
-      string,
-      { goodsId: bigint; skuId: bigint; unitType: number; quantity: number }
-    >();
+    const qty = Math.max(1, Number(input.refund.num || 0));
+    const detailId = Number(input.refund.order_detail_id);
+    let line = input.lines.find((item) => item.sourceDetailId === detailId);
 
-    for (const rec of records ?? []) {
-      const productId = Number(rec.product_id);
-      const quantity = Number(rec.gift_number || 0) + Number(rec.buy_number || 0);
-      if (!(productId > 0) || !(quantity > 0)) continue;
-
-      const target = await this.resolveDefaultStandardSku(tx, sourceId, productId);
-      const key = `${target.goodsId}:${target.skuId}`;
-      const cur = merged.get(key);
-      if (cur) cur.quantity += quantity;
-      else
-        merged.set(key, {
-          goodsId: target.goodsId,
-          skuId: target.skuId,
-          unitType: target.unitType,
-          quantity,
-        });
+    if (!line) {
+      const detail = input.details.find((item) => Number(item.id) === detailId);
+      if (!detail) return [];
+      try {
+        const resolved = await this.resolveOrderLines(tx, input.sourceId, [detail]);
+        line = resolved[0];
+      } catch {
+        return [];
+      }
     }
+    if (!line) return [];
 
-    return [...merged.values()].map((line) => ({
-      goodsId: line.goodsId,
-      skuId: line.skuId,
-      unitType: line.unitType,
-      quantity: line.quantity,
-      batchNo: '',
-    }));
-  }
-
-  /** product_id → 平台默认规格（is_default=1，否则取映射中首个） */
-  private async resolveDefaultStandardSku(
-    tx: Tx,
-    sourceId: bigint,
-    sourceProductId: number,
-  ): Promise<{ goodsId: bigint; skuId: bigint; unitType: number }> {
-    const mappings = await tx.hspsi_goods_source_mapping.findMany({
-      where: {
-        source_id: sourceId,
-        source_type: HUASU_HOME_SOURCE_TYPE.STANDARD,
-        source_goods_id: String(sourceProductId),
-        mapping_status: HUASU_HOME_MAPPING_STATUS.MAPPED,
-        deleted_at: null,
+    return [
+      {
+        goodsId: line.goodsId,
+        skuId: line.skuId,
+        unitType: line.unitType,
+        quantity: qty,
+        batchNo: '',
       },
-    });
-    if (!mappings.length) {
-      throw new BadRequestException(
-        `单品未映射: product_id=${sourceProductId}`,
-      );
-    }
-    const goodsId = mappings[0]!.goods_id;
-    const defaultSku = await tx.hspsi_goods_info_sku.findFirst({
-      where: {
-        good_id: goodsId,
-        is_default: 1,
-        deleted_at: null,
-      },
-      orderBy: { sku_id: 'asc' },
-    });
-    if (defaultSku) {
-      return {
-        goodsId,
-        skuId: defaultSku.sku_id,
-        unitType: Number(defaultSku.unit_type ?? 0),
-      };
-    }
-    const fallback = mappings[0]!;
-    const sku = await tx.hspsi_goods_info_sku.findFirst({
-      where: { sku_id: fallback.sku_id, good_id: goodsId, deleted_at: null },
-    });
-    return {
-      goodsId,
-      skuId: fallback.sku_id,
-      unitType: Number(sku?.unit_type ?? 0),
-    };
+    ];
   }
 
   private async resolveOrderLines(
     tx: Tx,
     sourceId: bigint,
-    items: HuasuHomeOrderItem[],
+    details: ShifangQingyuanOrderDetail[],
   ): Promise<ResolvedOrderLine[]> {
-    if (!items.length) throw new BadRequestException('订单明细为空');
+    if (!details.length) throw new BadRequestException('订单明细为空');
     const lines: ResolvedOrderLine[] = [];
-    for (const item of items) {
-      const isCombo =
-        Number(item.product_type) === HUASU_HOME_PRODUCT_TYPE.COMBO ||
-        (item.product_type == null && Number(item.package_id ?? 0) > 0);
-      const sourceType = isCombo ? HUASU_HOME_SOURCE_TYPE.COMBO : HUASU_HOME_SOURCE_TYPE.STANDARD;
-      const sourceGoodsId = String(
-        isCombo ? item.package_id || item.product_id : item.product_id,
-      );
-      const sourceSkuId = isCombo ? '0' : String(item.sku_id);
+    for (const detail of details) {
+      const sourceGoodsId = String(detail.goods_id);
+      if (!detail.goods_attr_id) {
+        throw new BadRequestException(
+          `订单明细缺少规格ID: detail=${detail.id} goods=${sourceGoodsId}`,
+        );
+      }
+      const sourceSkuId = String(detail.goods_attr_id);
       const mapping = await tx.hspsi_goods_source_mapping.findFirst({
         where: {
           source_id: sourceId,
-          source_type: sourceType,
           source_goods_id: sourceGoodsId,
           source_sku_id: sourceSkuId,
-          mapping_status: HUASU_HOME_MAPPING_STATUS.MAPPED,
+          mapping_status: SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED,
           deleted_at: null,
         },
       });
       if (!mapping) {
         throw new BadRequestException(
-          `商品未映射: type=${sourceType} goods=${sourceGoodsId} sku=${sourceSkuId}`,
+          `商品未映射: goods=${sourceGoodsId} sku=${sourceSkuId}`,
         );
       }
       const sku = await tx.hspsi_goods_info_sku.findFirst({
@@ -1196,19 +1205,25 @@ export class HuasuHomeOrderSyncService {
         where: { goods_id: mapping.goods_id, deleted_at: null },
       });
       if (!sku || !goods) {
-        throw new BadRequestException(`映射商品不存在 goods=${mapping.goods_id} sku=${mapping.sku_id}`);
+        throw new BadRequestException(
+          `映射商品不存在 goods=${mapping.goods_id} sku=${mapping.sku_id}`,
+        );
       }
-      const quantity = Number(item.quantity);
-      if (!(quantity > 0)) throw new BadRequestException(`订单行数量无效 item=${item.id}`);
-      const price = Number(item.price ?? 0);
+      const quantity = Number(detail.num);
+      if (!(quantity > 0)) {
+        throw new BadRequestException(`订单行数量无效 detail=${detail.id}`);
+      }
+      const price = Number(detail.price ?? 0);
+      const amount = Number(detail.goods_price) || price * quantity;
       lines.push({
         goodsId: mapping.goods_id,
         skuId: mapping.sku_id,
         unitType: Number(sku.unit_type ?? 0),
         quantity,
         price,
-        amount: price * quantity,
+        amount,
         goodsType: Number(goods.goods_type ?? 1),
+        sourceDetailId: Number(detail.id),
       });
     }
     return lines;
@@ -1219,12 +1234,12 @@ export class HuasuHomeOrderSyncService {
     input: {
       sourceId: bigint;
       orgId: bigint;
-      order: HuasuHomeOrder;
+      order: ShifangQingyuanOrder;
       operatorId: bigint;
       now: Date;
     },
   ): Promise<bigint> {
-    const userId = BigInt(input.order.user_id ?? input.order.user?.id ?? 0);
+    const userId = BigInt(input.order.user_id ?? 0);
     if (!(userId > 0n)) throw new BadRequestException('订单缺少用户 id');
     const sourceType = Number(input.sourceId);
     if (!Number.isSafeInteger(sourceType) || sourceType > 255) {
@@ -1241,11 +1256,8 @@ export class HuasuHomeOrderSyncService {
       },
     });
     const address = this.formatAddress(input.order);
-    const name = this.clip(
-      input.order.user?.nickname || input.order.consignee || `华溯用户${userId}`,
-      100,
-    );
-    const mobile = this.clip(input.order.user?.mobile || input.order.mobile || '', 20);
+    const name = this.clip(input.order.receiver_name || `用户${userId}`, 100);
+    const mobile = this.clip(input.order.mobile || '', 20);
     if (existing) {
       await tx.hspsi_basic_customer.update({
         where: { customer_id: existing.customer_id },
@@ -1253,10 +1265,7 @@ export class HuasuHomeOrderSyncService {
           org_id: input.orgId,
           name,
           mobile,
-          gender: Number(input.order.user?.gender ?? 0),
           address: this.clip(address, 255),
-          referrer_name: this.clip(input.order.referrer?.nickname || '', 32),
-          referrer_mobile: this.clip(input.order.referrer?.mobile || '', 20),
           updated_by: input.operatorId,
           updated_at: input.now,
         },
@@ -1268,11 +1277,11 @@ export class HuasuHomeOrderSyncService {
       data: {
         org_id: input.orgId,
         name,
-        gender: Number(input.order.user?.gender ?? 0),
+        gender: 0,
         mobile,
         address: this.clip(address, 255),
-        referrer_name: this.clip(input.order.referrer?.nickname || '', 32),
-        referrer_mobile: this.clip(input.order.referrer?.mobile || '', 20),
+        referrer_name: '',
+        referrer_mobile: '',
         source_type: sourceType,
         related_customer_id: userId,
         status: 1,
@@ -1286,28 +1295,28 @@ export class HuasuHomeOrderSyncService {
     return created.customer_id;
   }
 
-  private async resolveOrgId(tx: Tx, sourceId: bigint, serviceOrgId: number): Promise<bigint> {
+  private async resolveOrgId(tx: Tx, sourceId: bigint, mallId: number): Promise<bigint> {
     const mapping = await tx.hspsi_sys_organization_mapping.findFirst({
       where: {
         source_id: sourceId,
-        source_object_id: String(serviceOrgId),
+        source_object_id: String(mallId),
         deleted_at: null,
       },
     });
     if (!mapping || !(mapping.org_id > 0n)) {
-      throw new BadRequestException(`机构未映射: service_org_id=${serviceOrgId}`);
+      throw new BadRequestException(`机构未映射: mall_id=${mallId}`);
     }
     return mapping.org_id;
   }
 
   private async resolveWarehouseId(tx: Tx, orgId: bigint): Promise<bigint> {
-    if (!(HUASU_HOME_GOODS_CATEGORY_ID > 0n)) {
-      throw new BadRequestException('请先配置 HUASU_HOME_GOODS_CATEGORY_ID');
+    if (!(SHIFANG_QINGYUAN_GOODS_CATEGORY_ID > 0n)) {
+      throw new BadRequestException('请先配置 SHIFANG_QINGYUAN_GOODS_CATEGORY_ID');
     }
     const category = await tx.hspsi_goods_info_category.findFirst({
-      where: { goods_catg_id: HUASU_HOME_GOODS_CATEGORY_ID, deleted_at: null },
+      where: { goods_catg_id: SHIFANG_QINGYUAN_GOODS_CATEGORY_ID, deleted_at: null },
     });
-    if (!category) throw new BadRequestException('华溯商品分类不存在');
+    if (!category) throw new BadRequestException('十方清源商品分类不存在');
     const warehouse = await tx.hspsi_basic_warehouse.findFirst({
       where: {
         org_id: orgId,
@@ -1326,44 +1335,38 @@ export class HuasuHomeOrderSyncService {
   }
 
   private async mapPlatformStatus(
-    order: HuasuHomeOrder,
+    snapshot: ShifangQingyuanOrderDetailData,
     existing: { so_id: bigint } | null,
     tx: Tx,
   ): Promise<{ orderStatus: number; deliveryStatus: number; serviceStatus: number }> {
     let deliveryStatus = 1;
     let orderStatus = 1;
     let serviceStatus = 3;
+    const order = snapshot.order;
     const status = Number(order.order_status);
+
     switch (status) {
-      case HUASU_HOME_ORDER_STATUS.PAID:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_SHIP:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_PICKUP:
         orderStatus = 1;
         deliveryStatus = 1;
         serviceStatus = 3;
         break;
-      case HUASU_HOME_ORDER_STATUS.SHIPPED:
-      case HUASU_HOME_ORDER_STATUS.RECEIVED:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.SHIPPED:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.RECEIVED:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.PICKUP_DONE:
         orderStatus = 1;
         deliveryStatus = 3;
         serviceStatus = 3;
         break;
-      case HUASU_HOME_ORDER_STATUS.COMPLETED:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.COMPLETED:
         orderStatus = 2;
         deliveryStatus = 3;
         serviceStatus = 3;
         break;
-      case HUASU_HOME_ORDER_STATUS.AFTER_SALES:
-        orderStatus = 1;
-        deliveryStatus = 3;
-        serviceStatus = 1;
-        break;
-      case HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE:
-        orderStatus = 2;
-        deliveryStatus = 3;
-        serviceStatus = 2;
-        break;
-      case HUASU_HOME_ORDER_STATUS.REFUNDED:
+      case SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED:
         orderStatus = 3;
-        deliveryStatus = 3;
+        deliveryStatus = 1;
         serviceStatus = 2;
         break;
       default:
@@ -1372,31 +1375,59 @@ export class HuasuHomeOrderSyncService {
         serviceStatus = 3;
     }
 
+    const refunds = snapshot.refunds ?? [];
+    const hasProcessingRefund = refunds.some(
+      (refund) => this.resolveRefundPhase(refund) === 'PROCESSING',
+    );
+    const hasSuccessfulRefund = refunds.some(
+      (refund) => this.resolveRefundPhase(refund) === 'SUCCESS',
+    );
+    const isFeedback = Number(order.is_feedback);
+
+    if (hasProcessingRefund || isFeedback === SHIFANG_QINGYUAN_FEEDBACK.PROCESSING) {
+      serviceStatus = 1;
+      if (status !== SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED) {
+        orderStatus = 1;
+      }
+    } else if (
+      hasSuccessfulRefund &&
+      isFeedback === SHIFANG_QINGYUAN_FEEDBACK.DONE
+    ) {
+      serviceStatus = 2;
+      orderStatus =
+        status === SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED ? 3 : 2;
+    }
+
     if (existing?.so_id) {
       const old = await tx.hspsi_sale_order.findFirst({
         where: { so_id: existing.so_id, deleted_at: null },
       });
       if (old) {
         deliveryStatus = Math.max(Number(old.delivery_status), deliveryStatus);
-        // 售后中若此前未发货，保持待发货
         if (
-          status === HUASU_HOME_ORDER_STATUS.AFTER_SALES &&
-          Number(old.delivery_status) < 3 &&
-          !HUASU_HOME_ORDER_SHIPPED_STATUSES.has(status)
-        ) {
-          deliveryStatus = Number(old.delivery_status);
-        }
-        if (
-          [HUASU_HOME_ORDER_STATUS.AFTER_SALES, HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE].includes(
-            status as never,
-          ) &&
-          Number(old.delivery_status) > 0
+          status === SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED ||
+          hasProcessingRefund ||
+          hasSuccessfulRefund
         ) {
           deliveryStatus = Math.max(Number(old.delivery_status), deliveryStatus);
         }
       }
     }
+
     return { orderStatus, deliveryStatus, serviceStatus };
+  }
+
+  private resolveRefundPhase(refund: ShifangQingyuanOrderRefund): RefundPhase {
+    if (
+      Number(refund.is_refund) === 1 ||
+      SHIFANG_QINGYUAN_REFUND_DONE_STATUSES.has(Number(refund.refund_status))
+    ) {
+      return 'SUCCESS';
+    }
+    if (SHIFANG_QINGYUAN_REFUND_REJECTED_STATUSES.has(Number(refund.refund_status))) {
+      return 'REJECTED';
+    }
+    return 'PROCESSING';
   }
 
   private forwardOrderStatus(oldStatus: number, next: number): number {
@@ -1420,92 +1451,54 @@ export class HuasuHomeOrderSyncService {
   }
 
   private resolvePayMode(method: number): number {
-    const mapped = HUASU_HOME_PAY_MODE_MAP[Number(method)];
-    if (!mapped) throw new BadRequestException(`支付方式无效: ${method}`);
-    // 余额/线下字典可能未配置，落库仍写目标值；收款不走字典强校验
-    return mapped;
+    return SHIFANG_QINGYUAN_PAY_MODE_MAP[Number(method)] ?? 2;
   }
 
-  /**
-   * 事件内容只取源端备注类文本：有则写，无则空。
-   * - 售后拒绝/用户取消 → cancel_reason
-   * - 其余状态/售后事件 → remark
-   */
-  private resolveEventContent(
-    order: HuasuHomeOrder,
-    kind: 'status' | 'after_sales',
-    eventStatus?: number,
-  ): string {
-    if (kind === 'after_sales') {
-      if (eventStatus === 3) {
-        return this.clip(order.cancel_reason ?? '', 255);
-      }
-      const as = order.after_sales;
-      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
-    }
-    // kind === 'status'：售后相关状态优先取 after_sales.reason
-    const status = Number(order.order_status);
+  private eventTypeForStatus(status: number): number {
     if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_SHIP ||
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_PICKUP
     ) {
-      const as = order.after_sales;
-      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
+      return 2;
     }
-    return this.clip(order.remark ?? '', 255);
-  }
-
-  private eventTypeForStatus(status: number, order: HuasuHomeOrder): number {
-    if (status === HUASU_HOME_ORDER_STATUS.PAID) return 2;
     if (
-      status === HUASU_HOME_ORDER_STATUS.SHIPPED ||
-      status === HUASU_HOME_ORDER_STATUS.RECEIVED ||
-      status === HUASU_HOME_ORDER_STATUS.COMPLETED
-    )
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.SHIPPED ||
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.RECEIVED ||
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.PICKUP_DONE ||
+      status === SHIFANG_QINGYUAN_ORDER_STATUS.COMPLETED
+    ) {
       return 3;
-    if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
-    ) {
-      return Number(order.after_sales_type) === HUASU_HOME_AFTER_SALES_TYPE.EXCHANGE ? 5 : 4;
     }
+    if (status === SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED) return 11;
     return 11;
   }
 
-  private formatAddress(order: HuasuHomeOrder): string {
-    const addr = order.address;
-    if (addr == null) return '';
-    if (typeof addr === 'string') return addr;
-    if (Array.isArray(addr)) return addr.filter(Boolean).join('');
-    return [addr.province, addr.city, addr.district, addr.address].filter(Boolean).join('');
+  private formatAddress(order: ShifangQingyuanOrder): string {
+    return `${order.region_name ?? ''}${order.address ?? ''}`;
   }
 
-  private formatTrackingNos(order: HuasuHomeOrder): string {
-    const nos = (order.shipments ?? [])
-      .map((item) => String(item.tracking_no ?? '').trim())
+  private formatTrackingNos(snapshot: ShifangQingyuanOrderDetailData): string {
+    const nos = (snapshot.express ?? [])
+      .map((item) => String(item.express_no ?? '').trim())
       .filter(Boolean);
     return this.clip([...new Set(nos)].join(','), 30);
   }
 
-  private shipmentDate(order: HuasuHomeOrder): Date | null {
-    const ts = order.shipments?.[0]?.created_at;
-    if (ts && Number(ts) > 0) {
-      // 华溯文档为 integer，可能是秒
-      const n = Number(ts);
-      return new Date(n > 1e12 ? n : n * 1000);
-    }
-    if (HUASU_HOME_ORDER_SHIPPED_STATUSES.has(Number(order.order_status))) {
-      return this.parseDate(order.updated_at);
+  private shipmentDate(snapshot: ShifangQingyuanOrderDetailData): Date | null {
+    const fromConsign = this.parseUnix(snapshot.order.consign_time);
+    if (fromConsign) return fromConsign;
+    const expressAt = snapshot.express?.[0]?.created_at;
+    if (expressAt) return this.parseUnix(expressAt);
+    if (SHIFANG_QINGYUAN_ORDER_SHIPPED_STATUSES.has(Number(snapshot.order.order_status))) {
+      return this.parseUnix(snapshot.order.updated_at);
     }
     return null;
   }
 
-  private parseDate(value?: string | null): Date | null {
-    if (!value) return null;
-    const d = new Date(value);
-    return Number.isNaN(d.getTime()) ? null : d;
+  private parseUnix(value?: number | null): Date | null {
+    if (value == null || !(Number(value) > 0)) return null;
+    const n = Number(value);
+    return new Date(n > 1e12 ? n : n * 1000);
   }
 
   private clip(value: string, max: number): string {
@@ -1517,7 +1510,7 @@ export class HuasuHomeOrderSyncService {
   }
 
   private payKey(sourceId: bigint, orderType: string, orderId: number | string) {
-    return `HH-PAY-${sourceId}-${orderType}-${orderId}`;
+    return `SFQY-PAY-${sourceId}-${orderType}-${orderId}`;
   }
   private refundKey(
     sourceId: bigint,
@@ -1525,10 +1518,10 @@ export class HuasuHomeOrderSyncService {
     orderId: number | string,
     token: number | string,
   ) {
-    return `HH-REFUND-${sourceId}-${orderType}-${orderId}-${token}`;
+    return `SFQY-REFUND-${sourceId}-${orderType}-${orderId}-${token}`;
   }
   private shipKey(sourceId: bigint, orderType: string, shipmentId: number | string) {
-    return `HH-SHIP-${sourceId}-${orderType}-${shipmentId}`;
+    return `SFQY-SHIP-${sourceId}-${orderType}-${shipmentId}`;
   }
   private exitKey(
     sourceId: bigint,
@@ -1536,7 +1529,7 @@ export class HuasuHomeOrderSyncService {
     orderId: number | string,
     token: number | string,
   ) {
-    return `HH-EXIT-${sourceId}-${orderType}-${orderId}-${token}`;
+    return `SFQY-EXIT-${sourceId}-${orderType}-${orderId}-${token}`;
   }
   private eventKey(
     sourceId: bigint,
@@ -1544,17 +1537,18 @@ export class HuasuHomeOrderSyncService {
     orderId: number | string,
     status: number,
   ) {
-    return `HH-EVT-${sourceId}-${orderType}-${orderId}-STATUS-${status}`;
+    return `SFQY-EVT-${sourceId}-${orderType}-${orderId}-STATUS-${status}`;
   }
 
   private async markMappingFailed(
     sourceId: bigint,
-    order: HuasuHomeOrder,
+    snapshot: ShifangQingyuanOrderDetailData,
     reason: string,
     userId: string,
   ) {
     const now = new Date();
-    const orderType = HUASU_HOME_ORDER_TYPE.SALE_ORDER;
+    const order = snapshot.order;
+    const orderType = SHIFANG_QINGYUAN_ORDER_TYPE.SALE_ORDER;
     const sourceOrderId = String(order.id);
     const existing = await this.prisma.hspsi_sale_order_source_mapping.findFirst({
       where: {
@@ -1565,9 +1559,9 @@ export class HuasuHomeOrderSyncService {
       },
     });
     const data = {
-      source_order_no: String(order.order_sn ?? ''),
-      last_error_payload: JSON.stringify(order),
-      sync_status: HUASU_HOME_ORDER_SYNC_STATUS.FAILED,
+      source_order_no: String(order.order_no ?? ''),
+      last_error_payload: JSON.stringify(snapshot),
+      sync_status: SHIFANG_QINGYUAN_ORDER_SYNC_STATUS.FAILED,
       last_sync_at: now,
       remark: this.clip(reason, 255),
       updated_by: BigInt(userId),
@@ -1594,11 +1588,11 @@ export class HuasuHomeOrderSyncService {
     });
   }
 
-  private async resolveListUpdatedAt(sourceId: bigint): Promise<string> {
+  private async resolveListStartTime(sourceId: bigint): Promise<string> {
     const latest = await this.prisma.hspsi_sale_order_source_mapping.findFirst({
       where: {
         source_id: sourceId,
-        source_order_type: HUASU_HOME_ORDER_TYPE.SALE_ORDER,
+        source_order_type: SHIFANG_QINGYUAN_ORDER_TYPE.SALE_ORDER,
         source_updated_at: { not: null },
         deleted_at: null,
       },
@@ -1619,20 +1613,20 @@ export class HuasuHomeOrderSyncService {
 
   private async ensureDataSource(userId: string): Promise<bigint> {
     const existing = await this.prisma.hspsi_sys_data_source.findFirst({
-      where: { code: HUASU_HOME_DATA_SOURCE_CODE, deleted_at: null },
+      where: { code: SHIFANG_QINGYUAN_DATA_SOURCE_CODE, deleted_at: null },
     });
     if (existing) {
       if (existing.status !== 1) {
-        throw new BadRequestException('华溯之家数据源已停用或删除，请先在系统中启用');
+        throw new BadRequestException('十方清源数据源已停用或删除，请先在系统中启用');
       }
       return existing.id;
     }
     const created = await this.prisma.hspsi_sys_data_source.create({
       data: {
-        code: HUASU_HOME_DATA_SOURCE_CODE,
-        name: HUASU_HOME_DATA_SOURCE_NAME,
+        code: SHIFANG_QINGYUAN_DATA_SOURCE_CODE,
+        name: SHIFANG_QINGYUAN_DATA_SOURCE_NAME,
         status: 1,
-        remark: '华溯之家订单同步自动创建',
+        remark: '十方清源订单同步自动创建',
         created_by: BigInt(userId),
         updated_by: BigInt(userId),
       },
@@ -1640,7 +1634,7 @@ export class HuasuHomeOrderSyncService {
     return created.id;
   }
 
-  private emptyStats(): HuasuHomeOrderSyncStats {
+  private emptyStats(): ShifangQingyuanOrderSyncStats {
     return {
       fetched: 0,
       created: 0,

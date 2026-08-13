@@ -1,10 +1,12 @@
 # OpenApi 订单接口文档
 
-> 版本：v1 | 更新日期：2026-08-10 | 插件：OpenApi
+> 版本：v1 | 更新日期：2026-08-13（增量更新：extra/invoice 空数组统一格式 + user 全量字段表） | 插件：OpenApi
 
 ## 概述
 
 订单接口提供订单列表、订单详情、售后列表和常量映射四个 POST 接口，用于第三方系统获取商城订单及售后数据。
+
+> **重要**：自 2026-08-12 起，`list` 接口的每个订单元素已包含与 `detail` 接口完全一致的全量嵌套数据（order/details/refunds/actions/behavior_logs/express/extra/invoice），并补充 `user`（下单会员，已过滤 password、transaction_password）；`refunds` 嵌套字段对齐 `refund-list` 接口（含 steps / detail / order）。`extra` 和 `invoice` 在无数据时统一返回空数组 `[]`（不再是 `null`）。外部系统拉取 `list` 接口即可获取订单详情的所有数据，无需再逐单调用 `detail` 接口。
 
 - **基础路径**：`/open-api/v1/order/`
 - **请求方式**：POST（JSON body）
@@ -77,11 +79,20 @@ curl -X POST "http://api.ten.com/open-api/v1/order/list" \
 
 ### 响应参数
 
+> **说明**：list 接口每个订单元素的字段结构与 detail 接口完全一致，外部系统拉取 list 接口即可获取订单详情的所有数据，无需再调用 detail 接口。各嵌套字段的详细说明见 [2. 订单详情](#2-订单详情)。
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | data.list | array | 订单列表 |
-| data.list[].order | object | 订单主信息（qimall_order 全量字段） |
-| data.list[].details | array | 订单明细列表（qimall_order_detail 全量字段） |
+| data.list[].order | object | 订单主信息（qimall_order 全量字段，同详情 order） |
+| data.list[].details | array | 订单明细列表（含嵌套 marketing，同详情 details） |
+| data.list[].refunds | array | 售后单列表（含嵌套 steps / detail / order，对齐 refund-list 接口） |
+| data.list[].actions | array | 操作日志列表（同详情 actions） |
+| data.list[].behavior_logs | array | 行为日志列表（同详情 behavior_logs） |
+| data.list[].express | array | 物流信息列表（同详情 express） |
+| data.list[].extra | array | 订单留言（1:1，有数据为长度1的数组，无数据则为 `[]`，统一数组格式方便 length 判断） |
+| data.list[].invoice | array | 发票信息（1:1，有数据为长度1的数组，无数据则为 `[]`，统一数组格式方便 length 判断） |
+| data.list[].user | object/null | 下单会员（qimall_user 全量字段，已过滤 password、transaction_password，1:1，无则为 null） |
 | data.pagination | object | 分页信息 |
 | data.pagination.total | int | 总记录数 |
 | data.pagination.page | int | 当前页码 |
@@ -196,6 +207,7 @@ curl -X POST "http://api.ten.com/open-api/v1/order/list" \
 | extra_data | array | 额外信息（JSON自动解码） | qimall_order_detail | extra_data | 额外数据 |
 | unit | string | 单位 | qimall_order_detail | unit | 商品单位 |
 | goods_subtype | int | 商品子类型 | qimall_order_detail | goods_subtype | 商品子类型（0:普通商品 其他:根据商品的goods_subtype而定） |
+| marketing | object/null | 营销信息（1:1嵌套，无则为 null，字段说明见 [details[].marketing 字段说明](#detailsmarketing-字段说明qimall_order_marketing-表1嵌套)） | qimall_order_marketing | - | 通过 order_detail_id 关联 |
 
 ### 响应示例
 
@@ -217,7 +229,7 @@ curl -X POST "http://api.ten.com/open-api/v1/order/list" \
           "pay_status": 1,
           "shipping_status": 0,
           "created_at": 1723161600,
-          "...": "其余全量字段"
+          "...": "qimall_order 全量字段"
         },
         "details": [
           {
@@ -229,9 +241,45 @@ curl -X POST "http://api.ten.com/open-api/v1/order/list" \
             "price": 199.00,
             "num": 1,
             "pic_url": "https://...",
-            "...": "其余全量字段"
+            "marketing": {
+              "id": 1,
+              "order_detail_id": 1,
+              "give_score": 10,
+              "give_balance": 5.00,
+              "pay_money": 199.00,
+              "...": "qimall_order_marketing 全量字段"
+            },
+            "...": "qimall_order_detail 全量字段"
           }
-        ]
+        ],
+        "refunds": [
+          {
+            "id": 1,
+            "order_id": 1,
+            "order_detail_id": 1,
+            "type": 1,
+            "refund_status": 1,
+            "refund_price": 199.00,
+            "steps": [
+              { "id": 1, "order_refund_id": 1, "role": 1, "content": "买家申请退款", "...": "qimall_order_refund_step 全量字段" }
+            ],
+            "detail": { "id": 1, "order_id": 1, "goods_name": "商品名称", "...": "qimall_order_detail 全量字段" },
+            "order": { "id": 1, "order_no": "202608090001", "user_id": 10, "...": "qimall_order 全量字段" },
+            "...": "qimall_order_refund 全量字段"
+          }
+        ],
+        "actions": [
+          { "id": 1, "order_id": 1, "action": "订单创建", "member_name": "系统", "...": "qimall_order_action 全量字段" }
+        ],
+        "behavior_logs": [
+          { "id": 1, "order_id": 1, "behavior": 1, "desc": "创建订单", "extra_info": {}, "...": "qimall_order_behavior_logs 全量字段" }
+        ],
+        "express": [
+          { "id": 1, "order_id": 1, "express_name": "顺丰速运", "express_no": "SF123456", "order_detail_ids": [1], "nums": [1], "...": "qimall_order_express 全量字段" }
+        ],
+        "extra": [{ "id": 1, "order_id": 1, "message": "请尽快发货", "...": "qimall_order_extra 全量字段" }],
+        "invoice": [{ "id": 1, "order_id": 1, "type": 1, "head_name": "公司名称", "...": "qimall_order_invoice 全量字段" }],
+        "user": { "id": 10, "base64_code": "XYZ", "mobile": "13800000010", "nickname": "用户昵称", "level": 1, "parent_id": 5, "second_parent_id": 4, "third_parent_id": 3, "platform": "mp-wx", "status": 1, "...": "qimall_user 全量字段（已过滤 password、transaction_password）" }
       }
     ],
     "pagination": {
@@ -279,8 +327,8 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
 | data.actions | array | 操作日志列表 |
 | data.behavior_logs | array | 行为日志列表 |
 | data.express | array | 物流信息列表 |
-| data.extra | object/null | 订单留言（1:1，无则为null） |
-| data.invoice | object/null | 发票信息（1:1，无则为null） |
+| data.extra | array | 订单留言（1:1，有数据为长度1的数组，无数据则为 `[]`） |
+| data.invoice | array | 发票信息（1:1，有数据为长度1的数组，无数据则为 `[]`） |
 
 ### details[].marketing 字段说明（qimall_order_marketing 表，1:1嵌套）
 
@@ -351,6 +399,9 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
 | num | int | 数量 | qimall_order_refund | num | 售后数量 |
 | order_source | string | 订单来源 | qimall_order_refund | order_source | 订单来源 |
 | is_auto_refund | int | 是否自动退款 | qimall_order_refund | is_auto_refund | 是否自动退款 |
+| steps | array | 售后步骤列表（字段说明见 [refunds[].steps 字段说明](#refundssteps-字段说明qimall_order_refund_step-表1n嵌套)） | qimall_order_refund_step | - | 通过 order_refund_id 关联，1:N |
+| detail | object | 关联订单明细（1:1，字段同 [details 字段说明](#details-字段说明qimall_order_detail-表) 但不含 marketing 嵌套） | qimall_order_detail | - | 通过 order_detail_id 关联，对齐 refund-list.list[].detail |
+| order | object | 关联订单主信息（1:1，字段同 [order 字段说明](#order-字段说明qimall_order-表)） | qimall_order | - | 通过 order_id 关联，对齐 refund-list.list[].order |
 
 ### refunds[].steps 字段说明（qimall_order_refund_step 表，1:N嵌套）
 
@@ -425,7 +476,9 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
 | source_table_id | int | 来源表ID | qimall_order_express | source_table_id | 主键ID |
 | edit_num | int | 修改次数 | qimall_order_express | edit_num | 修改次数 |
 
-### extra 字段说明（qimall_order_extra 表，1:1）
+### extra 字段说明（qimall_order_extra 表，1:1，包装为数组格式统一返回）
+
+> **统一格式说明**：extra 在 list/detail 接口始终返回数组类型。有 1 条留言时为 `[{ "id": 1, "order_id": 1, ... }]`（长度 1），无留言时为 `[]`（长度 0）。客户端直接用 `length` 判断即可，无需判 `null`。
 
 | 字段 | 类型 | 说明 | 表名 | 数据库字段 | comment |
 |------|------|------|------|------|------|
@@ -439,7 +492,9 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
 | updated_at | int | 更新时间戳 | qimall_order_extra | updated_at | |
 | share_user_id | int | 分享用户ID | qimall_order_extra | share_user_id | 分享的上级ID |
 
-### invoice 字段说明（qimall_order_invoice 表，1:1）
+### invoice 字段说明（qimall_order_invoice 表，1:1，包装为数组格式统一返回）
+
+> **统一格式说明**：invoice 在 list/detail 接口始终返回数组类型。有 1 条发票申请时为 `[{ "id": 1, "order_id": 1, ... }]`（长度 1），无发票时为 `[]`（长度 0）。客户端直接用 `length` 判断即可，无需判 `null`。
 
 | 字段 | 类型 | 说明 | 表名 | 数据库字段 | comment |
 |------|------|------|------|------|------|
@@ -464,6 +519,49 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
 | created_at | int | 创建时间戳 | qimall_order_invoice | created_at | |
 | updated_at | int | 更新时间戳 | qimall_order_invoice | updated_at | |
 
+### user 字段说明（qimall_user 表，1:1，仅 list 接口）
+
+> **敏感字段过滤**：已剔除 `password`（登录密码）和 `transaction_password`（交易密码），不下发到外部。其余字段按 qimall_user 表全量返回。
+
+| 字段 | 类型 | 说明 | 表名 | 数据库字段 | comment |
+|------|------|------|------|------|------|
+| id | int | 用户ID | qimall_user | id | |
+| base64_code | string | 用户短标识（分享码） | qimall_user | base64_code | Base64 短编码 |
+| mall_id | int | 商城ID | qimall_user | mall_id | 商城ID |
+| mch_id | int | 商户ID | qimall_user | mch_id | 商户ID |
+| store_id | int | 门店ID | qimall_user | store_id | 门店id |
+| username | string | 用户名 | qimall_user | username | 用户名 |
+| area_code | string | 手机区号 | qimall_user | area_code | 手机区号，默认 86 |
+| mobile | string | 手机号 | qimall_user | mobile | 手机号 |
+| nickname | string | 昵称 | qimall_user | nickname | 昵称 |
+| birthday | int | 生日时间戳 | qimall_user | birthday | 生日（时间戳，0表示未设置） |
+| avatar_url | string | 头像 | qimall_user | avatar_url | 头像 |
+| platform | string | 注册平台 | qimall_user | platform | 平台名字（mp-wx/h5/mp-qq等） |
+| temp_parent_id | int | 临时推荐人ID | qimall_user | temp_parent_id | 临时父级ID |
+| parent_id | int | 直推人ID（一级） | qimall_user | parent_id | 第一父级ID |
+| second_parent_id | int | 二级推荐人ID | qimall_user | second_parent_id | 第二推荐人id |
+| third_parent_id | int | 三级推荐人ID | qimall_user | third_parent_id | 第三推荐人id |
+| junior_at | int | 成为下级时间戳 | qimall_user | junior_at | 成为下级的时间 |
+| created_at | int | 注册时间戳 | qimall_user | created_at | 添加时间 |
+| last_login_at | int | 最后登录时间戳 | qimall_user | last_login_at | 最后登录时间 |
+| upgrade_level_at | int | 升级时间戳 | qimall_user | upgrade_level_at | 升级到当前等级的时间 |
+| inviter_at | int | 成为邀请人时间戳 | qimall_user | inviter_at | 成为邀请人的时间 |
+| login_ip | string | 最后登录IP | qimall_user | login_ip | 最后登录的IP地址 |
+| is_inviter | int | 是否邀请人 | qimall_user | is_inviter | 是否为邀请人【0否 1是】 |
+| status | int | 状态 | qimall_user | status | 状态[-1:删除;0:禁用;1启用] |
+| level | int | 用户等级 | qimall_user | level | 等级 |
+| source | int | 注册来源 | qimall_user | source | 注册来源 |
+| signature_title | string/null | 称号标题 | qimall_user | signature_title | 用户称号 |
+| signature_content | string/null | 称号内容/说明 | qimall_user | signature_content | 称号内容 |
+| background | string/null | 背景图URL | qimall_user | background | 个人中心背景图 |
+| updated_at | int | 更新时间戳 | qimall_user | updated_at | 更新时间 |
+| verification_token | string/null | 验证令牌 | qimall_user | verification_token | 邮箱/手机验证令牌 |
+| device_type | string | 设备类型 | qimall_user | device_type | 最近登录设备（android/ios/h5/mp等） |
+| device_mac | string | 设备标识MAC | qimall_user | device_mac | 最近登录设备MAC地址 |
+| inviter_source | int | 邀请来源 | qimall_user | inviter_source | 成为邀请人的来源 |
+| **password** | — | 已过滤，不下发 | qimall_user | password | 登录密码（BCrypt哈希，**敏感字段已过滤**） |
+| **transaction_password** | — | 已过滤，不下发 | qimall_user | transaction_password | 交易密码（BCrypt哈希，**敏感字段已过滤**） |
+
 ### 响应示例
 
 ```json
@@ -485,11 +583,17 @@ curl -X POST "http://api.ten.com/open-api/v1/order/detail" \
     "actions": [ { "id": 1, "order_id": 1, "action": "订单创建", "...": "qimall_order_action 全量字段" } ],
     "behavior_logs": [ { "id": 1, "order_id": 1, "behavior": 1, "desc": "创建订单", "extra_info": {}, "...": "qimall_order_behavior_logs 全量字段" } ],
     "express": [ { "id": 1, "order_id": 1, "express_name": "顺丰速运", "express_no": "SF123456", "order_detail_ids": [1,2], "nums": [1,1], "...": "qimall_order_express 全量字段" } ],
-    "extra": { "id": 1, "order_id": 1, "message": "请尽快发货", "...": "qimall_order_extra 全量字段" },
-    "invoice": { "id": 1, "order_id": 1, "type": 1, "head_name": "公司名称", "...": "qimall_order_invoice 全量字段" }
+    "extra": [{ "id": 1, "order_id": 1, "message": "请尽快发货", "...": "qimall_order_extra 全量字段" }],
+    "invoice": [{ "id": 1, "order_id": 1, "type": 1, "head_name": "公司名称", "...": "qimall_order_invoice 全量字段" }]
   }
 }
 ```
+
+> **无数据时空数组示例**：
+> ```json
+> { "...": "...", "extra": [], "invoice": [] }
+> ```
+> 客户端直接用 `extra.length` / `invoice.length` 判断是否有数据，无需判空。
 
 ---
 
