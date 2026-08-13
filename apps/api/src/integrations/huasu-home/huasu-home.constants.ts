@@ -197,8 +197,6 @@ export const HUASU_HOME_PROVINCIAL_PARTNER_NAME = '省级合伙人';
 /** 列表默认分页（后期改由数据库配置管理，不走环境变量） */
 export const HUASU_HOME_USER_SYNC_DEFAULT_PAGE_SIZE = 200;
 export const HUASU_HOME_USER_SYNC_MAX_PAGE_SIZE = 1000;
-/** 用户同步默认间隔：1 小时 */
-export const HUASU_HOME_USER_SYNC_DEFAULT_INTERVAL_MS = 3_600_000;
 
 /** 订单列表默认分页（与用户列表同一上限；后期改由数据库配置管理） */
 export const HUASU_HOME_ORDER_SYNC_DEFAULT_PAGE_SIZE = 200;

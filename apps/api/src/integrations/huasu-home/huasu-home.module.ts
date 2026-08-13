@@ -8,7 +8,6 @@ import { HuasuHomeConferenceOrderSyncService } from './sync/conference-order-syn
 import { HuasuHomeInstallmentOrderSyncService } from './sync/installment-order-sync.service';
 import { HuasuHomeOrderSyncService } from './sync/order-sync.service';
 import { HuasuHomeProductSyncService } from './sync/product-sync.service';
-import { HuasuHomeUserSyncScheduler } from './sync/user-sync.scheduler';
 import { HuasuHomeUserSyncService } from './sync/user-sync.service';
 
 @Module({
@@ -22,7 +21,6 @@ import { HuasuHomeUserSyncService } from './sync/user-sync.service';
     HuasuHomeConferenceOrderSyncService,
     HuasuHomeInstallmentOrderSyncService,
     HuasuHomeUserSyncService,
-    HuasuHomeUserSyncScheduler,
   ],
   exports: [
     HuasuHomeService,
