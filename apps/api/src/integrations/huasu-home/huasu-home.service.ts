@@ -11,6 +11,8 @@ import {
   type HuasuHomeOrderListQuery,
   type HuasuHomeRequestOptions,
   type HuasuHomeResponse,
+  type HuasuHomeUserListData,
+  type HuasuHomeUserListQuery,
 } from './huasu-home.types';
 
 /**
@@ -215,5 +217,23 @@ export class HuasuHomeService {
   /** @deprecated 使用 getOrderInfo(orderSn) */
   async getOrderDetail(orderIdOrSn: number | string): Promise<HuasuHomeOrder> {
     return this.getOrderInfo(String(orderIdOrSn));
+  }
+
+  /**
+   * 获取用户列表
+   *
+   * POST /hspsi/user/list
+   * 对应 docs/global/integrations/huasu-home/用户列表.md
+   */
+  async getUserList(query: HuasuHomeUserListQuery): Promise<HuasuHomeUserListData> {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.max(1, Number(query.page_size) || 100);
+    const id = Math.max(0, Number(query.id) || 0);
+    const response = await this.post<HuasuHomeUserListData>('/hspsi/user/list', {
+      page,
+      page_size: pageSize,
+      id,
+    });
+    return response.data!;
   }
 }

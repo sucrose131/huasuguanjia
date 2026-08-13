@@ -118,3 +118,25 @@ export const HUASU_HOME_PAY_MODE_MAP: Record<number, number> = {
   3: 6, // 余额（字典建议扩展）
   4: 7, // 线下（字典建议扩展；缺失时可回退 2）
 };
+
+/** 百岁加类型：1-主卡，2-副卡，3-次卡 */
+export const HUASU_HOME_CENTENARIAN_TYPE = {
+  PRIMARY: 1,
+  SECONDARY: 2,
+  TIMES: 3,
+} as const;
+
+export const HUASU_HOME_CENTENARIAN_TYPE_NAME: Record<number, string> = {
+  [HUASU_HOME_CENTENARIAN_TYPE.PRIMARY]: '主卡',
+  [HUASU_HOME_CENTENARIAN_TYPE.SECONDARY]: '副卡',
+  [HUASU_HOME_CENTENARIAN_TYPE.TIMES]: '次卡',
+};
+
+/** 省级合伙人展示名 */
+export const HUASU_HOME_PROVINCIAL_PARTNER_NAME = '省级合伙人';
+
+/** 用户列表默认分页（后期改由数据库配置管理，不走环境变量） */
+export const HUASU_HOME_USER_SYNC_DEFAULT_PAGE_SIZE = 200;
+export const HUASU_HOME_USER_SYNC_MAX_PAGE_SIZE = 1000;
+/** 用户同步默认间隔：1 小时 */
+export const HUASU_HOME_USER_SYNC_DEFAULT_INTERVAL_MS = 3_600_000;

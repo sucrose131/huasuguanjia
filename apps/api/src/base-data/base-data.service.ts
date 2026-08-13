@@ -14,6 +14,7 @@ export class BaseDataService {
     return (this.prisma as unknown as Record<string, any>)[config.model];
   }
   private value(value: unknown, type: string) {
+    if (type === 'json') return value ?? null;
     if (value === null || value === undefined || value === '')
       return type === 'date' ? null : type === 'string' ? '' : type === 'bigint' ? 0n : 0;
     if (type === 'bigint') return BigInt(String(value));
@@ -24,6 +25,8 @@ export class BaseDataService {
   private data(config: ResourceConfig, input: Record<string, unknown>, partial: boolean) {
     const result: Record<string, unknown> = {};
     for (const [field, definition] of Object.entries(config.fields)) {
+      // json 字段由外部同步维护，基础资料接口不接受写入
+      if (definition.type === 'json') continue;
       if (!(field in input)) {
         if (!partial && definition.required) throw new BadRequestException(`${field} 必填`);
         continue;

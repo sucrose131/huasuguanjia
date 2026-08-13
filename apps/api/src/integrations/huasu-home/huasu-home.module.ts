@@ -6,6 +6,8 @@ import { HuasuHomeService } from './huasu-home.service';
 import { ExternalInventoryPostingService } from '../common/external-inventory-posting.service';
 import { HuasuHomeOrderSyncService } from './sync/order-sync.service';
 import { HuasuHomeProductSyncService } from './sync/product-sync.service';
+import { HuasuHomeUserSyncScheduler } from './sync/user-sync.scheduler';
+import { HuasuHomeUserSyncService } from './sync/user-sync.service';
 
 @Module({
   imports: [AuthModule, BusinessNumberModule],
@@ -15,7 +17,14 @@ import { HuasuHomeProductSyncService } from './sync/product-sync.service';
     HuasuHomeProductSyncService,
     ExternalInventoryPostingService,
     HuasuHomeOrderSyncService,
+    HuasuHomeUserSyncService,
+    HuasuHomeUserSyncScheduler,
   ],
-  exports: [HuasuHomeService, HuasuHomeProductSyncService, HuasuHomeOrderSyncService],
+  exports: [
+    HuasuHomeService,
+    HuasuHomeProductSyncService,
+    HuasuHomeOrderSyncService,
+    HuasuHomeUserSyncService,
+  ],
 })
 export class HuasuHomeModule {}

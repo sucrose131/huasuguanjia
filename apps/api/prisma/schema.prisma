@@ -22,6 +22,8 @@ model hspsi_basic_customer {
   related_customer_id BigInt    @default(0)
   status              Int       @default(1) @db.TinyInt
   remark              String    @default("") @db.VarChar(255)
+  /// 用户身份描述 JSON：百岁加会员 / 省级合伙人 / 推广身份（不含外部 ID）
+  levels              Json?
   sort                Int       @default(0)
   created_by          BigInt    @default(0)
   updated_by          BigInt    @default(0)

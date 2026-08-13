@@ -185,12 +185,22 @@ export type HuasuHomeOrderAddressValue =
 
 export interface HuasuHomeOrderUser {
   avatar?: string;
+  birth?: string;
+  /** 百岁加类型：1主卡 2副卡 3次卡 */
+  centenarian_type?: number;
   gender?: number;
   id: number;
+  /** 是否百岁加会员：1是 */
+  is_centenarian?: number;
+  /** 是否省级合伙人：1是 */
+  is_provincial_partner?: number;
+  level?: HuasuHomeUserLevel | null;
+  level_id?: number;
   mobile?: string;
   nickname?: string;
   organization_id?: number;
   referrer_id?: number;
+  remark?: string;
   status?: number;
   uid?: number;
 }
@@ -361,3 +371,82 @@ export interface HuasuHomeOrderListQuery {
   updated_at: string;
   [key: string]: unknown;
 }
+
+/* ==================== 用户列表（POST /hspsi/user/list） ==================== */
+
+export interface HuasuHomeUserLevel {
+  created_at?: string;
+  icon?: string;
+  id?: number;
+  /** 等级值：-1拓展 0基础 1全家福 2事业合伙人 3创始合伙人（不是主键 id） */
+  level?: number;
+  name?: string;
+  sort?: number;
+  status?: number;
+  updated_at?: string;
+}
+
+export interface HuasuHomeUserReferrer {
+  avatar?: string;
+  id?: number;
+  mobile?: string;
+  nickname?: string;
+  uid?: number;
+}
+
+export interface HuasuHomeUserOrganization {
+  id: number;
+  name?: string;
+  code?: string;
+  [key: string]: unknown;
+}
+
+export interface HuasuHomeUser {
+  avatar?: string;
+  birth?: string;
+  /** 百岁加类型：1主卡 2副卡 3次卡 */
+  centenarian_type?: number;
+  country_code?: string;
+  created_at?: string;
+  gender?: number;
+  /** 华溯用户主键 */
+  id: number;
+  /** 是否百岁加会员：1是 */
+  is_centenarian?: number;
+  /** 是否省级合伙人：1是 */
+  is_provincial_partner?: number;
+  level?: HuasuHomeUserLevel | null;
+  level_id?: number;
+  mobile?: string;
+  nickname?: string;
+  organization?: HuasuHomeUserOrganization | null;
+  organization_id?: number;
+  referrer?: HuasuHomeUserReferrer | null;
+  referrer_id?: number;
+  remark?: string;
+  status?: number;
+  uid?: number;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface HuasuHomeUserListData {
+  list: HuasuHomeUser[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface HuasuHomeUserListQuery {
+  page: number;
+  page_size: number;
+  /** 最小用户 ID：返回 id 大于该值的用户 */
+  id: number;
+}
+
+/**
+ * 平台客户身份描述（hspsi_basic_customer.levels）
+ * 仅存中文标签数组，例如：["全家福会员","省级合伙人","百岁加会员-主卡"]
+ */
+export type CustomerIdentityLevels = string[];
+
