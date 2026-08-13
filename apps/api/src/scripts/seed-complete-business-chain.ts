@@ -402,15 +402,29 @@ async function main() {
         orderBy: { po_id: 'desc' },
       });
       if (existing) return existing;
-      const approved = await purchase.approveApplication(
+      await purchase.approveApplication(
         String(purchaseApplication.pur_id),
         true,
         '生产缺料采购审批通过',
         actorId,
       );
-      if (!approved.orderId) throw new Error('采购审批通过后未返回采购订单ID');
+      const applicationLines = await prisma.hspsi_purchase_approve_detail.findMany({
+        where: { pur_id: purchaseApplication.pur_id },
+      });
+      const generated = await purchase.generateApplicationOrder(
+        String(purchaseApplication.pur_id),
+        {
+          generationMode: 'all',
+          vendorId: vendor.vendor_id.toString(),
+          details: applicationLines.map((line) => ({
+            applicationDetailId: line.id.toString(),
+            totalAmount: Math.max(1, Number(line.reference_price) * line.qty),
+          })),
+        },
+        actorId,
+      );
       return prisma.hspsi_purchase_order.findUniqueOrThrow({
-        where: { po_id: BigInt(approved.orderId) },
+        where: { po_id: BigInt(generated.id) },
       });
     });
 

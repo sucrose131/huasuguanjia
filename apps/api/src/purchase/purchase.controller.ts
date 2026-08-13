@@ -64,6 +64,15 @@ export class PurchaseController {
     return this.service.approveApplication(id, b.approved, b.comment ?? '', u.id);
   }
   @RequirePermissions('purchase')
+  @Post('applications/:id/generate-order')
+  generateApplicationOrder(
+    @Param('id') id: string,
+    @Body() b: Record<string, unknown>,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.service.generateApplicationOrder(id, b, u.id);
+  }
+  @RequirePermissions('purchase')
   @Delete('applications/:id')
   removeApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.service.removeApplication(id, u.id);

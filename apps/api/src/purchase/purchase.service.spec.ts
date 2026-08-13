@@ -905,7 +905,7 @@ describe('PurchaseService production-shortage guards', () => {
     expect(result.message).toBe('采购订单已开始采购');
   });
 
-  it('backfills the department for a production shortage application and creates a pending-purchase order', async () => {
+  it('backfills the department and leaves order generation to the purchaser after approval', async () => {
     const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const applicationLines = [
@@ -956,13 +956,88 @@ describe('PurchaseService production-shortage guards', () => {
 
     const result = await serviceWith(prisma, trace).approveApplication('7', true, '', '9');
 
-    expect(orderCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ pur_id: 7n, dept_id: 2n, vendor_id: 0n, status: 1 }),
-      }),
+    expect(orderCreate).not.toHaveBeenCalled();
+    expect(trace.link).not.toHaveBeenCalled();
+    expect(result.message).toBe('审批通过，请由采购人员生成采购订单');
+  });
+
+  it('generates selected application lines using total amount as the authoritative price', async () => {
+    const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
+    const detailCreate = vi.fn();
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const applicationLine = {
+      id: 12n,
+      pur_id: 7n,
+      goods_id: 10n,
+      sku_id: 11n,
+      qty: 4,
+      unit_type: 1,
+      reference_price: new Prisma.Decimal(0),
+      remark: '',
+    };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          pur_id: 7n,
+          pur_no: 'PA7',
+          org_id: 1n,
+          dept_id: 2n,
+          warehouse_id: 3n,
+          status: 1,
+          approve_status: 1,
+          remark: '',
+        }),
+      },
+      hspsi_basic_vendor: { findFirst: vi.fn().mockResolvedValue({ vendor_id: 5n }) },
+      hspsi_purchase_approve_detail: { findMany: vi.fn().mockResolvedValue([applicationLine]) },
+      hspsi_purchase_order: { findMany: vi.fn().mockResolvedValue([]), create: orderCreate },
+      hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(),
+        createMany: detailCreate,
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertProductionShortageOrderCapacity').mockResolvedValue(undefined);
+
+    const result = await service.generateApplicationOrder(
+      '7',
+      {
+        generationMode: 'partial',
+        vendorId: '5',
+        details: [{ applicationDetailId: '12', totalAmount: 100 }],
+      },
+      '9',
     );
+
+    expect(orderCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        pur_id: 7n,
+        vendor_id: 5n,
+        pcs_qty: 4,
+        pay_amout: new Prisma.Decimal(100),
+      }),
+    });
+    expect(detailCreate).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          source_application_detail_id: 12n,
+          qty: 4,
+          unit_price: new Prisma.Decimal(25),
+          total_amout: new Prisma.Decimal(100),
+        }),
+      ],
+    });
     expect(trace.link).toHaveBeenCalledOnce();
-    expect(result.message).toBe('审批通过，已自动生成采购订单');
+    expect(result).toEqual(
+      expect.objectContaining({ id: 30n, totalAmount: new Prisma.Decimal(100) }),
+    );
   });
 
   it('treats an empty plan payment date placeholder as no date when saving an order', async () => {
