@@ -32,13 +32,13 @@ const PAGE_LIMIT = 100;
  * 2. 第一轮：同步所有商品 SPU + SKU + source_mapping
  * 3. 第二轮：处理 gift_plan 和 upgrade_bag 的转换规则（依赖第一轮已同步的商品映射；
  *    方案清空时停用全部旧规则）
- * 4. 第三轮：本次未成功同步的源商品 → mapping DISABLED + 停用转换规则 + 平台下架
+ * 4. 第三轮：源端本次未返回的商品仅告警，不停用 mapping / 转换规则，也不下架平台商品
  *
  * source_type 区分：
  * - STANDARD：gift_plan 和 upgrade_bag 均为空，自身出库
  * - MAPPED：有 gift_plan 或 upgrade_bag，按转换规则出库
  *
- * 源端下架商品：仍落库，平台 status=0，mapping_status=DISABLED。
+ * 源端下架/删除：保留平台商品与 mapping，供历史订单解析；不下架、不停用。
  */
 @Injectable()
 export class ShifangQingyuanGoodsSyncService {
@@ -110,13 +110,11 @@ export class ShifangQingyuanGoodsSyncService {
           });
         }
 
-        // 第三轮：源端本次未成功同步的商品 → 停用 mapping + 转换规则 + 平台下架
-        await this.disableAbsentSourceGoods({
+        // 第三轮：源端本次未返回的商品仅告警（保留平台商品与 mapping，供历史订单使用）
+        await this.warnAbsentSourceGoods({
           tx,
           sourceId,
           presentSourceGoodsIds: new Set([...syncedGoods.keys()].map(String)),
-          operatorId,
-          now,
           stats,
         });
       },
@@ -226,7 +224,8 @@ export class ShifangQingyuanGoodsSyncService {
       sale_price: salePrice,
       warehouse_id: 0n,
       vendor_id: 0n,
-      status: inactive ? 0 : 1,
+      // 源端下架不影响平台商品可用性；历史订单仍需能查到商品
+      status: 1,
       sort: goods.sort ?? 0,
       remark: this.clip(goods.subtitle ?? '', 255),
       updated_by: operatorId,
@@ -247,11 +246,8 @@ export class ShifangQingyuanGoodsSyncService {
       stats.goods.created += 1;
     }
 
-    // 同步 SKU
+    // 同步 SKU（源端下架仍保持 mapping 可用，供订单解析）
     const skuIds = new Map<number, bigint>();
-    const skuMappingStatus = inactive
-      ? SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED
-      : SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED;
     for (const attr of attrs) {
       const platformSkuId = await this.upsertGoodsSku({
         tx,
@@ -262,7 +258,7 @@ export class ShifangQingyuanGoodsSyncService {
         attr,
         unitType,
         isDefault: attr.id === defaultAttr.id,
-        mappingStatus: skuMappingStatus,
+        mappingStatus: SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED,
         operatorId,
         now,
         stats,
@@ -276,18 +272,11 @@ export class ShifangQingyuanGoodsSyncService {
       return;
     }
 
-    // upsert source_mapping（带 source_type；下架商品 mapping_status=DISABLED）
-    await this.upsertSourceMapping({
+    // 清理历史冗余的商品级默认映射（source_sku_id='0'）；订单按真实 goods_attr_id 查 SKU 映射
+    await this.disableLegacyDefaultMappings({
       tx,
       sourceId,
-      sourceType,
       sourceGoodsId,
-      sourceSkuId: '0',
-      goodsId,
-      skuId: defaultSkuId,
-      mappingStatus: inactive
-        ? SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED
-        : SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED,
       operatorId,
       now,
       stats,
@@ -321,7 +310,11 @@ export class ShifangQingyuanGoodsSyncService {
 
     // 收集所有 give_goods_num 条目；为空时也要清理旧规则（方案删除/全停用）
     const entries = this.collectGiveGoodsNumEntries(item);
-    const activeTargets = new Set<string>();
+    const resolved: Array<{
+      targetGoodsId: bigint;
+      targetSkuId: bigint;
+      quantityRatio: number;
+    }> = [];
 
     for (const { goodsId: targetSourceGoodsId, num } of entries) {
       const targetRef = syncedGoods.get(targetSourceGoodsId);
@@ -331,22 +324,37 @@ export class ShifangQingyuanGoodsSyncService {
         );
         continue;
       }
-      activeTargets.add(`${targetRef.goodsId}:${targetRef.defaultSkuId}`);
+      resolved.push({
+        targetGoodsId: targetRef.goodsId,
+        targetSkuId: targetRef.defaultSkuId,
+        quantityRatio: Math.max(1, num),
+      });
+    }
+
+    // 1 个目标 → REPLACE；多个目标 → COMBO_SPLIT（与华溯 rule_type 约定一致）
+    const ruleType =
+      resolved.length > 1
+        ? SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT
+        : SHIFANG_QINGYUAN_RULE_TYPE.REPLACE;
+    const activeTargets = new Set<string>();
+
+    for (const row of resolved) {
+      activeTargets.add(`${row.targetGoodsId}:${row.targetSkuId}`);
       await this.upsertConversionRule({
         tx,
         sourceGoodsId: sourceRef.goodsId,
         sourceSkuId: sourceRef.defaultSkuId,
-        targetGoodsId: targetRef.goodsId,
-        targetSkuId: targetRef.defaultSkuId,
-        quantityRatio: Math.max(1, num),
-        ruleType: SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+        targetGoodsId: row.targetGoodsId,
+        targetSkuId: row.targetSkuId,
+        quantityRatio: row.quantityRatio,
+        ruleType,
         operatorId,
         now,
         stats,
       });
     }
 
-    // 停用已移除的规则（含 entries 为空 → 停用全部旧规则）
+    // 停用已移除的规则（含 entries 为空 → 停用全部旧规则；含 REPLACE↔COMBO_SPLIT 迁移）
     await this.disableStaleRules({
       tx,
       sourceGoodsId: sourceRef.goodsId,
@@ -565,19 +573,46 @@ export class ShifangQingyuanGoodsSyncService {
     stats.mappings.upserted += 1;
   }
 
-  /**
-   * 全量同步收尾：源端本次未出现在成功同步集合中的商品
-   * （已从商城删除、或本轮无 SKU 跳过等）→ 停用 mapping、转换规则，平台商品下架。
-   */
-  private async disableAbsentSourceGoods(input: {
+  /** 停用历史 source_sku_id='0' 商品级默认映射（已废弃，仅保留真实 attr.id 映射） */
+  private async disableLegacyDefaultMappings(input: {
     tx: Tx;
     sourceId: bigint;
-    presentSourceGoodsIds: Set<string>;
+    sourceGoodsId: string;
     operatorId: bigint;
     now: Date;
     stats: ShifangQingyuanGoodsSyncStats;
   }): Promise<void> {
-    const { tx, sourceId, presentSourceGoodsIds, operatorId, now, stats } = input;
+    const { tx, sourceId, sourceGoodsId, operatorId, now, stats } = input;
+    const result = await tx.hspsi_goods_source_mapping.updateMany({
+      where: {
+        source_id: sourceId,
+        source_goods_id: sourceGoodsId,
+        source_sku_id: '0',
+        deleted_at: null,
+        mapping_status: { not: SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED },
+      },
+      data: {
+        mapping_status: SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED,
+        last_sync_at: now,
+        updated_by: operatorId,
+        updated_at: now,
+        deleted_at: now,
+      },
+    });
+    stats.mappings.disabled += result.count;
+  }
+
+  /**
+   * 全量同步收尾：源端本次未出现在成功同步集合中的商品仅告警。
+   * 不停用 mapping / 转换规则，也不下架平台商品，避免历史订单找不到商品。
+   */
+  private async warnAbsentSourceGoods(input: {
+    tx: Tx;
+    sourceId: bigint;
+    presentSourceGoodsIds: Set<string>;
+    stats: ShifangQingyuanGoodsSyncStats;
+  }): Promise<void> {
+    const { tx, sourceId, presentSourceGoodsIds, stats } = input;
 
     const activeMappings = await tx.hspsi_goods_source_mapping.findMany({
       where: {
@@ -586,78 +621,21 @@ export class ShifangQingyuanGoodsSyncService {
         mapping_status: { not: SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED },
       },
       select: {
-        id: true,
         source_goods_id: true,
-        goods_id: true,
       },
     });
 
-    const stale = activeMappings.filter(
-      (row) => !presentSourceGoodsIds.has(row.source_goods_id),
-    );
-    if (!stale.length) return;
-
-    const staleMappingIds = stale.map((row) => row.id);
-    const stalePlatformGoodsIds = [
+    const absentSourceIds = [
       ...new Set(
-        stale
-          .map((row) => row.goods_id)
-          .filter((goodsId): goodsId is bigint => goodsId != null && goodsId > 0n)
-          .map((goodsId) => goodsId.toString()),
+        activeMappings
+          .map((row) => row.source_goods_id)
+          .filter((sourceGoodsId) => !presentSourceGoodsIds.has(sourceGoodsId)),
       ),
-    ].map((id) => BigInt(id));
+    ];
+    if (!absentSourceIds.length) return;
 
-    const mappingResult = await tx.hspsi_goods_source_mapping.updateMany({
-      where: { id: { in: staleMappingIds } },
-      data: {
-        mapping_status: SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED,
-        last_sync_at: now,
-        updated_by: operatorId,
-        updated_at: now,
-      },
-    });
-    stats.mappings.disabled += mappingResult.count;
-
-    if (stalePlatformGoodsIds.length) {
-      await tx.hspsi_goods_info.updateMany({
-        where: {
-          goods_id: { in: stalePlatformGoodsIds },
-          deleted_at: null,
-          status: { not: 0 },
-        },
-        data: {
-          status: 0,
-          updated_by: operatorId,
-          updated_at: now,
-        },
-      });
-
-      const staleRules = await tx.hspsi_goods_sku_conversion_rule.findMany({
-        where: {
-          source_goods_id: { in: stalePlatformGoodsIds },
-          rule_type: SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
-          deleted_at: null,
-          status: SHIFANG_QINGYUAN_RULE_STATUS.ENABLED,
-        },
-        select: { id: true },
-      });
-      const staleRuleIds = staleRules.map((row) => row.id);
-      if (staleRuleIds.length) {
-        await tx.hspsi_goods_sku_conversion_rule.updateMany({
-          where: { id: { in: staleRuleIds } },
-          data: {
-            status: SHIFANG_QINGYUAN_RULE_STATUS.DISABLED,
-            deleted_at: now,
-            updated_by: operatorId,
-            updated_at: now,
-          },
-        });
-      }
-    }
-
-    const absentSourceIds = [...new Set(stale.map((row) => row.source_goods_id))];
     stats.warnings.push(
-      `源端未返回/未同步成功的商品 ${absentSourceIds.length} 个，已停用 mapping 并下架平台商品`,
+      `源端未返回/未同步成功的商品 ${absentSourceIds.length} 个，已保留平台商品与 mapping（供历史订单使用）`,
     );
   }
 
@@ -740,7 +718,12 @@ export class ShifangQingyuanGoodsSyncService {
       where: {
         source_goods_id: input.sourceGoodsId,
         source_sku_id: input.sourceSkuId,
-        rule_type: SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+        rule_type: {
+          in: [
+            SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+            SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT,
+          ],
+        },
         deleted_at: null,
         status: SHIFANG_QINGYUAN_RULE_STATUS.ENABLED,
       },

@@ -3,13 +3,13 @@
  *
  * 覆盖：
  * - 普通商品(STANDARD)同步：SPU / SKU / mapping 落库
- * - 下架商品仍创建并置 mapping_status=DISABLED
+ * - 下架商品仍创建，mapping 保持 MAPPED，平台不下架
  * - 无 SKU 商品跳过
  * - gift_plan 对象格式 give_goods_num 写 conversion_rule（source_type=MAPPED）
  * - upgrade_bag 数组格式 give_goods_num 写 conversion_rule（source_type=MAPPED）
  * - 幂等：二次同步走 update 路径
  * - gift_plan 清空后停用旧 conversion_rule
- * - 源端不再返回的商品停用 mapping / 下架
+ * - 源端不再返回的商品保留 mapping / 平台商品，仅告警
  * - 分页空页退出（避免 total 偏大死循环）
  * - 分→元金额转换
  *
@@ -364,8 +364,19 @@ function createContext() {
             if (!idIn.includes(row.id)) continue;
           } else {
             if (row.source_id !== where.source_id) continue;
-            if (row.source_goods_id !== where.source_goods_id) continue;
-            if (row.deleted_at) continue;
+            if (
+              where.source_goods_id != null &&
+              row.source_goods_id !== where.source_goods_id
+            ) {
+              continue;
+            }
+            if (
+              where.source_sku_id != null &&
+              row.source_sku_id !== where.source_sku_id
+            ) {
+              continue;
+            }
+            if (where.deleted_at === null && row.deleted_at) continue;
             if (
               where.mapping_status?.not != null &&
               row.mapping_status === where.mapping_status.not
@@ -401,7 +412,11 @@ function createContext() {
           if (where.source_sku_id != null && row.source_sku_id !== where.source_sku_id) {
             return false;
           }
-          if (where.rule_type != null && row.rule_type !== where.rule_type) return false;
+          if (where.rule_type?.in != null) {
+            if (!where.rule_type.in.includes(row.rule_type)) return false;
+          } else if (where.rule_type != null && row.rule_type !== where.rule_type) {
+            return false;
+          }
           if (where.deleted_at === null && row.deleted_at) return false;
           if (where.status != null && row.status !== where.status) return false;
           return true;
@@ -477,7 +492,7 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
 
     expect(stats.goods.created).toBe(1);
     expect(stats.skus.created).toBe(1);
-    expect(stats.mappings.upserted).toBe(2); // SKU级(1条) + 默认source_sku_id='0'(1条)
+    expect(stats.mappings.upserted).toBe(1); // 仅 SKU 级映射
 
     // SPU
     const goods = ctx.goodsStore[0]!;
@@ -496,7 +511,7 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     expect(mapping.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED);
   });
 
-  it('下架商品：创建 SPU+SKU+mapping，mapping_status=DISABLED，status=0', async () => {
+  it('下架商品：仍创建 SPU+SKU+mapping，保留平台商品与可用映射', async () => {
     const ctx = createContext();
     const offlineItem = buildStandardGoods({
       goods: { ...buildStandardGoods().goods, is_on_sale: 0, status: 1 },
@@ -515,13 +530,12 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     expect(ctx.goodsStore.length).toBe(1);
     expect(ctx.skuStore.length).toBe(1);
 
-    // 平台端 status=0
-    expect(ctx.goodsStore[0]!.status).toBe(0);
-    // 所有 mapping 为 DISABLED
+    // 源端下架不落平台下架，mapping 保持可用
+    expect(ctx.goodsStore[0]!.status).toBe(1);
     for (const m of ctx.mappingStore) {
-      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED);
+      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED);
     }
-    expect(ctx.mappingStore.length).toBe(2); // SKU级 + 默认'0'级
+    expect(ctx.mappingStore.length).toBe(1); // 仅 SKU 级
   });
 
   it('无 SKU 的商品跳过', async () => {
@@ -567,11 +581,13 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     const giftMapping = ctx.mappingStore.find((m) => m.source_goods_id === '20')!;
     expect(giftMapping.source_type).toBe(SHIFANG_QINGYUAN_SOURCE_TYPE.MAPPED);
 
-    // 找 2 条 conversion_rule（赠送 goods=1×3, goods=10×5）
+    // 找 2 条 conversion_rule（赠送 goods=1×3, goods=10×5）→ 多目标用 COMBO_SPLIT
     expect(stats.conversionRules.upserted).toBe(2);
     const ratios = ctx.ruleStore.map((r) => r.quantity_ratio).sort();
     expect(ratios).toEqual([3, 5]);
-    expect(ctx.ruleStore.every((r) => r.rule_type === SHIFANG_QINGYUAN_RULE_TYPE.REPLACE)).toBe(true);
+    expect(
+      ctx.ruleStore.every((r) => r.rule_type === SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT),
+    ).toBe(true);
     expect(ctx.ruleStore.every((r) => r.status === SHIFANG_QINGYUAN_RULE_STATUS.ENABLED)).toBe(true);
   });
 
@@ -590,10 +606,11 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     const bagMapping = ctx.mappingStore.find((m) => m.source_goods_id === '30')!;
     expect(bagMapping.source_type).toBe(SHIFANG_QINGYUAN_SOURCE_TYPE.MAPPED);
 
-    // 1 条转换规则，赠 goods=1×2
+    // 1 条转换规则，赠 goods=1×2 → 单目标用 REPLACE
     expect(stats.conversionRules.upserted).toBe(1);
     const rule = ctx.ruleStore[0]!;
     expect(rule.quantity_ratio).toBe(2);
+    expect(rule.rule_type).toBe(SHIFANG_QINGYUAN_RULE_TYPE.REPLACE);
     expect(rule.source_goods_id).toBe(bagMapping.goods_id);
   });
 
@@ -613,12 +630,12 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     expect(second.goods.updated).toBe(1);
     expect(ctx.goodsStore.length).toBe(1);
     expect(ctx.skuStore.length).toBe(1);
-    expect(ctx.mappingStore.length).toBe(2); // SKU级(1条) + 默认source_sku_id='0'(1条)
-    expect(first.mappings.upserted).toBe(2);
-    expect(second.mappings.upserted).toBe(2);
+    expect(ctx.mappingStore.length).toBe(1); // 仅 SKU 级
+    expect(first.mappings.upserted).toBe(1);
+    expect(second.mappings.upserted).toBe(1);
   });
 
-  it('下架的已存在 mapping 商品：mapping_status 置为 DISABLED', async () => {
+  it('下架的已存在 mapping 商品：仍保持 MAPPED，平台不下架', async () => {
     const ctx = createContext();
     // 第一次：上架
     const item = buildStandardGoods();
@@ -638,13 +655,12 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     });
     const stats = await ctx.service.syncGoods('0');
 
-    // 下架商品仍创建 SPU/SKU，但标记 mappingOnly
     expect(stats.goods.mappingOnly).toBe(1);
-    // 所有 mapping 已置为 DISABLED
+    expect(ctx.goodsStore[0]!.status).toBe(1);
     for (const m of ctx.mappingStore) {
-      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED);
+      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED);
     }
-    expect(ctx.mappingStore.length).toBe(2); // SKU级 + 默认'0'级
+    expect(ctx.mappingStore.length).toBe(1); // 仅 SKU 级
   });
 
   it('单位字符串匹配：unit="瓶" → hspsi_basic_unit.id=1', async () => {
@@ -702,13 +718,11 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
       true,
     );
     expect(ctx.ruleStore.every((r) => r.deleted_at != null)).toBe(true);
-    const giftMapping = ctx.mappingStore.find(
-      (m) => m.source_goods_id === '20' && m.source_sku_id === '0',
-    )!;
+    const giftMapping = ctx.mappingStore.find((m) => m.source_goods_id === '20')!;
     expect(giftMapping.source_type).toBe(SHIFANG_QINGYUAN_SOURCE_TYPE.STANDARD);
   });
 
-  it('源端不再返回的商品：停用 mapping、下架平台商品、停用转换规则', async () => {
+  it('源端不再返回的商品：保留 mapping、平台商品与转换规则，仅告警', async () => {
     const ctx = createContext();
     const standard = buildStandardGoods();
     const withBag = buildUpgradeBagGoods();
@@ -730,14 +744,15 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     });
     const stats = await ctx.service.syncGoods('0');
 
-    expect(stats.mappings.disabled).toBeGreaterThan(0);
+    expect(stats.mappings.disabled).toBe(0);
     for (const m of ctx.mappingStore.filter((row) => row.source_goods_id === '30')) {
-      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.DISABLED);
+      expect(m.mapping_status).toBe(SHIFANG_QINGYUAN_MAPPING_STATUS.MAPPED);
     }
     const bagGoods = ctx.goodsStore.find((g) => g.goods_id === bagMapping.goods_id)!;
-    expect(bagGoods.status).toBe(0);
-    expect(ctx.ruleStore[0]!.status).toBe(SHIFANG_QINGYUAN_RULE_STATUS.DISABLED);
-    expect(ctx.ruleStore[0]!.deleted_at).toBeTruthy();
+    expect(bagGoods.status).toBe(1);
+    expect(ctx.ruleStore[0]!.status).toBe(SHIFANG_QINGYUAN_RULE_STATUS.ENABLED);
+    expect(ctx.ruleStore[0]!.deleted_at).toBeFalsy();
+    expect(stats.warnings.some((w) => w.includes('已保留平台商品与 mapping'))).toBe(true);
   });
 
   it('分页：本页为空时退出，不因 total 偏大死循环', async () => {

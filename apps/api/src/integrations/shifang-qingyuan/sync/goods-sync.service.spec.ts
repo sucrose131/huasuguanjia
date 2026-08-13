@@ -169,17 +169,27 @@ describeExternal('ShifangQingyuanGoodsSyncService 商品同步集成测试（真
         );
 
         if (hasMapping && sample.qimall_goods_attr.length) {
-          const sampleMapping = mappings.find((row) => row.source_sku_id !== '0') ?? mappings[0]!;
+          const sampleMapping = mappings[0]!;
           const rules = await prisma.hspsi_goods_sku_conversion_rule.findMany({
             where: {
               source_goods_id: sampleMapping.goods_id,
               source_sku_id: sampleMapping.sku_id,
-              rule_type: SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+              rule_type: {
+                in: [
+                  SHIFANG_QINGYUAN_RULE_TYPE.REPLACE,
+                  SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT,
+                ],
+              },
               deleted_at: null,
             },
           });
-          // 至少有 1 条转换规则
+          // 至少有 1 条转换规则；多目标应为 COMBO_SPLIT
           expect(rules.length).toBeGreaterThan(0);
+          const expectedType =
+            rules.length > 1
+              ? SHIFANG_QINGYUAN_RULE_TYPE.COMBO_SPLIT
+              : SHIFANG_QINGYUAN_RULE_TYPE.REPLACE;
+          expect(rules.every((row) => row.rule_type === expectedType)).toBe(true);
           expect(rules.every((row) => row.status === SHIFANG_QINGYUAN_RULE_STATUS.ENABLED)).toBe(true);
           expect(rules.every((row) => row.quantity_ratio >= 1)).toBe(true);
         }
