@@ -763,11 +763,39 @@ export class PurchaseService {
     const lines = records.length
       ? await this.prisma.hspsi_purchase_approve_detail.findMany({
           where: { pur_id: { in: records.map((item) => item.pur_id) } },
-          select: { pur_id: true, qty: true },
+          select: { id: true, pur_id: true, qty: true },
         })
       : [];
+    const mappedOrderLines = lines.length
+      ? await this.prisma.hspsi_purchase_order_detail.findMany({
+          where: { source_application_detail_id: { in: lines.map((item) => item.id) } },
+          select: { source_application_detail_id: true, po_id: true },
+        })
+      : [];
+    const activeOrderIds = mappedOrderLines.length
+      ? new Set(
+          (
+            await this.prisma.hspsi_purchase_order.findMany({
+              where: {
+                po_id: { in: [...new Set(mappedOrderLines.map((item) => item.po_id))] },
+                deleted_at: null,
+              },
+              select: { po_id: true },
+            })
+          ).map((item) => String(item.po_id)),
+        )
+      : new Set<string>();
+    const generatedDetailIds = new Set(
+      mappedOrderLines
+        .filter((item) => activeOrderIds.has(String(item.po_id)))
+        .map((item) => String(item.source_application_detail_id)),
+    );
     const items = records.map((item) => {
       const itemLines = lines.filter((line) => line.pur_id === item.pur_id);
+      const generatedDetailCount = itemLines.filter((line) =>
+        generatedDetailIds.has(String(line.id)),
+      ).length;
+      const detailCount = itemLines.length;
       return {
         id: item.pur_id,
         applicationNo: item.pur_no,
@@ -776,6 +804,15 @@ export class PurchaseService {
         reason: item.pur_reson,
         warehouseId: item.warehouse_id,
         quantity: itemLines.reduce((sum, line) => sum + line.qty, 0),
+        detailCount,
+        generatedDetailCount,
+        remainingDetailCount: detailCount - generatedDetailCount,
+        generationStatus:
+          generatedDetailCount === 0
+            ? 'not_generated'
+            : generatedDetailCount === detailCount
+              ? 'fully_generated'
+              : 'partially_generated',
         status: item.status,
         approveStatus: item.approve_status,
         approveComment: item.approve_comment,
@@ -796,6 +833,42 @@ export class PurchaseService {
     const details = await this.prisma.hspsi_purchase_approve_detail.findMany({
       where: { pur_id: header.pur_id },
     });
+    const mappedOrderLines = details.length
+      ? await this.prisma.hspsi_purchase_order_detail.findMany({
+          where: { source_application_detail_id: { in: details.map((item) => item.id) } },
+          select: {
+            id: true,
+            po_id: true,
+            source_application_detail_id: true,
+            unit_price: true,
+            total_amout: true,
+          },
+        })
+      : [];
+    const linkedOrders = mappedOrderLines.length
+      ? await this.prisma.hspsi_purchase_order.findMany({
+          where: {
+            po_id: { in: [...new Set(mappedOrderLines.map((item) => item.po_id))] },
+            deleted_at: null,
+          },
+          select: {
+            po_id: true,
+            po_no: true,
+            vendor_id: true,
+            pcs_qty: true,
+            status: true,
+            created_at: true,
+          },
+          orderBy: { po_id: 'desc' },
+        })
+      : [];
+    const activeOrderMap = new Map(linkedOrders.map((item) => [String(item.po_id), item]));
+    const activeMappedLines = mappedOrderLines.filter((item) =>
+      activeOrderMap.has(String(item.po_id)),
+    );
+    const mappedLineByApplicationDetail = new Map(
+      activeMappedLines.map((item) => [String(item.source_application_detail_id), item]),
+    );
     return {
       id: header.pur_id,
       applicationNo: header.pur_no,
@@ -815,13 +888,36 @@ export class PurchaseService {
       createdAt: header.created_at,
       details: details.map((item) => ({
         id: item.id,
+        applicationDetailId: item.id,
         goodsId: item.goods_id,
         skuId: item.sku_id,
         sourceShortageId: item.source_shortage_id,
         quantity: item.qty,
         unitType: item.unit_type,
+        referencePrice: item.reference_price,
         remark: item.remark,
+        generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
+        generatedOrderNo:
+          activeOrderMap.get(
+            String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
+          )?.po_no ?? null,
+        generationStatus: mappedLineByApplicationDetail.has(String(item.id))
+          ? 'generated'
+          : 'not_generated',
       })),
+      generatedOrders: linkedOrders.map((order) => {
+        const orderLines = activeMappedLines.filter((item) => item.po_id === order.po_id);
+        return {
+          id: order.po_id,
+          orderNo: order.po_no,
+          vendorId: order.vendor_id,
+          itemCount: orderLines.length,
+          quantity: order.pcs_qty,
+          totalAmount: orderLines.reduce((sum, item) => sum + Number(item.total_amout), 0),
+          orderStatus: order.status,
+          createdAt: order.created_at,
+        };
+      }),
     };
   }
   async saveApplication(id: string | null, body: Body, userId: string, submit = false) {
@@ -951,76 +1047,10 @@ export class PurchaseService {
         await this.rollbackProductionShortageApplication(tx, purId, userId);
         return { id, message: '已驳回，生产缺料已退回待处理' };
       }
-      const existing = await tx.hspsi_purchase_order.count({
-        where: { pur_id: purId, deleted_at: null },
-      });
-      if (existing) throw new BadRequestException('该申请已生成采购订单');
       const appLines = await tx.hspsi_purchase_approve_detail.findMany({
         where: { pur_id: purId },
       });
-      if (approved) await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
-      const quantity = appLines.reduce((s, l) => s + l.qty, 0);
-      const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
-      const order = await tx.hspsi_purchase_order.create({
-        data: {
-          po_no: orderNo,
-          pur_id: purId,
-          org_id: app.org_id,
-          warehouse_id: app.warehouse_id,
-          dept_id: effectiveDeptId,
-          receiver_id: BigInt(userId),
-          vendor_id: 0n,
-          pcs_qty: quantity,
-          arrival_type: 1,
-          plan_arrival_date: new Date(),
-          delivery_type: 1,
-          delivery_no: '',
-          arrival_qty: 0,
-          is_all_arrival: 0,
-          pay_amout: new Prisma.Decimal(0),
-          pay_type: 1,
-          plan_pay_date: null,
-          pay_amount_done: 0,
-          pay_status: 0,
-          status: 1,
-          approve_status: 0,
-          approve_comment: '',
-          approve_by: 0n,
-          remark: String(app.remark ?? ''),
-          created_by: BigInt(userId),
-          updated_by: BigInt(userId),
-          created_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-      const poId = order.po_id;
-      await tx.hspsi_purchase_order_detail.createMany({
-        data: appLines.map((line) => ({
-          po_id: poId,
-          goods_id: line.goods_id,
-          sku_id: line.sku_id,
-          qty: line.qty,
-          actual_qty: 0,
-          cancel_qty: 0,
-          unit_type: line.unit_type,
-          unit_price: new Prisma.Decimal(0),
-          total_amout: new Prisma.Decimal(0),
-          remark: line.remark,
-        })),
-      });
-      await this.assertProductionShortageOrderCapacity(tx, purId);
-      await this.documentTrace.link(
-        {
-          upstreamType: 'purchase_application',
-          upstreamId: id,
-          upstreamNo: app.pur_no,
-          downstreamType: 'purchase_order',
-          downstreamId: poId,
-          downstreamNo: orderNo,
-          createdBy: userId,
-        },
-        tx,
-      );
+      await this.assertPurchaseWarehouse(tx, app.org_id, app.warehouse_id, appLines);
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
         data: {
@@ -1031,7 +1061,203 @@ export class PurchaseService {
           updated_by: BigInt(userId),
         },
       });
-      return { id, orderId: poId, orderNo, message: '审批通过，已自动生成采购订单' };
+      return { id, message: '审批通过，请由采购人员生成采购订单' };
+    });
+  }
+
+  async generateApplicationOrder(id: string, body: Body, userId: string) {
+    const purId = BigInt(id);
+    const vendorId = BigInt(String(body.vendorId ?? 0));
+    if (vendorId <= 0n) throw new BadRequestException('请选择本次采购订单的供应商');
+    const generationMode = String(body.generationMode ?? 'partial');
+    if (!['all', 'partial'].includes(generationMode))
+      throw new BadRequestException('采购订单生成方式无效');
+    const requestedLines = this.details(body.details);
+    const requestedIds = requestedLines.map((line) =>
+      BigInt(String(line.applicationDetailId ?? 0)),
+    );
+    if (requestedIds.some((lineId) => lineId <= 0n))
+      throw new BadRequestException('采购申请明细标识无效');
+    if (new Set(requestedIds.map(String)).size !== requestedIds.length)
+      throw new BadRequestException('采购申请明细不能重复选择');
+
+    const amountByLineId = new Map<string, Prisma.Decimal>();
+    for (const [index, line] of requestedLines.entries()) {
+      const amount = new Prisma.Decimal(String(line.totalAmount ?? 0));
+      if (!amount.isFinite() || amount.lessThanOrEqualTo(0))
+        throw new BadRequestException(`第 ${index + 1} 行采购总金额必须大于0`);
+      if (amount.decimalPlaces() > 2)
+        throw new BadRequestException(`第 ${index + 1} 行采购总金额最多保留2位小数`);
+      amountByLineId.set(String(requestedIds[index]), amount);
+    }
+
+    return this.guardedTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+      const application = await tx.hspsi_purchase_approve.findFirst({
+        where: { pur_id: purId, deleted_at: null },
+      });
+      if (!application) throw new NotFoundException('采购申请不存在');
+      if (application.status !== 1 || application.approve_status !== 1)
+        throw new BadRequestException('仅审核通过的采购申请可以生成采购订单');
+      await this.assertOrganizationScope(
+        tx,
+        application.org_id,
+        application.dept_id,
+        application.warehouse_id,
+      );
+      const vendor = await tx.hspsi_basic_vendor.findFirst({
+        where: { vendor_id: vendorId, deleted_at: null },
+        select: { vendor_id: true },
+      });
+      if (!vendor) throw new BadRequestException('所选供应商不存在或已删除');
+
+      await tx.$queryRaw`SELECT id FROM hspsi_purchase_approve_detail WHERE pur_id=${purId} FOR UPDATE`;
+      const applicationLines = await tx.hspsi_purchase_approve_detail.findMany({
+        where: { pur_id: purId },
+        orderBy: { id: 'asc' },
+      });
+      if (!applicationLines.length) throw new BadRequestException('采购申请没有可生成的明细');
+      const applicationLineById = new Map(applicationLines.map((line) => [String(line.id), line]));
+      const selectedLines = requestedIds.map((lineId) => {
+        const line = applicationLineById.get(String(lineId));
+        if (!line) throw new BadRequestException('所选明细不属于当前采购申请');
+        return line;
+      });
+
+      const mappedLines = await tx.hspsi_purchase_order_detail.findMany({
+        where: { source_application_detail_id: { in: applicationLines.map((line) => line.id) } },
+        select: { id: true, po_id: true, source_application_detail_id: true },
+      });
+      const mappedOrderIds = [...new Set(mappedLines.map((line) => line.po_id))];
+      const activeOrderIds = mappedOrderIds.length
+        ? new Set(
+            (
+              await tx.hspsi_purchase_order.findMany({
+                where: { po_id: { in: mappedOrderIds }, deleted_at: null },
+                select: { po_id: true },
+              })
+            ).map((order) => String(order.po_id)),
+          )
+        : new Set<string>();
+      const releasedMappings = mappedLines.filter(
+        (line) => !activeOrderIds.has(String(line.po_id)),
+      );
+      if (releasedMappings.length) {
+        await tx.hspsi_purchase_order_detail.updateMany({
+          where: { id: { in: releasedMappings.map((line) => line.id) } },
+          data: { source_application_detail_id: null },
+        });
+      }
+      const activeMappedIds = new Set(
+        mappedLines
+          .filter((line) => activeOrderIds.has(String(line.po_id)))
+          .map((line) => String(line.source_application_detail_id)),
+      );
+      const duplicateLine = selectedLines.find((line) => activeMappedIds.has(String(line.id)));
+      if (duplicateLine)
+        throw new ConflictException('所选采购申请明细已生成采购订单，请刷新后重试');
+      const remainingLines = applicationLines.filter(
+        (line) => !activeMappedIds.has(String(line.id)),
+      );
+      if (generationMode === 'all') {
+        const requestedIdSet = new Set(requestedIds.map(String));
+        if (
+          remainingLines.length !== selectedLines.length ||
+          remainingLines.some((line) => !requestedIdSet.has(String(line.id)))
+        )
+          throw new ConflictException('待生成明细已变化，请刷新后重新整单生成');
+      }
+
+      await this.assertPurchaseWarehouse(
+        tx,
+        application.org_id,
+        application.warehouse_id,
+        selectedLines,
+      );
+      const pricedLines = selectedLines.map((line) => {
+        const quantity = this.quantity(line.qty, '采购申请数量');
+        const totalAmount = amountByLineId.get(String(line.id))!;
+        return {
+          line,
+          quantity,
+          totalAmount,
+          unitPrice: totalAmount.div(quantity).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
+        };
+      });
+      const totalQuantity = pricedLines.reduce((sum, item) => sum + item.quantity, 0);
+      const orderTotal = pricedLines.reduce(
+        (sum, item) => sum.plus(item.totalAmount),
+        new Prisma.Decimal(0),
+      );
+      const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
+      const now = new Date();
+      const order = await tx.hspsi_purchase_order.create({
+        data: {
+          po_no: orderNo,
+          pur_id: purId,
+          org_id: application.org_id,
+          warehouse_id: application.warehouse_id,
+          dept_id: application.dept_id,
+          receiver_id: BigInt(userId),
+          vendor_id: vendorId,
+          pcs_qty: totalQuantity,
+          arrival_type: 1,
+          plan_arrival_date: now,
+          delivery_type: 1,
+          delivery_no: '',
+          arrival_qty: 0,
+          is_all_arrival: 0,
+          pay_amout: orderTotal,
+          pay_type: 1,
+          plan_pay_date: null,
+          pay_amount_done: 0,
+          pay_status: 0,
+          status: 1,
+          approve_status: 0,
+          approve_comment: '',
+          approve_by: 0n,
+          remark: String(application.remark ?? ''),
+          created_by: BigInt(userId),
+          updated_by: BigInt(userId),
+          created_at: now,
+          updated_at: now,
+        },
+      });
+      await tx.hspsi_purchase_order_detail.createMany({
+        data: pricedLines.map(({ line, quantity, totalAmount, unitPrice }) => ({
+          po_id: order.po_id,
+          source_application_detail_id: line.id,
+          goods_id: line.goods_id,
+          sku_id: line.sku_id,
+          qty: quantity,
+          actual_qty: 0,
+          cancel_qty: 0,
+          unit_type: line.unit_type,
+          unit_price: unitPrice,
+          total_amout: totalAmount,
+          remark: line.remark,
+        })),
+      });
+      await this.assertProductionShortageOrderCapacity(tx, purId);
+      await this.documentTrace.link(
+        {
+          upstreamType: 'purchase_application',
+          upstreamId: purId,
+          upstreamNo: application.pur_no,
+          downstreamType: 'purchase_order',
+          downstreamId: order.po_id,
+          downstreamNo: orderNo,
+          createdBy: userId,
+        },
+        tx,
+      );
+      return {
+        id: order.po_id,
+        businessNo: orderNo,
+        detailCount: pricedLines.length,
+        totalAmount: orderTotal,
+        message: '采购订单已生成',
+      };
     });
   }
   async removeApplication(id: string, userId: string) {
@@ -1227,6 +1453,7 @@ export class PurchaseService {
         const category = categories.find((item) => item.goods_catg_id === product?.goods_catg_id);
         return {
           id: line.id,
+          sourceApplicationDetailId: line.source_application_detail_id,
           goodsId: line.goods_id,
           goodsCode: product?.query_code ?? '',
           goodsName: product?.goods_name ?? '',
@@ -1281,27 +1508,13 @@ export class PurchaseService {
     }
     const authoritativeApplication =
       sourceApplication?.sourceType === 'direct_order' ? null : sourceApplication;
-    let effectiveLines = lines;
-    if (authoritativeApplication) {
-      const sourceLines = authoritativeApplication.details ?? [];
-      if (lines.length !== sourceLines.length)
-        throw new BadRequestException('申请转入订单不允许增删采购明细');
-      effectiveLines = sourceLines.map((sourceLine: Body) => {
-        const submitted = lines.find(
-          (line) =>
-            String(line.goodsId) === String(sourceLine.goodsId) &&
-            String(line.skuId) === String(sourceLine.skuId),
-        );
-        if (!submitted) throw new BadRequestException('申请转入订单不允许更换商品或规格');
-        return {
-          ...submitted,
-          goodsId: sourceLine.goodsId,
-          skuId: sourceLine.skuId,
-          quantity: sourceLine.quantity,
-          unitType: sourceLine.unitType,
-        };
-      });
-    }
+    if (authoritativeApplication)
+      throw new BadRequestException(
+        id
+          ? '采购申请生成的订单不允许直接修改，请删除后重新生成'
+          : '请从采购申请列表使用整单生成或选品生成',
+      );
+    const effectiveLines = lines;
     const pricedLines: Body[] = effectiveLines.map((line) => {
       const quantity = this.quantity(line.quantity, '采购数量');
       const totalAmount = new Prisma.Decimal(String(line.totalAmount ?? 0));
@@ -1329,9 +1542,9 @@ export class PurchaseService {
       throw new BadRequestException('登记本次付款前必须选择供应商');
     const data = {
       pur_id: effectiveApplicationId,
-      org_id: BigInt(String(authoritativeApplication?.orgId ?? body.orgId)),
-      warehouse_id: BigInt(String(authoritativeApplication?.warehouseId ?? body.warehouseId)),
-      dept_id: BigInt(String(authoritativeApplication?.deptId ?? body.deptId)),
+      org_id: BigInt(String(body.orgId)),
+      warehouse_id: BigInt(String(body.warehouseId)),
+      dept_id: BigInt(String(body.deptId)),
       receiver_id: BigInt(String(body.receiverId)),
       vendor_id: body.vendorId ? BigInt(String(body.vendorId)) : 0n,
       pcs_qty: quantity,
@@ -1632,6 +1845,10 @@ export class PurchaseService {
       await tx.hspsi_purchase_order.update({
         where: { po_id: poId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
+      });
+      await tx.hspsi_purchase_order_detail.updateMany({
+        where: { po_id: poId, source_application_detail_id: { not: null } },
+        data: { source_application_detail_id: null },
       });
       if (directApplication) {
         await tx.hspsi_purchase_approve.update({

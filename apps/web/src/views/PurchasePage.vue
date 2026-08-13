@@ -13,6 +13,7 @@ import StatusTag from '@/components/StatusTag.vue';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import PurchaseReceiptDetails from '@/components/PurchaseReceiptDetails.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import PurchaseApplicationOrderPreviewDialog from '@/components/purchase/PurchaseApplicationOrderPreviewDialog.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { purchaseDocumentType } from '@/utils/document-type';
@@ -88,6 +89,9 @@ const formRef = ref<FormInstance>();
 const form = reactive<any>({});
 const traceVisible = ref(false);
 const operationHistoryVisible = ref(false);
+const orderGenerationVisible = ref(false);
+const orderGenerationMode = ref<'all' | 'partial' | 'related'>('all');
+const orderGenerationApplicationId = ref('');
 const quickCatalogVisible = ref(false);
 const quickCatalogChecking = ref(false);
 const quickCatalogMode = ref<'goods' | 'sku'>('goods');
@@ -1447,7 +1451,7 @@ function editable(row: any) {
     return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
   if (resource.value === 'refunds' || resource.value === 'payments') return false;
   if (resource.value === 'receipts') return Number(row.confirmStatus) === 0;
-  if (resource.value === 'orders') return Number(row.orderStatus) === 1;
+  if (resource.value === 'orders') return Number(row.orderStatus) === 1 && !row.applicationId;
   return false;
 }
 function removable(row: any) {
@@ -1495,16 +1499,31 @@ function openOperationHistory(row: any) {
   traceRow.value = row;
   operationHistoryVisible.value = true;
 }
+function openOrderGeneration(row: any, previewMode: 'all' | 'partial' | 'related') {
+  orderGenerationApplicationId.value = String(row.id);
+  orderGenerationMode.value = previewMode;
+  orderGenerationVisible.value = true;
+}
 
-watch([resource, () => route.query.receiptId, () => route.query.returnReceiptId], async () => {
-  query.page = 1;
-  resetQuery();
-  await loadOptions();
-  await nextTick();
-  await openFromRoute();
-});
+watch(
+  [
+    resource,
+    () => route.query.viewId,
+    () => route.query.receiptId,
+    () => route.query.returnReceiptId,
+  ],
+  async () => {
+    query.page = 1;
+    resetQuery();
+    await loadOptions();
+    await nextTick();
+    await openFromRoute();
+  },
+);
 async function openFromRoute() {
   if (String(route.query.create ?? '') === '1') await openCreate();
+  if (resource.value === 'orders' && route.query.viewId)
+    await open('view', { id: String(route.query.viewId) });
   if (resource.value === 'orders' && route.query.applicationId) {
     await openCreate();
     form.applicationId = String(route.query.applicationId);
@@ -2040,7 +2059,22 @@ onMounted(async () => {
                   >确认退款</el-button
                 >
                 <template #more>
-                  <el-dropdown-item @click="openOperationHistory(s.row)">操作记录</el-dropdown-item>
+                  <template v-if="isApp && approval(s.row) === 1">
+                    <el-dropdown-item @click="openOrderGeneration(s.row, 'all')"
+                      >整单生成</el-dropdown-item
+                    >
+                    <el-dropdown-item @click="openOrderGeneration(s.row, 'partial')"
+                      >选品生成</el-dropdown-item
+                    >
+                    <el-dropdown-item @click="openOrderGeneration(s.row, 'related')"
+                      >关联订单</el-dropdown-item
+                    >
+                  </template>
+                  <el-dropdown-item
+                    :divided="isApp && approval(s.row) === 1"
+                    @click="openOperationHistory(s.row)"
+                    >操作记录</el-dropdown-item
+                  >
                   <el-dropdown-item v-if="canSubmit(s.row)" @click="submit(s.row)"
                     >提交</el-dropdown-item
                   >
@@ -2820,11 +2854,7 @@ onMounted(async () => {
                     v-if="mode !== 'view'"
                     v-model="s.row.batchNo"
                     placeholder="系统自动生成"
-                  /><span
-                    v-else
-                    class="readonly-cell"
-                    >{{ display(s.row.batchNo) }}</span
-                  ></template
+                  /><span v-else class="readonly-cell">{{ display(s.row.batchNo) }}</span></template
                 ></el-table-column
               >
               <el-table-column label="库位" width="96"
@@ -3319,6 +3349,12 @@ onMounted(async () => {
       :resource="resource"
       :document-id="traceRow.id || ''"
       :document-no="String(traceNo)"
+    />
+    <PurchaseApplicationOrderPreviewDialog
+      v-model="orderGenerationVisible"
+      :application-id="orderGenerationApplicationId"
+      :mode="orderGenerationMode"
+      @generated="load"
     />
   </section>
 </template>
