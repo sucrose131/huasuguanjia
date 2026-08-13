@@ -12,6 +12,7 @@ import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { generateBatchNo } from '../common/batch-number';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 type B = Record<string, any>;
 const PRODUCTION_PLAN_STATUS = {
   DRAFT: 0,
@@ -32,6 +33,7 @@ export class ProductionService {
     @Inject(BusinessReferenceService) private readonly refs: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
   ) {}
   private d(v: any) {
     return new Prisma.Decimal(String(v ?? 0));
@@ -49,6 +51,37 @@ export class ProductionService {
     return this.p.$transaction(callback, {
       isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
     });
+  }
+  async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
+    if (!orgIdValue || !warehouseIdValue) return [];
+    return this.masterData.goodsOptions(
+      BigInt(String(orgIdValue)),
+      BigInt(String(warehouseIdValue)),
+    );
+  }
+  async warehouseOptions(orgIdValue: unknown, goodsIdValue: unknown) {
+    if (!orgIdValue || !goodsIdValue) return [];
+    const orgId = BigInt(String(orgIdValue));
+    const goods = (
+      await this.masterData.assertGoodsActive(orgId, [{ goodsId: BigInt(String(goodsIdValue)) }])
+    )[0]!;
+    const category = await this.p.hspsi_goods_info_category.findFirstOrThrow({
+      where: { goods_catg_id: goods.goods_catg_id, status: 1, deleted_at: null },
+    });
+    const warehouses = await this.p.hspsi_basic_warehouse.findMany({
+      where: {
+        org_id: orgId,
+        warehouse_type: category.warehouse_type,
+        status: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ sort: 'asc' }, { warehouse_id: 'asc' }],
+    });
+    return warehouses.map((item) => ({
+      value: item.warehouse_id,
+      label: item.name,
+      raw: { orgId: item.org_id, warehouseType: item.warehouse_type },
+    }));
   }
   private async createShortagePurchaseApplication(
     t: Prisma.TransactionClient,
@@ -2036,42 +2069,21 @@ export class ProductionService {
       this.qty(line.quantity, '单件需求量');
       keys.add(key);
     }
-    const warehouse = await this.p.hspsi_basic_warehouse.findFirst({
-      where: {
-        warehouse_id: BigInt(b.warehouseId),
-        org_id: BigInt(b.orgId),
-        status: 1,
-        deleted_at: null,
-      },
-    });
-    if (!warehouse) throw new BadRequestException('仓库不属于所选组织或已停用');
-    const goodsIds = [BigInt(b.goodsId), ...lines.map((x: B) => BigInt(x.goodsId))],
-      goods = await this.p.hspsi_goods_info.findMany({
-        where: { goods_id: { in: goodsIds }, deleted_at: null },
-      });
-    if (goods.length !== new Set(goodsIds.map(String)).size)
-      throw new BadRequestException('存在无效商品');
-    for (const line of [{ goodsId: b.goodsId, skuId: b.skuId }, ...lines])
-      if (line.skuId) {
-        const sku = await this.p.hspsi_goods_info_sku.findFirst({
-          where: { sku_id: BigInt(line.skuId), good_id: BigInt(line.goodsId), deleted_at: null },
-        });
-        if (!sku) throw new BadRequestException('SKU不属于所选商品');
-      }
+    await this.masterData.assertGoodsActive(b.orgId, [{ goodsId: b.goodsId, skuId: b.skuId }]);
+    await this.masterData.assertGoodsLines(b.orgId, b.warehouseId, lines);
     return this.saveBom(id, b, u);
   }
 
   async savePlanChecked(id: string | null, b: B, u: string, submit: boolean) {
-    const bom = await this.bom(String(b.bomId)),
-      warehouse = await this.p.hspsi_basic_warehouse.findFirst({
-        where: {
-          warehouse_id: BigInt(b.warehouseId),
-          org_id: BigInt(b.orgId ?? bom.orgId),
-          status: 1,
-          deleted_at: null,
-        },
-      });
-    if (!warehouse) throw new BadRequestException('原料仓库不属于计划组织或已停用');
+    const bom = await this.bom(String(b.bomId));
+    await this.masterData.assertGoodsLines(
+      b.orgId ?? bom.orgId,
+      b.warehouseId,
+      bom.details.map((line: B) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+    );
+    await this.masterData.assertGoodsLines(b.orgId ?? bom.orgId, b.productWarehouseId, [
+      { goodsId: bom.goodsId, skuId: bom.skuId },
+    ]);
     if (id) {
       const old = await this.plan(id);
       if (Number(old.planStatus) > 1)
@@ -2342,6 +2354,11 @@ export class ProductionService {
         if (!allowed.has(`${line.goodsId}-${line.skuId}`))
           throw new BadRequestException('出库物料必须来自计划BOM');
     }
+    await this.masterData.assertGoodsLines(
+      b.orgId ?? plan?.orgId,
+      b.warehouseId ?? plan?.warehouseId,
+      lines,
+    );
     if (outType === 1 && plan) {
       const existing = await this.p.hspsi_production_material_out.findFirst({
         where: {
@@ -3093,15 +3110,9 @@ export class ProductionService {
     if (qty > remaining)
       throw new BadRequestException(`本次入库数量不能超过剩余可入数量 ${remaining}`);
     if (!String(b.batchNo ?? '').trim()) b.batchNo = generateBatchNo();
-    const warehouse = await this.p.hspsi_basic_warehouse.findFirst({
-      where: {
-        warehouse_id: BigInt(b.warehouseId),
-        org_id: BigInt(plan.orgId),
-        status: 1,
-        deleted_at: null,
-      },
-    });
-    if (!warehouse) throw new BadRequestException('成品仓库不属于计划组织或已停用');
+    await this.masterData.assertGoodsLines(plan.orgId, b.warehouseId, [
+      { goodsId: plan.goodsId, skuId: plan.skuId },
+    ]);
     return this.createInput(b, u);
   }
 }

@@ -51,6 +51,7 @@ function createService(initialInputEnabled = true) {
     prisma as never,
     posting as never,
     businessNumber as never,
+    { assertWarehouse: vi.fn() } as never,
   );
   return { service, prisma, posting, tx };
 }

@@ -4,6 +4,7 @@ import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { InventoryLine, InventoryPostingService } from './inventory-posting.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import {
@@ -28,6 +29,7 @@ export class InventoryService {
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
   ) {}
   private page(query: Body) {
     return {
@@ -764,6 +766,11 @@ export class InventoryService {
   async saveTransfer(id: string | null, body: Body, userId: string, submit: boolean) {
     const lines = this.lines(body.details);
     await this.validateTransferWarehouses(body);
+    await this.masterData.assertGoodsLines(
+      body.orgId,
+      body.warehouseId,
+      lines.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+    );
     const validUsers = await this.prisma.hspsi_sys_user.count({
       where: {
         id: { in: [BigInt(body.sendBy ?? 0), BigInt(body.receiveBy ?? 0)] },
@@ -1459,6 +1466,7 @@ export class InventoryService {
     };
   }
   async createCheck(body: Body, userId: string) {
+    await this.masterData.assertWarehouse(body.orgId, body.warehouseId);
     const stocks = await this.prisma.hspsi_inventory_batch_total.findMany({
       where: {
         org_id: BigInt(body.orgId),
@@ -1467,6 +1475,11 @@ export class InventoryService {
       },
     });
     if (!stocks.length) throw new BadRequestException('所选仓库当前没有可盘点库存');
+    await this.masterData.assertGoodsLines(
+      body.orgId,
+      body.warehouseId,
+      stocks.map((line) => ({ goodsId: line.goods_id, skuId: line.sku_id })),
+    );
     const id = await this.prisma.$transaction(async (tx) => {
       const checkNo = await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_CHECK);
       const header = await tx.hspsi_inventory_check.create({
@@ -2256,6 +2269,11 @@ export class InventoryService {
       warehouseId,
       inputLines,
       type === 'loss' && !generatedDamage,
+    );
+    await this.masterData.assertGoodsLines(
+      orgId,
+      warehouseId,
+      lines.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
     );
     const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
     const amount = lines.reduce((sum, line) => sum + line.amount, 0);

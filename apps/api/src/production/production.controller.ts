@@ -22,6 +22,16 @@ import { ProductionService } from './production.service';
 export class ProductionController {
   constructor(@Inject(ProductionService) private readonly s: ProductionService) {}
   @RequirePermissions('production')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.s.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('production')
+  @Get('warehouse-options')
+  warehouseOptions(@Query('orgId') orgId?: string, @Query('goodsId') goodsId?: string) {
+    return this.s.warehouseOptions(orgId, goodsId);
+  }
+  @RequirePermissions('production')
   @Get('boms')
   boms(@Query() q: any) {
     return this.s.boms(q);

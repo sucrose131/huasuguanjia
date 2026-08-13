@@ -50,6 +50,7 @@ const key = computed(() => `${group.value}/${resource.value}`),
     customers: [],
     users: [],
     goods: [],
+    contextGoods: [],
     boms: [],
     plans: [],
     orders: [],
@@ -282,8 +283,14 @@ async function loadRequisitionFormOptions(orgId: unknown) {
   options.employees = result.employees ?? [];
 }
 const requisitionWarehouseOptions = computed<B[]>(() => {
-  if (group.value !== 'requisitions') return options.warehouses;
-  const result = [...(options.requisitionWarehouses ?? [])];
+  const result =
+    group.value === 'requisitions'
+      ? [...(options.requisitionWarehouses ?? [])]
+      : (options.warehouses as B[]).filter(
+          (item: B) =>
+            !form.orgId ||
+            String(item.raw?.orgId ?? item.orgId ?? '') === String(form.orgId),
+        );
   const selected = options.warehouses.find(
     (item: B) => String(item.value) === String(form.warehouseId),
   );
@@ -291,6 +298,61 @@ const requisitionWarehouseOptions = computed<B[]>(() => {
     result.unshift(selected);
   return result;
 });
+const lineGoodsOptions = computed<B[]>(() =>
+  isBom.value || isOrder.value || key.value === 'requisitions/applications' ||
+  (key.value === 'requisitions/outputs' && form.directOutput)
+    ? (options.contextGoods ?? [])
+    : options.goods,
+);
+async function loadContextGoods() {
+  if (!form.orgId || !form.warehouseId) {
+    options.contextGoods = [];
+    return;
+  }
+  const endpoint =
+    group.value === 'sales'
+      ? '/sales/product-options'
+      : group.value === 'requisitions'
+        ? '/requisitions/product-options'
+        : '/production/product-options';
+  options.contextGoods = await api.get(
+    endpoint,
+    {
+    params: { orgId: form.orgId, warehouseId: form.warehouseId },
+    },
+  );
+}
+async function businessWarehouseChanged() {
+  refreshAvailableStocks();
+  if (
+    !isBom.value &&
+    !isOrder.value &&
+    key.value !== 'requisitions/applications' &&
+    !(key.value === 'requisitions/outputs' && form.directOutput)
+  )
+    return;
+  form.details = [blank()];
+  await loadContextGoods();
+}
+function bomOrganizationChanged() {
+  form.warehouseId = '';
+  form.details = [blank()];
+  options.contextGoods = [];
+}
+function salesOrderOrganizationChanged() {
+  form.warehouseId = '';
+  form.details = [blank()];
+  options.contextGoods = [];
+}
+async function requisitionOrganizationChanged() {
+  form.warehouseId = '';
+  form.deptId = '';
+  form.applicantId = '';
+  form.receiverId = '';
+  form.details = [{ ...blank(), returnable: form.drawType === 2 }];
+  options.contextGoods = [];
+  await loadRequisitionFormOptions(form.orgId);
+}
 const requisitionDepartmentOptions = computed<B[]>(() =>
   group.value === 'requisitions' ? (options.requisitionDepts ?? []) : options.depts,
 );
@@ -830,6 +892,13 @@ async function open(row?: B, view = false) {
       });
     }
     if (isPlan.value && form.goodsId) await loadPlanOrderOptions();
+    if (
+      isBom.value ||
+      isOrder.value ||
+      key.value === 'requisitions/applications' ||
+      (key.value === 'requisitions/outputs' && form.directOutput)
+    )
+      await loadContextGoods();
   }
   if (group.value === 'requisitions') await loadRequisitionFormOptions(form.orgId);
   refreshAvailableStocks();
@@ -857,7 +926,6 @@ async function saveServiceProgress() {
       content: String(progressForm.content).trim(),
       status: Number(progressForm.status),
       occurredAt: progressForm.occurredAt,
-      handlerId: auth.user?.id,
     };
     const result: any = progressForm.id
       ? await api.patch(`/sales/services/${form.id}/progress/${progressForm.id}`, payload)
@@ -2260,7 +2328,15 @@ watch(key, async () => {
               key === 'requisitions/applications'
             "
             label="所属组织"
-            ><el-select v-model="form.orgId" disabled
+            ><el-select
+              v-model="form.orgId"
+              :disabled="
+                mode === 'view' ||
+                group !== 'requisitions' ||
+                (isOutput && !form.directOutput) ||
+                isReturn
+              "
+              @change="group === 'requisitions' && requisitionOrganizationChanged()"
               ><el-option
                 v-for="x in options.orgs"
                 :key="x.value"
@@ -2322,11 +2398,12 @@ watch(key, async () => {
               v-model="form.warehouseId"
               :disabled="
                 mode === 'view' ||
+                !form.orgId ||
                 (group === 'requisitions' && isOutput && !form.directOutput) ||
                 discountOrderSourceLocked ||
                 discountOutputSourceLocked
               "
-              @change="refreshAvailableStocks"
+              @change="businessWarehouseChanged"
             >
               <el-option
                 v-for="x in requisitionWarehouseOptions"
@@ -2447,7 +2524,7 @@ watch(key, async () => {
             <el-input v-model="form.reason" />
           </el-form-item>
           <el-form-item v-if="isBom" label="所属组织"
-            ><el-select v-model="form.orgId"
+            ><el-select v-model="form.orgId" @change="bomOrganizationChanged"
               ><el-option
                 v-for="x in options.orgs"
                 :key="x.value"
@@ -2516,6 +2593,7 @@ watch(key, async () => {
             ><el-select
               v-model="form.orgId"
               :disabled="mode === 'view' || discountOrderSourceLocked"
+              @change="salesOrderOrganizationChanged"
               ><el-option
                 v-for="x in options.orgs"
                 :key="x.value"
@@ -2856,7 +2934,7 @@ watch(key, async () => {
                 "
               >
                 <el-option
-                  v-for="g in options.goods"
+                  v-for="g in lineGoodsOptions"
                   :key="g.id"
                   :label="`${g.queryCode || ''} ${g.goodsName}`"
                   :value="g.id"
@@ -3255,9 +3333,12 @@ watch(key, async () => {
             <div class="service-progress-card">
               <div>
                 <el-tag size="small" effect="plain">{{ item.statusName || item.status }}</el-tag>
+                <el-tag size="small" effect="plain" type="info">
+                  {{ item.sourceTypeName || '人工记录' }}
+                </el-tag>
               </div>
               <p>{{ item.content }}</p>
-              <div class="service-progress-actions">
+              <div v-if="Number(item.sourceType) === 1" class="service-progress-actions">
                 <el-button link type="primary" @click="editServiceProgress(item)">编辑</el-button>
                 <el-button link type="danger" @click="deleteServiceProgress(item)">删除</el-button>
               </div>

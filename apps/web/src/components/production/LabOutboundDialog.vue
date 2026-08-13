@@ -25,20 +25,46 @@ const form = ref<B>({
 const options = ref<B>({ orgs: [], warehouses: [], goods: [], destinations: [] });
 
 const visible = computed({ get: () => props.modelValue, set: (v) => emit('update:modelValue', v) });
+const warehouseOptions = computed(() =>
+  (options.value.warehouses ?? []).filter(
+    (warehouse: B) =>
+      !form.value.orgId ||
+      String(warehouse.raw?.orgId ?? warehouse.orgId ?? '') === String(form.value.orgId),
+  ),
+);
+
+function refreshRowStock(row: B) {
+  const stocks = allStocks.value.filter(
+    (stock: B) =>
+      String(stock.goodsId) === String(row.goodsId) &&
+      String(stock.skuId) === String(row.skuId),
+  );
+  row.stockQty = stocks.reduce(
+    (sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0),
+    0,
+  );
+  for (const batchRow of row.batchRows ?? []) {
+    const stock = stocks.find((item: B) => String(item.batchNo) === String(batchRow.batchNo));
+    batchRow.avail = Number(stock?.inventoryQty ?? 0);
+    if (Number(batchRow.qty ?? 0) > batchRow.avail) batchRow.qty = batchRow.avail;
+  }
+}
+
+function refreshAllRowStocks() {
+  rows.value.forEach(refreshRowStock);
+}
 
 async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [o, w, g, s, destinations] = (await Promise.all([
+    const [o, w, destinations] = (await Promise.all([
       api.get('/base-data/organizations/options'),
       api.get('/base-data/warehouses/options'),
-      api.get('/goods', { params: { pageSize: 100, status: 1 } }),
-      api.get('/inventory/stocks', { params: { pageSize: 200 } }),
       api.get('/dictionaries/temporary_outbound_destination'),
     ])) as any[];
-    options.value = { orgs: o, warehouses: w, goods: g.items, destinations };
-    allStocks.value = s.items ?? [];
+    options.value = { orgs: o, warehouses: w, goods: [], destinations };
+    allStocks.value = [];
     form.value.orgId = auth.user?.orgId ?? '';
     if (!rows.value.length)
       rows.value = [
@@ -64,7 +90,11 @@ function onRowsChanged(newRows: B[]) {
   rows.value = newRows;
 }
 async function onGoodsChanged(row: B) {
-  if (!row.goodsId) return;
+  row.batchRows = [{ batchNo: '', avail: 0, qty: 0 }];
+  if (!row.goodsId) {
+    row.stockQty = 0;
+    return;
+  }
   const g: any = await api.get(`/goods/${row.goodsId}`);
   row.skuId = g.skus?.[0]?.id ?? '';
   row.unitType = g.skus?.[0]?.unitType ?? 1;
@@ -72,6 +102,7 @@ async function onGoodsChanged(row: B) {
   row.goodsName = g.goodsName ?? '';
   row.skuSpec = g.skus?.[0]?.spec_models ?? '';
   row.unitName = g.skus?.[0]?.unitName ?? '';
+  refreshRowStock(row);
 }
 
 async function submit() {
@@ -124,11 +155,53 @@ async function submit() {
 }
 
 async function reloadStocks() {
-  if (!form.value.warehouseId) return;
-  const s: any = await api.get('/inventory/stocks', {
-    params: { warehouseId: form.value.warehouseId, pageSize: 200 },
-  });
-  allStocks.value = s.items ?? [];
+  if (!form.value.warehouseId) {
+    allStocks.value = [];
+    options.value.goods = [];
+    refreshAllRowStocks();
+    return;
+  }
+  const [stocks, goods] = (await Promise.all([
+    api.get('/inventory/stock-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    }),
+    api.get('/production/product-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    }),
+  ])) as any[];
+  allStocks.value = stocks;
+  options.value.goods = goods;
+  rows.value = [
+    {
+      goodsId: '',
+      skuId: '',
+      goodsCode: '',
+      goodsName: '',
+      skuSpec: '',
+      unitName: '',
+      stockQty: 0,
+      batchRows: [{ batchNo: '', avail: 0, qty: 0 }],
+    },
+  ];
+  refreshAllRowStocks();
+}
+function organizationChanged() {
+  form.value.warehouseId = '';
+  allStocks.value = [];
+  options.value.goods = [];
+  rows.value = [
+    {
+      goodsId: '',
+      skuId: '',
+      goodsCode: '',
+      goodsName: '',
+      skuSpec: '',
+      unitName: '',
+      stockQty: 0,
+      batchRows: [{ batchNo: '', avail: 0, qty: 0 }],
+    },
+  ];
+  refreshAllRowStocks();
 }
 watch(visible, (v) => {
   if (v) {
@@ -164,15 +237,15 @@ watch(() => form.value.warehouseId, reloadStocks);
       <div class="lab-hdr-grid">
         <div class="lab-fld">
           <span class="lab-fld-lb">所属组织</span
-          ><el-select v-model="form.orgId" filterable size="small"
+          ><el-select v-model="form.orgId" filterable size="small" @change="organizationChanged"
             ><el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value"
           /></el-select>
         </div>
         <div class="lab-fld">
           <span class="lab-fld-lb">仓库</span
-          ><el-select v-model="form.warehouseId" filterable size="small"
+          ><el-select v-model="form.warehouseId" :disabled="!form.orgId" filterable size="small"
             ><el-option
-              v-for="x in options.warehouses"
+              v-for="x in warehouseOptions"
               :key="x.value"
               :label="x.label"
               :value="x.value"

@@ -19,50 +19,21 @@ function posting() {
 }
 
 describe('InventoryPostingService master validation', () => {
-  it('allows a global goods master when posting inventory for an organization', async () => {
-    const goodsFindFirst = vi.fn().mockResolvedValue({
-      goods_id: 101n,
-      goods_catg_id: 27n,
-      goods_name: '全局商品',
-      org_id: 0n,
-    });
-    const db = {
-      hspsi_basic_warehouse: {
-        findFirst: vi.fn().mockResolvedValue({ warehouse_id: 15n, warehouse_type: 2 }),
-      },
-      hspsi_goods_info: { findFirst: goodsFindFirst },
-      hspsi_goods_info_sku: {
-        findFirst: vi.fn().mockResolvedValue({ sku_id: 202n, good_id: 101n }),
-      },
-      hspsi_goods_info_category: {
-        findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 27n, warehouse_type: 2 }),
-      },
-    };
-    const service = new InventoryPostingService({} as never);
+  it('delegates organization, warehouse, goods and SKU checks to the common validator', async () => {
+    const db = {};
+    const assertGoodsLines = vi.fn().mockResolvedValue(undefined);
+    const service = new InventoryPostingService({} as never, { assertGoodsLines } as never);
 
     await expect((service as any).validateMaster(db, posting())).resolves.toBeUndefined();
-    expect(goodsFindFirst).toHaveBeenCalledWith({
-      where: {
-        goods_id: 101n,
-        org_id: { in: [0n, 9n] },
-        status: 1,
-        deleted_at: null,
-      },
-    });
+    expect(assertGoodsLines).toHaveBeenCalledWith(9, 15, posting().lines, db);
   });
 
-  it('continues rejecting goods outside the global or current-organization scope', async () => {
-    const db = {
-      hspsi_basic_warehouse: {
-        findFirst: vi.fn().mockResolvedValue({ warehouse_id: 15n, warehouse_type: 2 }),
-      },
-      hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null) },
-      hspsi_goods_info_sku: { findFirst: vi.fn().mockResolvedValue({ sku_id: 202n }) },
-    };
-    const service = new InventoryPostingService({} as never);
+  it('propagates common master-data validation failures', async () => {
+    const assertGoodsLines = vi.fn().mockRejectedValue(new Error('商品分类与仓库类型不匹配'));
+    const service = new InventoryPostingService({} as never, { assertGoodsLines } as never);
 
-    await expect((service as any).validateMaster(db, posting())).rejects.toThrow(
-      '商品或 SKU 无效，或未启用',
+    await expect((service as any).validateMaster({}, posting())).rejects.toThrow(
+      '商品分类与仓库类型不匹配',
     );
   });
 });

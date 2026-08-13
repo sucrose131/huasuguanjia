@@ -6,6 +6,7 @@ import { generateBatchNo } from '../common/batch-number';
 import { PrismaService } from '../database/prisma.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import { InventoryPostingService } from './inventory-posting.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 
 type Body = Record<string, any>;
 type Direction = 1 | -1;
@@ -20,6 +21,7 @@ export class InventoryGeneralService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
   ) {}
 
   private positiveInteger(value: unknown, label: string) {
@@ -57,17 +59,15 @@ export class InventoryGeneralService {
     if (!orgIdValue || !warehouseIdValue) return [];
     const orgId = this.identifier(orgIdValue, '组织');
     const warehouseId = this.identifier(warehouseIdValue, '仓库');
-    const warehouse = await this.prisma.hspsi_basic_warehouse.findFirst({
-      where: { warehouse_id: warehouseId, org_id: orgId, status: 1, deleted_at: null },
-    });
-    if (!warehouse) return [];
+    const warehouse = await this.masterData.assertWarehouse(orgId, warehouseId);
     const goods = await this.prisma.hspsi_goods_info.findMany({
-      where: { status: 1, deleted_at: null },
+      where: { org_id: { in: [0n, orgId] }, status: 1, deleted_at: null },
     });
     const categories = await this.prisma.hspsi_goods_info_category.findMany({
       where: {
         goods_catg_id: { in: [...new Set(goods.map((item) => item.goods_catg_id))] },
         warehouse_type: warehouse.warehouse_type,
+        status: 1,
         deleted_at: null,
       },
       select: { goods_catg_id: true },

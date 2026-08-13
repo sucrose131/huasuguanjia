@@ -42,14 +42,13 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [pRes, wRes] = (await Promise.all([
+    const [pRes] = (await Promise.all([
       api.get('/production/plans', { params: { pageSize: 100 } }),
-      api.get('/base-data/warehouses/options'),
     ])) as any[];
     plans.value = (pRes.items ?? []).filter(
       (p: B) => Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty),
     );
-    warehouses.value = wRes ?? [];
+    warehouses.value = [];
     if (sourceRow.value) {
       const r = sourceRow.value;
       if (!plans.value.some((item: B) => String(item.id) === String(r.planId))) {
@@ -73,6 +72,7 @@ async function load() {
         deliveredQty: Number(r.cumulativeQty || 0) - Number(r.quantity || 0),
         operatorName: r.operatorName ?? r.createdByName ?? auth.user?.username ?? '',
       });
+      await planChanged();
     }
   } catch (e: any) {
     error.value = e.response?.data?.message ?? '加载失败';
@@ -82,7 +82,11 @@ async function load() {
 }
 
 async function planChanged() {
-  if (!f.planId) return;
+  if (!f.planId) {
+    warehouses.value = [];
+    f.warehouseId = '';
+    return;
+  }
   try {
     const p: any = await api.get(`/production/plans/${f.planId}`);
     Object.assign(f, {
@@ -93,6 +97,11 @@ async function planChanged() {
       warehouseId: f.warehouseId || p.productWarehouseId || '',
       quantity: Math.max(1, Number(p.planQty || 0) - Number(p.deliveredQty || 0)),
     });
+    warehouses.value = (await api.get('/production/warehouse-options', {
+      params: { orgId: p.orgId, goodsId: p.goodsId },
+    })) as B[];
+    if (!warehouses.value.some((item) => String(item.value) === String(f.warehouseId)))
+      f.warehouseId = '';
   } catch (e: any) {
     /* ignore */
   }

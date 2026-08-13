@@ -14,6 +14,7 @@ import { BusinessReferenceService } from '../database/business-reference.service
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 type B = Record<string, any>;
 
 import {
@@ -42,6 +43,7 @@ export class SalesService {
     @Inject(BusinessReferenceService) private readonly refs: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
   ) {}
   private d(v: any) {
     return new Prisma.Decimal(String(v ?? 0));
@@ -63,6 +65,13 @@ export class SalesService {
     return this.p.$transaction(callback, {
       isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
     });
+  }
+  async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
+    if (!orgIdValue || !warehouseIdValue) return [];
+    return this.masterData.goodsOptions(
+      BigInt(String(orgIdValue)),
+      BigInt(String(warehouseIdValue)),
+    );
   }
   private trustedDiscountSource(type: unknown) {
     return type === 'inventory_loss' || type === 'sales_return';
@@ -586,6 +595,11 @@ export class SalesService {
       if (detailKeys.has(key)) throw new BadRequestException('同一商品和SKU不能重复录入销售订单');
       detailKeys.add(key);
     }
+    await this.masterData.assertGoodsLines(
+      b.orgId ?? customer.org_id,
+      b.warehouseId,
+      ls.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+    );
     let old: B | null = null;
     if (id) {
       old = await this.order(id);
@@ -1990,11 +2004,12 @@ export class SalesService {
       const disposalType = Number(b.disposalType ?? 1);
       await this.assertDictionaryValue(t, 'sales_return_disposal', disposalType, '退货后处理方式');
       const returnWarehouseId = BigInt(b.warehouseId);
-      const returnWarehouse = await t.hspsi_basic_warehouse.findFirst({
-        where: { warehouse_id: returnWarehouseId, org_id: order.org_id, deleted_at: null },
-        select: { warehouse_id: true },
-      });
-      if (!returnWarehouse) throw new BadRequestException('退货仓库不存在或不属于销售订单组织');
+      await this.masterData.assertGoodsLines(
+        order.org_id,
+        returnWarehouseId,
+        ls.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+        t,
+      );
       const sourceDetails = await t.hspsi_sale_order_output_detail.findMany({
         where: { so_output_id: sourceOutputId },
       });
@@ -3111,6 +3126,12 @@ export class SalesService {
         content: item.progress_content,
         status: item.progress_status,
         sourceType: item.source_type,
+        sourceTypeName:
+          item.source_type === 1
+            ? '人工记录'
+            : item.source_type === 2
+              ? '外部同步'
+              : '系统记录',
         sourceSystem: item.source_system,
         handlerId: item.handler_id,
         occurredAt: item.occurred_at,
@@ -3140,7 +3161,8 @@ export class SalesService {
       const data = {
         progress_content: content,
         progress_status: status,
-        handler_id: BigInt(b.handlerId ?? u),
+        // 处理进展属于操作证据，处理人必须以当前登录用户为准，不能信任请求体传值。
+        handler_id: BigInt(u),
         occurred_at: occurredAt,
         updated_by: BigInt(u),
         updated_at: new Date(),
@@ -3153,6 +3175,8 @@ export class SalesService {
               where: { progress_id: progressId, service_id: serviceId, deleted_at: null },
             });
             if (!existing) throw new NotFoundException('售后进展不存在');
+            if (existing.source_type !== 1)
+              throw new BadRequestException('外部同步或系统生成的售后进展不可编辑');
             before = existing;
             return t.hspsi_sale_order_service_progress.update({
               where: { progress_id: progressId },
@@ -3171,7 +3195,7 @@ export class SalesService {
         where: { service_id: serviceId },
         data: {
           event_status: status,
-          handler_id: BigInt(b.handlerId ?? u),
+          handler_id: BigInt(u),
           event_date: occurredAt,
           updated_by: BigInt(u),
           updated_at: new Date(),
@@ -3198,6 +3222,8 @@ export class SalesService {
         where: { progress_id: progressId, service_id: serviceId, deleted_at: null },
       });
       if (!progress) throw new NotFoundException('售后进展不存在');
+      if (progress.source_type !== 1)
+        throw new BadRequestException('外部同步或系统生成的售后进展不可删除');
       await t.hspsi_sale_order_service_progress.update({
         where: { progress_id: progressId },
         data: { deleted_at: new Date(), updated_by: BigInt(u), updated_at: new Date() },
