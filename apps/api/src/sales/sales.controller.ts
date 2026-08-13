@@ -23,6 +23,11 @@ import { ApproveOrderDto } from './dto/approve-order.dto';
 export class SalesController {
   constructor(@Inject(SalesService) private readonly s: SalesService) {}
   @RequirePermissions('sales')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.s.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('sales')
   @Get('orders')
   orders(@Query() q: any) {
     return this.s.orders(q);

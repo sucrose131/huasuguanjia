@@ -13,6 +13,7 @@ import {
 import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { Attachment, AttachmentsService } from '../attachments/attachments.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -36,6 +37,7 @@ export class RequisitionService {
     private readonly oaApproval: RequisitionOaApprovalService,
     @Inject(AttachmentsService)
     private readonly attachmentsService: AttachmentsService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
   ) {}
 
   private attachmentItems(value: unknown): Attachment[] {
@@ -276,6 +278,14 @@ export class RequisitionService {
         raw: item,
       })),
     };
+  }
+
+  async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
+    if (!orgIdValue || !warehouseIdValue) return [];
+    return this.masterData.goodsOptions(
+      BigInt(String(orgIdValue)),
+      BigInt(String(warehouseIdValue)),
+    );
   }
 
   private aggregatePostingLines(
@@ -703,6 +713,7 @@ export class RequisitionService {
           applicantId,
           drawType,
         });
+        await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
 
         const total = lines.reduce((sum, line) => sum + line.quantity, 0);
         const data = {
@@ -1624,6 +1635,7 @@ export class RequisitionService {
         applicantId: receiverId,
         drawType: 2,
       });
+      await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
       const [applicationNo, outputNo] = await Promise.all([
         this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION),
         this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT),
@@ -2143,19 +2155,7 @@ export class RequisitionService {
       });
 
       const returnWarehouseId = this.bigint(body.warehouseId ?? output.warehouse_id, '退回仓库');
-      const returnWarehouse = await tx.hspsi_basic_warehouse.findFirst({
-        where: {
-          warehouse_id: returnWarehouseId,
-          org_id: output.org_id,
-          warehouse_type: { in: this.requisitionWarehouseTypes },
-          status: 1,
-          deleted_at: null,
-        },
-        select: { warehouse_id: true },
-      });
-      if (!returnWarehouse) {
-        throw new BadRequestException('退回仓库必须是同组织下已启用的行政类、健服类仓库');
-      }
+      await this.masterData.assertGoodsLines(output.org_id, returnWarehouseId, lines, tx);
 
       const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
       const data = {

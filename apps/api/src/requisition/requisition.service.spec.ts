@@ -17,6 +17,7 @@ function aggregatePostingLines(lines: InventoryLine[]) {
     undefined as never,
     undefined as never,
     undefined as never,
+    undefined as never,
   );
   return (
     service as unknown as { aggregatePostingLines: AggregatePostingLines }
@@ -47,6 +48,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       { submit: vi.fn() } as never,
       attachmentsService as never,
+      { assertGoodsLines: vi.fn() } as never,
     ),
     prisma,
     posting,

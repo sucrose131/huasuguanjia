@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 
 export type InventoryLine = {
   goodsId: bigint | string | number;
@@ -30,7 +31,10 @@ type Db = Prisma.TransactionClient | PrismaClient;
 
 @Injectable()
 export class InventoryPostingService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
+  ) {}
 
   async post(input: InventoryPosting, tx?: Prisma.TransactionClient) {
     if (tx) return this.postInTransaction(tx, input);
@@ -38,36 +42,12 @@ export class InventoryPostingService {
   }
 
   private async validateMaster(db: Db, input: InventoryPosting) {
-    const orgId = BigInt(String(input.orgId));
-    const warehouseId = BigInt(String(input.warehouseId));
-    const warehouse = await db.hspsi_basic_warehouse.findFirst({
-      where: { warehouse_id: warehouseId, org_id: orgId, status: 1, deleted_at: null },
-    });
-    if (!warehouse) throw new BadRequestException('组织或仓库无效，或仓库未启用');
     if (!input.lines.length) throw new BadRequestException('库存过账至少需要一条明细');
     for (const line of input.lines) {
       if (!Number.isSafeInteger(Number(line.quantity)) || Number(line.quantity) <= 0)
         throw new BadRequestException('库存数量必须为正整数');
-      const goodsId = BigInt(String(line.goodsId));
-      const skuId = BigInt(String(line.skuId));
-      const goods = await db.hspsi_goods_info.findFirst({
-        where: {
-          goods_id: goodsId,
-          org_id: { in: [0n, orgId] },
-          status: 1,
-          deleted_at: null,
-        },
-      });
-      const sku = await db.hspsi_goods_info_sku.findFirst({
-        where: { sku_id: skuId, good_id: goodsId, status: 1, deleted_at: null },
-      });
-      if (!goods || !sku) throw new BadRequestException('商品或 SKU 无效，或未启用');
-      const category = await db.hspsi_goods_info_category.findFirst({
-        where: { goods_catg_id: goods.goods_catg_id, deleted_at: null },
-      });
-      if (category && category.warehouse_type !== warehouse.warehouse_type)
-        throw new BadRequestException(`${goods.goods_name} 与目标仓库类型不匹配`);
     }
+    await this.masterData.assertGoodsLines(input.orgId, input.warehouseId, input.lines, db);
   }
 
   private async postInTransaction(tx: Prisma.TransactionClient, input: InventoryPosting) {

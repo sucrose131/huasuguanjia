@@ -311,13 +311,13 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(ctx.tx.hspsi_sales_order_payment.create).toHaveBeenCalled();
     expect(ctx.tx.hspsi_sale_order_service.create).toHaveBeenCalled();
 
-    const mapping = [...ctx.mappingStore.values()][0];
+    const mapping = [...ctx.mappingStore.values()][0]!;
     expect(mapping.source_order_type).toBe(HUASU_HOME_ORDER_TYPE.SALE_ORDER);
     expect(mapping.source_order_id).toBe(String(order.id));
     expect(mapping.sync_status).toBe(HUASU_HOME_ORDER_SYNC_STATUS.SUCCESS);
     expect(mapping.last_payload).toContain(order.order_sn);
 
-    const createArg = ctx.tx.hspsi_sale_order.create.mock.calls[0][0].data;
+    const createArg = ctx.tx.hspsi_sale_order.create.mock.calls[0]![0].data;
     expect(createArg.so_source).toBe(9n);
     expect(createArg.so_source_id).toBe(mapping.id);
     expect(createArg.business_source_type).toBe('');
@@ -429,18 +429,18 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(ctx.tx.hspsi_sale_order_exit.create).toHaveBeenCalled();
     expect(ctx.tx.hspsi_sale_order_exit_detail.createMany).toHaveBeenCalled();
 
-    const detailArg = ctx.tx.hspsi_sale_order_exit_detail.createMany.mock.calls[0][0].data;
+    const detailArg = ctx.tx.hspsi_sale_order_exit_detail.createMany.mock.calls[0]![0].data;
     expect(detailArg).toHaveLength(1);
     expect(detailArg[0].goods_id).toBe(101n);
     expect(detailArg[0].sku_id).toBe(201n);
     expect(detailArg[0].exit_qty).toBe(4); // (1+1)+(2+0)
 
-    const exitArg = ctx.tx.hspsi_sale_order_exit.create.mock.calls[0][0].data;
+    const exitArg = ctx.tx.hspsi_sale_order_exit.create.mock.calls[0]![0].data;
     expect(exitArg.source_output_id).toBe(8001n);
     expect(exitArg.exit_qty).toBe(4);
 
     expect(ctx.posting.post).toHaveBeenCalled();
-    const postArg = ctx.posting.post.mock.calls[0][0];
+    const postArg = ctx.posting.post.mock.calls[0]![0];
     expect(postArg.direction).toBe(1);
     expect(postArg.lines).toEqual([
       expect.objectContaining({

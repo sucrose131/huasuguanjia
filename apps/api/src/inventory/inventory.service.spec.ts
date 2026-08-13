@@ -179,6 +179,7 @@ describe('inventory draft document row locking', () => {
         posting as never,
         documentTrace as never,
         { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+        { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
       ),
       prisma,
       posting,
@@ -744,7 +745,13 @@ describe('inventory requisition history query', () => {
         findMany: vi.fn().mockResolvedValue([{ id: 1n, name: '件' }]),
       },
     };
-    const service = new InventoryService(prisma as never, {} as never, {} as never, {} as never);
+    const service = new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
+    );
     return { service, prisma };
   }
 

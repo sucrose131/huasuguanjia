@@ -37,6 +37,11 @@ export class RequisitionController {
   applicationFormOptions(@Query('orgId') orgId: string) {
     return this.service.applicationFormOptions(orgId);
   }
+  @RequirePermissions('requisitions')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.service.productOptions(orgId, warehouseId);
+  }
 
   @RequirePermissions('requisitions')
   @Get('applications/:id')

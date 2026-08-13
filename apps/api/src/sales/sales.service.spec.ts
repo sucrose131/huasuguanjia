@@ -20,6 +20,7 @@ function createService(
       { enrich: vi.fn(async (items: unknown) => items) } as never,
       trace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+      { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn() } as never,
     ),
     posting,
   };
@@ -74,6 +75,44 @@ describe('SalesService after-sales progress', () => {
       data: expect.objectContaining({ event_status: 1, handler_id: 9n }),
     });
     expect(tx.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+
+  it('uses the authenticated user as handler instead of trusting a forged handler id', async () => {
+    const createProgress = vi.fn().mockResolvedValue({ progress_id: 32n });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_sale_order_service: {
+        findFirst: vi.fn().mockResolvedValue({ service_id: 8n, so_id: 5n }),
+        count: vi.fn().mockResolvedValue(1),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      hspsi_sale_order_service_progress: { create: createProgress },
+      hspsi_sale_order: { update: vi.fn().mockResolvedValue({}) },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 2 }),
+      },
+      hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_id: 3 }) },
+      hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const { service } = createService(prisma);
+
+    await service.saveServiceProgress(
+      '8',
+      null,
+      { content: '已完成电话回访', status: 1, handlerId: 999999 },
+      '9',
+    );
+
+    expect(createProgress).toHaveBeenCalledWith({
+      data: expect.objectContaining({ handler_id: 9n, created_by: 9n }),
+    });
+    expect(tx.hspsi_sale_order_service.update).toHaveBeenCalledWith({
+      where: { service_id: 8n },
+      data: expect.objectContaining({ handler_id: 9n }),
+    });
   });
 });
 

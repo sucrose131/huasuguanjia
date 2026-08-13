@@ -13,6 +13,7 @@ function serviceWith(
     { enrich: vi.fn(async (rows: unknown[]) => rows) } as never,
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+    { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn(), assertWarehouse: vi.fn() } as never,
   );
 }
 
