@@ -43,6 +43,8 @@ export const HUASU_HOME_RULE_STATUS = {
 /** 外部订单业务类型（由拉取接口族决定，非订单体字段） */
 export const HUASU_HOME_ORDER_TYPE = {
   SALE_ORDER: 'SALE_ORDER',
+  CONFERENCE_TICKET: 'CONFERENCE_TICKET',
+  INSTALLMENT: 'INSTALLMENT',
 } as const;
 
 /** 订单映射同步状态 */
@@ -105,6 +107,63 @@ export const HUASU_HOME_AFTER_SALES_STATUS = {
   USER_CANCEL: 4,
 } as const;
 
+/** 会议门票订单状态（与普通销售单 order_status 枚举不同） */
+export const HUASU_HOME_CONFERENCE_ORDER_STATUS = {
+  PENDING_PAY: 1,
+  CANCELLED: 2,
+  PAID: 3,
+  REFUND_APPLY: 4,
+  REFUNDED: 5,
+  PAYING: 9,
+} as const;
+
+/** 可同步入库的会议门票订单状态 */
+export const HUASU_HOME_CONFERENCE_SYNCABLE_STATUSES = new Set<number>([
+  HUASU_HOME_CONFERENCE_ORDER_STATUS.PAID,
+  HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUND_APPLY,
+  HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUNDED,
+]);
+
+/** 核销状态：0-待核销，1-已核销 */
+export const HUASU_HOME_CONFERENCE_VERIFY_STATUS = {
+  PENDING: 0,
+  VERIFIED: 1,
+} as const;
+
+/** 权益发放：0-未发放，1-已发放 */
+export const HUASU_HOME_CONFERENCE_RIGHTS_GRANTED = {
+  NO: 0,
+  YES: 1,
+} as const;
+
+/** 门票退款状态：1-退款中，2-已退款，3-退款失败 */
+export const HUASU_HOME_CONFERENCE_REFUND_STATUS = {
+  PROCESSING: 1,
+  DONE: 2,
+  FAILED: 3,
+} as const;
+
+/** 分期订单状态（与普通销售单 / 门票枚举不同） */
+export const HUASU_HOME_INSTALLMENT_STATUS = {
+  PENDING_AUDIT: 1,
+  AUDIT_REJECTED: 2,
+  IN_PROGRESS: 3,
+  COMPLETED: 4,
+  AFTER_SALES: 5,
+  CONVERTED: 6,
+} as const;
+
+/** 可同步入库的分期订单状态 */
+export const HUASU_HOME_INSTALLMENT_SYNCABLE_STATUSES = new Set<number>([
+  HUASU_HOME_INSTALLMENT_STATUS.IN_PROGRESS,
+  HUASU_HOME_INSTALLMENT_STATUS.COMPLETED,
+  HUASU_HOME_INSTALLMENT_STATUS.AFTER_SALES,
+  HUASU_HOME_INSTALLMENT_STATUS.CONVERTED,
+]);
+
+/** 无支付方式时分期收款默认线下 */
+export const HUASU_HOME_INSTALLMENT_DEFAULT_PAY_MODE = 7;
+
 /** 华溯订单行 product_type */
 export const HUASU_HOME_PRODUCT_TYPE = {
   COMBO: 1,
@@ -135,8 +194,13 @@ export const HUASU_HOME_CENTENARIAN_TYPE_NAME: Record<number, string> = {
 /** 省级合伙人展示名 */
 export const HUASU_HOME_PROVINCIAL_PARTNER_NAME = '省级合伙人';
 
-/** 用户列表默认分页（后期改由数据库配置管理，不走环境变量） */
+/** 列表默认分页（后期改由数据库配置管理，不走环境变量） */
 export const HUASU_HOME_USER_SYNC_DEFAULT_PAGE_SIZE = 200;
 export const HUASU_HOME_USER_SYNC_MAX_PAGE_SIZE = 1000;
 /** 用户同步默认间隔：1 小时 */
 export const HUASU_HOME_USER_SYNC_DEFAULT_INTERVAL_MS = 3_600_000;
+
+/** 订单列表默认分页（与用户列表同一上限；后期改由数据库配置管理） */
+export const HUASU_HOME_ORDER_SYNC_DEFAULT_PAGE_SIZE = 200;
+export const HUASU_HOME_ORDER_SYNC_MAX_PAGE_SIZE = 1000;
+export const HUASU_HOME_ORDER_SYNC_MAX_PAGES = 10_000;

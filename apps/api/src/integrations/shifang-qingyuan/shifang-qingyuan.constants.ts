@@ -138,3 +138,11 @@ export const SHIFANG_QINGYUAN_PAY_MODE_MAP: Record<number, number> = {
   3: 6, // 余额
   4: 7, // 线下/其它
 };
+
+/** 用户列表分页（接口 limit 最大值 100；后期改由数据库配置管理，不走环境变量） */
+export const SHIFANG_QINGYUAN_USER_SYNC_DEFAULT_PAGE_SIZE = 100;
+export const SHIFANG_QINGYUAN_USER_SYNC_MAX_PAGE_SIZE = 100;
+/** 用户同步默认间隔：1 小时 */
+export const SHIFANG_QINGYUAN_USER_SYNC_DEFAULT_INTERVAL_MS = 3_600_000;
+/** 增量水位重叠窗口，避免边界漏单 */
+export const SHIFANG_QINGYUAN_USER_SYNC_OVERLAP_MS = 5 * 60 * 1000;

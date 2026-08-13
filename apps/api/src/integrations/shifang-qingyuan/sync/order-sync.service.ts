@@ -1256,15 +1256,10 @@ export class ShifangQingyuanOrderSyncService {
       },
     });
     const address = this.formatAddress(input.order);
-    const name = this.clip(input.order.receiver_name || `用户${userId}`, 100);
-    const mobile = this.clip(input.order.mobile || '', 20);
     if (existing) {
       await tx.hspsi_basic_customer.update({
         where: { customer_id: existing.customer_id },
         data: {
-          org_id: input.orgId,
-          name,
-          mobile,
           address: this.clip(address, 255),
           updated_by: input.operatorId,
           updated_at: input.now,
@@ -1273,6 +1268,8 @@ export class ShifangQingyuanOrderSyncService {
       return existing.customer_id;
     }
 
+    const name = this.clip(input.order.receiver_name || `用户${userId}`, 100);
+    const mobile = this.clip(input.order.mobile || '', 20);
     const created = await tx.hspsi_basic_customer.create({
       data: {
         org_id: input.orgId,
@@ -1286,6 +1283,7 @@ export class ShifangQingyuanOrderSyncService {
         related_customer_id: userId,
         status: 1,
         remark: '',
+        levels: [] as unknown as Prisma.InputJsonValue,
         created_by: input.operatorId,
         updated_by: input.operatorId,
         created_at: input.now,

@@ -12,6 +12,8 @@
  * - 退货退款成功生成 exit
  * - 按 order_no 单笔同步
  * - 二次同步幂等（跳过无变更）
+ * - 缺失客户用收货人补建（levels=[]）
+ * - 已存在客户只更新地址，不覆盖姓名/levels
  *
  * 运行：
  *   pnpm --filter @hspsi/api test order-sync.unit.spec
@@ -811,5 +813,67 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(second.skipped).toBe(1);
     expect(second.created).toBe(0);
     expect(ctx.tx.hspsi_sale_order.create.mock.calls.length).toBe(createCallsBefore);
+  });
+
+  it('缺失客户用收货人补建，levels 为空数组', async () => {
+    const ctx = createContext();
+    const snapshot = buildDetail({
+      order: {
+        pay_status: SHIFANG_QINGYUAN_PAY_STATUS.PAID,
+        order_status: SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_SHIP,
+        receiver_name: '收货人甲',
+      },
+    });
+    mockListSnapshot(ctx, snapshot);
+
+    const stats = await ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' });
+    expect(stats.failed).toBe(0);
+    expect(ctx.tx.hspsi_basic_customer.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: '收货人甲',
+          mobile: '13800000000',
+          related_customer_id: 501n,
+          levels: [],
+          address: '广东省深圳市南山区科技园一路',
+        }),
+      }),
+    );
+  });
+
+  it('已存在客户只更新地址，不覆盖姓名/levels', async () => {
+    const ctx = createContext();
+    ctx.tx.hspsi_basic_customer.findFirst.mockResolvedValue({
+      customer_id: 7001n,
+      name: '同步昵称',
+      mobile: '13700000000',
+      levels: ['经销商'],
+    });
+    const snapshot = buildDetail({
+      order: {
+        pay_status: SHIFANG_QINGYUAN_PAY_STATUS.PAID,
+        order_status: SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_SHIP,
+        receiver_name: '收货人乙',
+        mobile: '13600000000',
+      },
+    });
+    mockListSnapshot(ctx, snapshot);
+
+    const stats = await ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' });
+    expect(stats.failed).toBe(0);
+    expect(ctx.tx.hspsi_basic_customer.create).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_basic_customer.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { customer_id: 7001n },
+        data: expect.objectContaining({
+          address: '广东省深圳市南山区科技园一路',
+        }),
+      }),
+    );
+    const updateData = ctx.tx.hspsi_basic_customer.update.mock.calls[0]![0].data;
+    expect(updateData).not.toHaveProperty('name');
+    expect(updateData).not.toHaveProperty('mobile');
+    expect(updateData).not.toHaveProperty('levels');
+    expect(updateData).not.toHaveProperty('status');
   });
 });

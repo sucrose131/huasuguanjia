@@ -356,20 +356,246 @@ export interface HuasuHomeOrder {
   user?: HuasuHomeOrderUser | null;
   user_id: number;
   ver?: number;
+  /**
+   * 完款后由分期单转来的普通订单会带此字段。
+   * 接口可能尚未返回：必须先判断字段是否存在，有值才跳过同步。
+   */
+  order_installment_no?: string;
 }
 
 export interface HuasuHomeOrderListData {
   list: HuasuHomeOrder[];
-  /** 文档已作废，兼容保留 */
-  page?: number;
-  page_size?: number;
-  total?: number;
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 export interface HuasuHomeOrderListQuery {
+  page: number;
+  page_size: number;
   /** 必填：更新时间，格式 Y-m-d H:i:s */
   updated_at: string;
-  [key: string]: unknown;
+}
+
+/* ==================== 会议门票订单列表（POST /hspsi/order-conference/list） ==================== */
+
+export interface HuasuHomeConferenceTicket {
+  conference_id?: number;
+  created_at?: string;
+  deleted_at?: string;
+  id?: number;
+  product_package_id?: number;
+  remark?: string;
+  sort?: number;
+  updated_at?: string;
+  user_group_limit?: string;
+}
+
+export interface HuasuHomeConferenceInfo {
+  address?: string;
+  cover?: string;
+  created_at?: string;
+  date?: string;
+  deadline?: string;
+  deleted_at?: string;
+  description?: string;
+  id?: number;
+  location_type?: number;
+  max_participants?: number;
+  name?: string;
+  sort?: number;
+  status?: number;
+  time?: string;
+  type?: number;
+  updated_at?: string;
+}
+
+export interface HuasuHomeConferencePackageSnapshot {
+  centenarian_type?: number;
+  cover?: string;
+  discount_price?: string;
+  family_portrait_type?: number;
+  id?: number;
+  name?: string;
+  original_price?: string;
+  package_type?: number;
+  user_level_id?: number;
+}
+
+export interface HuasuHomeConferenceRefund {
+  created_at?: string;
+  deleted_at?: string;
+  id?: number;
+  operator_id?: number;
+  operator_type?: string;
+  order_id?: number;
+  order_sn?: string;
+  out_refund_no?: string;
+  reason?: string;
+  refund_amount?: number;
+  /** 1-退款中，2-已退款，3-退款失败 */
+  refund_status?: number;
+  remark?: string;
+  updated_at?: string;
+  user_id?: number;
+}
+
+export interface HuasuHomeConferenceOrder {
+  actual_amount: number | string;
+  conference?: HuasuHomeConferenceInfo | null;
+  conference_id?: number;
+  conference_ticket?: HuasuHomeConferenceTicket | null;
+  conference_ticket_id?: number;
+  created_at: string;
+  deleted_at?: string;
+  id: number;
+  order_sn: string;
+  /** 1-待付款，2-已取消，3-已付款，4-退款申请，5-已退款，9-支付中 */
+  order_status: number;
+  package_items?: HuasuHomeOrderPackageItem[] | null;
+  package_snapshot?: HuasuHomeConferencePackageSnapshot | null;
+  pay_time?: string;
+  /** 0-未选择，1-微信，2-支付宝，3-余额支付 */
+  payment_method: number;
+  price: number;
+  product_package_id: number;
+  quantity: number;
+  refund?: HuasuHomeConferenceRefund | null;
+  remark?: string;
+  /** 0-未发放，1-已发放 */
+  rights_granted: number;
+  total_amount: number | string;
+  updated_at: string;
+  user?: HuasuHomeOrderUser | null;
+  user_id: number;
+  /** 0-待核销，1-已核销 */
+  verify_status: number;
+  verify_time?: string;
+}
+
+export interface HuasuHomeConferenceOrderListData {
+  list: HuasuHomeConferenceOrder[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+/* ==================== 分期订单列表（POST /hspsi/order-installment/list） ==================== */
+
+/** 分期期次权益发放（rights_issue） */
+export interface HuasuHomeInstallmentRightsIssue {
+  id?: number;
+  installment_no?: string;
+  installment_period_no?: string;
+  package_id?: number;
+  product_id: number;
+  /** 本期发放的购买数量 */
+  number: number;
+  cumulative_issue_number?: number;
+  cumulative_issued_rate?: number;
+  operator_id?: number;
+  remark?: string;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+/** 分期期次 */
+export interface HuasuHomeInstallmentPeriod {
+  id?: number;
+  installment_no?: string;
+  no: string;
+  period?: number;
+  amount?: number;
+  paid_amount?: number;
+  unpaid_amount?: number;
+  completion_rate?: number;
+  offline_paid_time?: string;
+  operator_id?: number;
+  remark?: string;
+  rights_issue?: HuasuHomeInstallmentRightsIssue | null;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+/** 分期购买商品（单品） */
+export interface HuasuHomeInstallmentProduct {
+  id?: number;
+  installment_no?: string;
+  package_id?: number;
+  product_id: number;
+  name?: string;
+  number: number;
+  gift_number?: number;
+  issued_number?: number;
+  issued_gift_number?: number;
+  issued_rate?: number;
+  original_price?: number;
+  unit?: number;
+  cover?: string;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+/**
+ * 分期售后（hszj_order_installment_aftersale）
+ * 列表字段名为 aftersale，可能是单条、数组或 null。
+ */
+export interface HuasuHomeInstallmentAftersale {
+  id?: number;
+  installment_no?: string;
+  package_id?: number;
+  /** 售后单品 id */
+  product_id: number;
+  /** 售后数量 */
+  number: number;
+  remark?: string;
+  operator_id?: number;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+/** 分期订单快照 */
+export interface HuasuHomeInstallmentOrder {
+  id: number;
+  no: string;
+  order_sn?: string;
+  /**
+   * 1-待审核 2-审核驳回 3-进行中 4-已完成 5-已售后 6-已转正常订单
+   */
+  status: number;
+  amount?: number;
+  package_amount?: number;
+  paid_amount?: number;
+  unpaid_amount?: number;
+  paid_period?: number;
+  completion_rate?: number;
+  rights_issue_rate?: number;
+  package_id?: number;
+  organization_id?: number;
+  operator_id?: number;
+  is_modify_price?: number;
+  offline_order_time?: string;
+  remark?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  user_id: number;
+  user?: HuasuHomeOrderUser | null;
+  products?: HuasuHomeInstallmentProduct[] | null;
+  periods?: HuasuHomeInstallmentPeriod[] | null;
+  aftersale?: HuasuHomeInstallmentAftersale | HuasuHomeInstallmentAftersale[] | null;
+  audits?: unknown;
+}
+
+export interface HuasuHomeInstallmentOrderListData {
+  list: HuasuHomeInstallmentOrder[];
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 /* ==================== 用户列表（POST /hspsi/user/list） ==================== */

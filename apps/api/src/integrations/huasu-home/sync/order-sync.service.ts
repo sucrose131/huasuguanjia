@@ -13,6 +13,9 @@ import {
   HUASU_HOME_MAPPING_STATUS,
   HUASU_HOME_ORDER_SHIPPED_STATUSES,
   HUASU_HOME_ORDER_STATUS,
+  HUASU_HOME_ORDER_SYNC_DEFAULT_PAGE_SIZE,
+  HUASU_HOME_ORDER_SYNC_MAX_PAGES,
+  HUASU_HOME_ORDER_SYNC_MAX_PAGE_SIZE,
   HUASU_HOME_ORDER_SYNC_STATUS,
   HUASU_HOME_ORDER_SYNCABLE_STATUSES,
   HUASU_HOME_ORDER_TYPE,
@@ -29,6 +32,7 @@ import type {
   HuasuHomeRightsDeductedRecord,
 } from '../huasu-home.types';
 import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
+import { buildCustomerLevels } from './build-customer-levels';
 import type { HuasuHomeOrderSyncOptions, HuasuHomeOrderSyncStats } from './order-sync.types';
 
 type Tx = Prisma.TransactionClient;
@@ -60,6 +64,9 @@ type ShipLine = {
 export class HuasuHomeOrderSyncService {
   private static readonly logger = new Logger(HuasuHomeOrderSyncService.name);
 
+  /** 进程内防重入：批量/单笔同步互斥 */
+  private running = false;
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(HuasuHomeService) private readonly huasuHome: HuasuHomeService,
@@ -68,42 +75,70 @@ export class HuasuHomeOrderSyncService {
     private readonly externalPosting: ExternalInventoryPostingService,
   ) {}
 
-  /** 批量同步：按 updated_at 增量拉列表 → 逐单 applyOrder */
+  /**
+   * 批量同步：按 updated_at 增量拉列表（page 递增）→ 按页即时 applyOrder
+   *
+   * 以返回的 total 判断是否还有下一页；本页为空则结束，避免 total 偏大时死循环。
+   */
   async syncOrders(
     userId = '0',
     options: HuasuHomeOrderSyncOptions = {},
   ): Promise<HuasuHomeOrderSyncStats> {
-    const stats = this.emptyStats();
-    const sourceId = await this.ensureDataSource(userId);
-    const updatedAt =
-      options.updated_at?.trim() || (await this.resolveListUpdatedAt(sourceId));
+    return this.withSyncLock(async () => {
+      const stats = this.emptyStats();
+      const sourceId = await this.ensureDataSource(userId);
+      const updatedAt =
+        options.updated_at?.trim() || (await this.resolveListUpdatedAt(sourceId));
+      const pageSize = this.normalizePageSize(options.page_size);
 
-    const data = await this.huasuHome.getOrderList({ updated_at: updatedAt });
-    const list = data.list ?? [];
-    for (const order of list) {
-      stats.fetched += 1;
-      await this.applyOrderSafe(order, sourceId, userId, stats);
-    }
+      let page = 1;
+      let guard = 0;
+      let total = 0;
+      while (guard < HUASU_HOME_ORDER_SYNC_MAX_PAGES) {
+        guard += 1;
+        const data = await this.huasuHome.getOrderList({
+          page,
+          page_size: pageSize,
+          updated_at: updatedAt,
+        });
+        const list = data.list ?? [];
+        total = Number(data.total) || 0;
+        if (list.length === 0) break;
 
-    HuasuHomeOrderSyncService.logger.log(
-      `[huasu-home] order sync done: ${JSON.stringify({
-        updatedAt,
-        ...stats,
-        failures: stats.failures.length,
-        warnings: stats.warnings.length,
-      })}`,
-    );
-    return stats;
+        for (const order of list) {
+          stats.fetched += 1;
+          await this.applyOrderSafe(order, sourceId, userId, stats);
+        }
+
+        if (!this.hasMoreOrderPages(page, pageSize, list.length, data.total)) break;
+        page += 1;
+      }
+
+      HuasuHomeOrderSyncService.logger.log(
+        `[huasu-home] order sync done: ${JSON.stringify({
+          updatedAt,
+          pageSize,
+          pages: guard,
+          total,
+          ...stats,
+          failures: stats.failures.length,
+          warnings: stats.warnings.length,
+        })}`,
+      );
+      return stats;
+    });
   }
 
   /** 单笔同步：按华溯 order_sn 拉详情后 applyOrder */
   async syncOrderBySn(orderSn: string, userId = '0'): Promise<HuasuHomeOrderSyncStats> {
-    const stats = this.emptyStats();
-    const sourceId = await this.ensureDataSource(userId);
-    const order = await this.huasuHome.getOrderInfo(orderSn);
-    stats.fetched = 1;
-    await this.applyOrderSafe(order, sourceId, userId, stats);
-    return stats;
+    return this.withSyncLock(async () => {
+      const stats = this.emptyStats();
+      const sourceId = await this.ensureDataSource(userId);
+      const order = await this.huasuHome.getOrderInfo(orderSn);
+      stats.fetched = 1;
+      await this.applyOrderSafe(order, sourceId, userId, stats);
+      return stats;
+    });
   }
 
   /** @deprecated 使用 syncOrderBySn */
@@ -141,6 +176,11 @@ export class HuasuHomeOrderSyncService {
     stats: HuasuHomeOrderSyncStats,
   ) {
     if (!HUASU_HOME_ORDER_SYNCABLE_STATUSES.has(Number(order.order_status))) {
+      stats.skipped += 1;
+      return;
+    }
+
+    if (this.isConvertedInstallmentOrder(order)) {
       stats.skipped += 1;
       return;
     }
@@ -1233,6 +1273,27 @@ export class HuasuHomeOrderSyncService {
       );
     }
 
+    const user = input.order.user;
+    const address = this.formatAddress(input.order);
+    const name = this.clip(user?.nickname || input.order.consignee || `华溯用户${userId}`, 100);
+    const mobile = this.clip(user?.mobile || input.order.mobile || '', 20);
+    const status = Number(user?.status ?? 1) === 0 ? 2 : 1;
+    const data = {
+      org_id: input.orgId,
+      name,
+      mobile,
+      gender: Number(user?.gender ?? 0),
+      birthday: this.parseCustomerBirth(user?.birth),
+      address: this.clip(address, 255),
+      referrer_name: this.clip(input.order.referrer?.nickname || '', 32),
+      referrer_mobile: this.clip(input.order.referrer?.mobile || '', 20),
+      status,
+      remark: this.clip(user?.remark || '', 255),
+      levels: buildCustomerLevels(user ?? {}) as unknown as Prisma.InputJsonValue,
+      updated_by: input.operatorId,
+      updated_at: input.now,
+    };
+
     const existing = await tx.hspsi_basic_customer.findFirst({
       where: {
         source_type: sourceType,
@@ -1240,50 +1301,33 @@ export class HuasuHomeOrderSyncService {
         deleted_at: null,
       },
     });
-    const address = this.formatAddress(input.order);
-    const name = this.clip(
-      input.order.user?.nickname || input.order.consignee || `华溯用户${userId}`,
-      100,
-    );
-    const mobile = this.clip(input.order.user?.mobile || input.order.mobile || '', 20);
     if (existing) {
       await tx.hspsi_basic_customer.update({
         where: { customer_id: existing.customer_id },
-        data: {
-          org_id: input.orgId,
-          name,
-          mobile,
-          gender: Number(input.order.user?.gender ?? 0),
-          address: this.clip(address, 255),
-          referrer_name: this.clip(input.order.referrer?.nickname || '', 32),
-          referrer_mobile: this.clip(input.order.referrer?.mobile || '', 20),
-          updated_by: input.operatorId,
-          updated_at: input.now,
-        },
+        data,
       });
       return existing.customer_id;
     }
 
     const created = await tx.hspsi_basic_customer.create({
       data: {
-        org_id: input.orgId,
-        name,
-        gender: Number(input.order.user?.gender ?? 0),
-        mobile,
-        address: this.clip(address, 255),
-        referrer_name: this.clip(input.order.referrer?.nickname || '', 32),
-        referrer_mobile: this.clip(input.order.referrer?.mobile || '', 20),
+        ...data,
         source_type: sourceType,
         related_customer_id: userId,
-        status: 1,
-        remark: '',
+        sort: 0,
         created_by: input.operatorId,
-        updated_by: input.operatorId,
         created_at: input.now,
-        updated_at: input.now,
       },
     });
     return created.customer_id;
+  }
+
+  private parseCustomerBirth(birth?: string): Date | null {
+    const text = String(birth ?? '').trim();
+    if (!text) return null;
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
   }
 
   private async resolveOrgId(tx: Tx, sourceId: bigint, serviceOrgId: number): Promise<bigint> {
@@ -1502,6 +1546,16 @@ export class HuasuHomeOrderSyncService {
     return null;
   }
 
+  /** 普通订单若由分期完款转入（order_installment_no 有值）则跳过，避免与分期履约重复。 */
+  private isConvertedInstallmentOrder(order: HuasuHomeOrder): boolean {
+    if (!Object.prototype.hasOwnProperty.call(order, 'order_installment_no')) {
+      return false;
+    }
+    const value = order.order_installment_no;
+    if (value == null) return false;
+    return String(value).trim() !== '';
+  }
+
   private parseDate(value?: string | null): Date | null {
     if (!value) return null;
     const d = new Date(value);
@@ -1566,6 +1620,7 @@ export class HuasuHomeOrderSyncService {
     });
     const data = {
       source_order_no: String(order.order_sn ?? ''),
+      source_updated_at: this.parseDate(order.updated_at) ?? this.parseDate(order.created_at),
       last_error_payload: JSON.stringify(order),
       sync_status: HUASU_HOME_ORDER_SYNC_STATUS.FAILED,
       last_sync_at: now,
@@ -1595,6 +1650,20 @@ export class HuasuHomeOrderSyncService {
   }
 
   private async resolveListUpdatedAt(sourceId: bigint): Promise<string> {
+    const oldestFailed = await this.prisma.hspsi_sale_order_source_mapping.findFirst({
+      where: {
+        source_id: sourceId,
+        source_order_type: HUASU_HOME_ORDER_TYPE.SALE_ORDER,
+        sync_status: HUASU_HOME_ORDER_SYNC_STATUS.FAILED,
+        source_updated_at: { not: null },
+        deleted_at: null,
+      },
+      orderBy: { source_updated_at: 'asc' },
+      select: { source_updated_at: true },
+    });
+    if (oldestFailed?.source_updated_at) {
+      return this.formatDateTime(oldestFailed.source_updated_at);
+    }
     const latest = await this.prisma.hspsi_sale_order_source_mapping.findFirst({
       where: {
         source_id: sourceId,
@@ -1617,12 +1686,44 @@ export class HuasuHomeOrderSyncService {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
 
+  private hasMoreOrderPages(
+    page: number,
+    pageSize: number,
+    listLength: number,
+    total: number | undefined,
+  ): boolean {
+    if (listLength <= 0) return false;
+    const totalCount = Number(total);
+    if (Number.isFinite(totalCount) && totalCount >= 0) {
+      return page * pageSize < totalCount;
+    }
+    return listLength >= pageSize;
+  }
+
+  private async withSyncLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running) {
+      throw new BadRequestException('华溯订单同步仍在进行，请稍后再试');
+    }
+    this.running = true;
+    try {
+      return await fn();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private normalizePageSize(pageSize?: number): number {
+    const raw = Number(pageSize ?? HUASU_HOME_ORDER_SYNC_DEFAULT_PAGE_SIZE);
+    if (!Number.isFinite(raw) || raw < 1) return HUASU_HOME_ORDER_SYNC_DEFAULT_PAGE_SIZE;
+    return Math.min(HUASU_HOME_ORDER_SYNC_MAX_PAGE_SIZE, Math.floor(raw));
+  }
+
   private async ensureDataSource(userId: string): Promise<bigint> {
-    const existing = await this.prisma.hspsi_sys_data_source.findFirst({
-      where: { code: HUASU_HOME_DATA_SOURCE_CODE, deleted_at: null },
+    const existing = await this.prisma.hspsi_sys_data_source.findUnique({
+      where: { code: HUASU_HOME_DATA_SOURCE_CODE },
     });
     if (existing) {
-      if (existing.status !== 1) {
+      if (existing.deleted_at || existing.status !== 1) {
         throw new BadRequestException('华溯之家数据源已停用或删除，请先在系统中启用');
       }
       return existing.id;

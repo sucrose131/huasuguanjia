@@ -6,6 +6,8 @@ import { buildSortedJson, generateNonce, loadPublicKey, signWithPublicKey } from
 import {
   HUASU_HOME_SUCCESS_CODE,
   type HuasuHomeProductListData,
+  type HuasuHomeConferenceOrderListData,
+  type HuasuHomeInstallmentOrderListData,
   type HuasuHomeOrder,
   type HuasuHomeOrderListData,
   type HuasuHomeOrderListQuery,
@@ -189,16 +191,72 @@ export class HuasuHomeService {
    * 获取订单列表
    *
    * POST /hspsi/order/list
-   * 必填 updated_at（Y-m-d H:i:s）；分页字段已作废
+   * 必填 page / page_size / updated_at（Y-m-d H:i:s）
    * 对应 docs/integrations/huasu-home/订单列表.md
    */
   async getOrderList(query: HuasuHomeOrderListQuery): Promise<HuasuHomeOrderListData> {
     if (!query?.updated_at) {
       throw new Error('华溯订单列表必须传 updated_at（格式 Y-m-d H:i:s）');
     }
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.max(1, Number(query.page_size) || 100);
     const response = await this.post<HuasuHomeOrderListData>('/hspsi/order/list', {
+      page,
+      page_size: pageSize,
       updated_at: String(query.updated_at),
     });
+    return response.data!;
+  }
+
+  /**
+   * 获取会议门票订单列表
+   *
+   * POST /hspsi/order-conference/list
+   * 必填 page / page_size / updated_at（Y-m-d H:i:s）
+   * 对应 docs/integrations/huasu-home/会议门票订单列表.md
+   */
+  async getConferenceOrderList(
+    query: HuasuHomeOrderListQuery,
+  ): Promise<HuasuHomeConferenceOrderListData> {
+    if (!query?.updated_at) {
+      throw new Error('华溯会议门票订单列表必须传 updated_at（格式 Y-m-d H:i:s）');
+    }
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.max(1, Number(query.page_size) || 100);
+    const response = await this.post<HuasuHomeConferenceOrderListData>(
+      '/hspsi/order-conference/list',
+      {
+        page,
+        page_size: pageSize,
+        updated_at: String(query.updated_at),
+      },
+    );
+    return response.data!;
+  }
+
+  /**
+   * 获取分期订单列表
+   *
+   * POST /hspsi/order-installment/list
+   * 必填 page / page_size / updated_at（Y-m-d H:i:s）
+   * 对应 docs/integrations/huasu-home/分期订单列表.md
+   */
+  async getInstallmentOrderList(
+    query: HuasuHomeOrderListQuery,
+  ): Promise<HuasuHomeInstallmentOrderListData> {
+    if (!query?.updated_at) {
+      throw new Error('华溯分期订单列表必须传 updated_at（格式 Y-m-d H:i:s）');
+    }
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.max(1, Number(query.page_size) || 100);
+    const response = await this.post<HuasuHomeInstallmentOrderListData>(
+      '/hspsi/order-installment/list',
+      {
+        page,
+        page_size: pageSize,
+        updated_at: String(query.updated_at),
+      },
+    );
     return response.data!;
   }
 

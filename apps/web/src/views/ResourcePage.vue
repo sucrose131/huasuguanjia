@@ -34,7 +34,16 @@ type Column = {
   width?: number;
   min?: number;
   kind?:
-    'date' | 'status' | 'org' | 'parent' | 'department' | 'position' | 'user' | 'customer' | 'dict';
+    | 'date'
+    | 'status'
+    | 'org'
+    | 'parent'
+    | 'department'
+    | 'position'
+    | 'user'
+    | 'customer'
+    | 'dict'
+    | 'levels';
 };
 const configs: Record<
   string,
@@ -88,6 +97,7 @@ const configs: Record<
       { key: 'mobile', label: '手机号', width: 130 },
       { key: 'organization', label: '所属组织', min: 170, kind: 'org' },
       { key: 'sourceType', label: '客户来源', width: 110, kind: 'dict' },
+      { key: 'levels', label: '身份', min: 180, kind: 'levels' },
       { key: 'relatedCustomer', label: '关联客户', min: 150, kind: 'customer' },
       { key: 'status', label: '状态', width: 90, kind: 'status' },
       { key: 'operatorName', label: '操作人', width: 110 },
@@ -465,6 +475,11 @@ function cell(row: any, col: Column) {
       ? `${row.relatedCustomer.name}（${row.relatedCustomer.mobile || '无手机号'}）`
       : '—';
   if (col.kind === 'dict') return dictLabel(col.key, row[col.key]);
+  if (col.kind === 'levels') {
+    const levels = row.levels;
+    if (!Array.isArray(levels) || levels.length === 0) return '—';
+    return levels.map((item: unknown) => String(item)).filter(Boolean).join(' / ');
+  }
   return display(row[col.key]);
 }
 watch(resource, async () => {

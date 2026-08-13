@@ -510,3 +510,78 @@ export interface ShifangQingyuanOrderConstantsData {
   order_behavior_logs: Record<string, ShifangQingyuanConstantField>;
   order_express: Record<string, ShifangQingyuanConstantField>;
 }
+
+/* ==================== 用户列表 / 详情 ==================== */
+
+/** 用户主信息（qimall_user 全量字段 + 补充字段，已过滤 password、transaction_password） */
+export interface ShifangQingyuanUser {
+  id: number;
+  mall_id: number;
+  username?: string;
+  mobile?: string;
+  nickname?: string;
+  birthday?: string;
+  parent_id?: number;
+  parent_mobile?: string;
+  parent_username?: string;
+  parent_nickname?: string;
+  status?: number;
+  level?: number;
+  level_name?: string;
+  created_at?: number;
+  updated_at?: number;
+  [key: string]: unknown;
+}
+
+/** 会员等级记录（qimall_user_level）；level=0 时为 null */
+export interface ShifangQingyuanUserLevel {
+  id: number;
+  mall_id: number;
+  level: number;
+  name: string;
+  status?: number;
+  [key: string]: unknown;
+}
+
+/** 云库存代理（全量字段 + level_name）；非代理为 null */
+export interface ShifangQingyuanCloudStockAgent {
+  id: number;
+  mall_id: number;
+  user_id: number;
+  level?: number;
+  level_name?: string;
+  status?: number;
+  [key: string]: unknown;
+}
+
+/** 列表/详情共用：每个用户含 user / user_level / cloud_stock_agent */
+export interface ShifangQingyuanUserItem {
+  user: ShifangQingyuanUser;
+  user_level: ShifangQingyuanUserLevel | null;
+  cloud_stock_agent: ShifangQingyuanCloudStockAgent | null;
+}
+
+export interface ShifangQingyuanUserListData {
+  list: ShifangQingyuanUserItem[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+  };
+}
+
+export interface ShifangQingyuanUserListQuery {
+  page?: number;
+  limit?: number;
+  keyword?: string;
+  level?: number;
+  status?: number;
+  start_time?: string;
+  end_time?: string;
+}
+
+/**
+ * 平台客户身份描述（hspsi_basic_customer.levels）
+ * 仅存中文标签数组，例如：["经销商","城市合伙人"]
+ */
+export type CustomerIdentityLevels = string[];

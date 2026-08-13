@@ -132,6 +132,8 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
   async function ensureOrderList() {
     if (!orderList?.list?.length) {
       orderList = await huasuHome.getOrderList({
+        page: 1,
+        page_size: 20,
         updated_at: '1970-01-01 00:00:00',
       });
     }
@@ -474,6 +476,8 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
     '能真实拉取订单列表',
     async () => {
       orderList = await huasuHome.getOrderList({
+        page: 1,
+        page_size: 20,
         updated_at: '1970-01-01 00:00:00',
       });
 
