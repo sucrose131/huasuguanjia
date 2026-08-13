@@ -533,6 +533,16 @@ export class HuasuHomeOrderSyncService {
       now: Date;
     },
   ): Promise<boolean> {
+    // 售后状态(7/8/6)由 ensureAfterSalesEvent 单独记录，避免重复
+    const status = Number(input.order.order_status);
+    if (
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
+      status === HUASU_HOME_ORDER_STATUS.REFUNDED
+    ) {
+      return false;
+    }
+
     const key = this.eventKey(
       input.sourceId,
       input.orderType,
@@ -771,7 +781,7 @@ export class HuasuHomeOrderSyncService {
             fact_pay_amount: this.dec(refundAmount),
             pay_date: input.now,
             request_key: key,
-            remark: '',
+            remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
             created_by: input.operatorId,
             updated_by: input.operatorId,
             created_at: input.now,
@@ -852,7 +862,7 @@ export class HuasuHomeOrderSyncService {
               unit_type: line.unitType,
               so_qty: line.quantity,
               exit_qty: line.quantity,
-              remark: '',
+              remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
             })),
           });
           await this.externalPosting.post(
@@ -867,7 +877,7 @@ export class HuasuHomeOrderSyncService {
               sourceNo: exitNo,
               operationBy: input.userId,
               idempotencyKey: `huasu-home-exit:${exitKey}:v1`,
-              remark: '',
+              remark: this.clip(input.order.after_sales?.reason || input.order.remark || '', 255),
               lines: returnLines.map((line) => ({
                 goodsId: line.goodsId,
                 skuId: line.skuId,
@@ -1426,8 +1436,22 @@ export class HuasuHomeOrderSyncService {
     kind: 'status' | 'after_sales',
     eventStatus?: number,
   ): string {
-    if (kind === 'after_sales' && eventStatus === 3) {
-      return this.clip(order.cancel_reason ?? '', 255);
+    if (kind === 'after_sales') {
+      if (eventStatus === 3) {
+        return this.clip(order.cancel_reason ?? '', 255);
+      }
+      const as = order.after_sales;
+      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
+    }
+    // kind === 'status'：售后相关状态优先取 after_sales.reason
+    const status = Number(order.order_status);
+    if (
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
+      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
+      status === HUASU_HOME_ORDER_STATUS.REFUNDED
+    ) {
+      const as = order.after_sales;
+      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
     }
     return this.clip(order.remark ?? '', 255);
   }

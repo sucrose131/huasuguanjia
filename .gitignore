@@ -33,3 +33,4 @@ database/*
 .vscode/
 *.tsbuildinfo
 apps/api/tsconfig.tsbuildinfo
+.claude/
