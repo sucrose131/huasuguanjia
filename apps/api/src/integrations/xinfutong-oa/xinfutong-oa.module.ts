@@ -9,6 +9,7 @@ import { XinfutongOaSyncService } from './sync/sync.service';
 import { AttachmentsModule } from '../../attachments/attachments.module';
 import { OaDocumentSubmissionService } from './approval/document-submission.service';
 import { OaStarterContextService } from './approval/starter-context.service';
+import { XinfutongOaOrgSyncJob } from './sync/org-sync-job.service';
 
 /**
  * 薪福通 OA 对接模块
@@ -32,6 +33,7 @@ import { OaStarterContextService } from './approval/starter-context.service';
     XinfutongOaSyncService,
     OaDocumentSubmissionService,
     OaStarterContextService,
+    XinfutongOaOrgSyncJob,
   ],
   exports: [
     XinfutongOaCredentialService,
@@ -42,6 +44,7 @@ import { OaStarterContextService } from './approval/starter-context.service';
     XinfutongOaSyncService,
     OaDocumentSubmissionService,
     OaStarterContextService,
+    XinfutongOaOrgSyncJob,
   ],
 })
 export class XinfutongOaModule {}

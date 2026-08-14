@@ -37,6 +37,17 @@ export interface MemberSyncStats {
 }
 
 /**
+ * 薪福通返回的排序号经常是字符串（如 "1"），Prisma Int 字段不能直接写入。
+ */
+export function toSort(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const i = Math.trunc(n);
+  if (i < 0) return 0;
+  return Math.min(i, 2147483647);
+}
+
+/**
  * 薪福通 OA 数据同步服务
  *
  * 职责：将薪福通组织/岗位/企业成员数据同步到本地基础数据表。
@@ -47,6 +58,7 @@ export interface MemberSyncStats {
  * - 组织按 idPath 深度排序后处理，确保父节点先于子节点写入
  * - 组织/部门的 path 在写入后基于本地主键和父节点 path 拼接
  * - 岗位/成员的所属组织关联每次同步先清除再重新写入
+ * - 不把全量记录放进同一个 Prisma 交互事务：默认 5 秒超时后连接不释放，会拖垮全站接口
  */
 @Injectable()
 export class XinfutongOaSyncService {
@@ -90,16 +102,7 @@ export class XinfutongOaSyncService {
       return depthA - depthB;
     });
 
-    await this.prisma.$transaction(async (tx) => {
-      /**
-       * 查找表：outer_ref_id => 节点信息
-       * - type: OA type（'D' 为部门，其他为组织）
-       * - local_id: 本地主键（org_id 或 dept_id）
-       * - org_id: 所属 org_id（组织为自身，部门为所属组织）
-       * - path: 自身完整路径（用于子节点拼接）
-       * - org_path: 所属组织路径
-       */
-      const lookup = new Map<
+    const lookup = new Map<
         string,
         { type: string; localId: bigint; orgId: bigint; path: string; orgPath: string }
       >();
@@ -137,12 +140,12 @@ export class XinfutongOaSyncService {
             parent_id: parentLocalId,
             name: record.name ?? '',
             dept_no: record.code ?? '',
-            sort: record.orderNumber ?? 0,
+            sort: toSort(record.orderNumber),
             status: status === 'active' ? 1 : 2,
             outer_ref_id: outerRefId,
           };
 
-          const existing = await tx.hspsi_basic_dept.findFirst({
+          const existing = await this.prisma.hspsi_basic_dept.findFirst({
             where: { outer_ref_id: outerRefId, account_set_id: credential.id },
             select: { dept_id: true, status: true },
           });
@@ -154,21 +157,21 @@ export class XinfutongOaSyncService {
             if (existing.status === 2) {
               updateData.status = 2;
             }
-            await tx.hspsi_basic_dept.update({
+            await this.prisma.hspsi_basic_dept.update({
               where: { dept_id: existing.dept_id },
               data: updateData,
             });
             deptId = existing.dept_id;
             stats.dept_updated++;
           } else {
-            const created = await tx.hspsi_basic_dept.create({ data });
+            const created = await this.prisma.hspsi_basic_dept.create({ data });
             deptId = created.dept_id;
             stats.dept_inserted++;
           }
 
           // 部门 path：父为部门则继承父部门 path，否则为根路径 '/'
           const path = parentLocalId > 0n ? parentPath : '/';
-          await tx.hspsi_basic_dept.update({
+          await this.prisma.hspsi_basic_dept.update({
             where: { dept_id: deptId },
             data: { path },
           });
@@ -201,7 +204,7 @@ export class XinfutongOaSyncService {
             org_level: this.mapOrgLevel(type),
             short_name: record.name ?? '',
             contact_name: leader.name ?? '',
-            sort: record.orderNumber ?? 0,
+            sort: toSort(record.orderNumber),
             operation_status: status === 'active' ? 1 : 2,
             established_at: effectiveDate ? new Date(effectiveDate) : null,
             outer_ref_id: outerRefId,
@@ -210,7 +213,7 @@ export class XinfutongOaSyncService {
             remark: record.remark ?? '',
           };
 
-          const existing = await tx.hspsi_basic_organization.findFirst({
+          const existing = await this.prisma.hspsi_basic_organization.findFirst({
             where: { outer_ref_id: outerRefId, account_set_id: credential.id },
             select: { org_id: true, operation_status: true },
           });
@@ -222,21 +225,21 @@ export class XinfutongOaSyncService {
             if (existing.operation_status === 2) {
               updateData.operation_status = 2;
             }
-            await tx.hspsi_basic_organization.update({
+            await this.prisma.hspsi_basic_organization.update({
               where: { org_id: existing.org_id },
               data: updateData,
             });
             orgId = existing.org_id;
             stats.org_updated++;
           } else {
-            const created = await tx.hspsi_basic_organization.create({ data });
+            const created = await this.prisma.hspsi_basic_organization.create({ data });
             orgId = created.org_id;
             stats.org_inserted++;
           }
 
           // 组织 path：父组织的完整路径（不含自身），根组织为 '/'
           const path = parentOrgIdForOrg > 0n ? parentOrgPath : '/';
-          await tx.hspsi_basic_organization.update({
+          await this.prisma.hspsi_basic_organization.update({
             where: { org_id: orgId },
             data: { path },
           });
@@ -252,7 +255,6 @@ export class XinfutongOaSyncService {
           });
         }
       }
-    });
 
     return stats;
   }
@@ -311,8 +313,7 @@ export class XinfutongOaSyncService {
       return stats;
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const record of records) {
+    for (const record of records) {
         const outerRefId = record.sequenceNumber ?? '';
         if (!outerRefId) continue;
 
@@ -323,31 +324,31 @@ export class XinfutongOaSyncService {
           account_set_id: credential.id,
           app_id: credential.appId,
           remark: record.remark ?? '',
-          sort: record.orderNumber ?? 0,
+          sort: toSort(record.orderNumber),
         };
 
         // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
-        const existing = await tx.hspsi_basic_position.findFirst({
+        const existing = await this.prisma.hspsi_basic_position.findFirst({
           where: { outer_ref_id: outerRefId, account_set_id: credential.id },
           select: { id: true },
         });
 
         let positionId: bigint;
         if (existing) {
-          await tx.hspsi_basic_position.update({
+          await this.prisma.hspsi_basic_position.update({
             where: { id: existing.id },
             data,
           });
           positionId = existing.id;
           stats.position_updated++;
         } else {
-          const created = await tx.hspsi_basic_position.create({ data });
+          const created = await this.prisma.hspsi_basic_position.create({ data });
           positionId = created.id;
           stats.position_inserted++;
         }
 
         // 同步所属组织关系：先删除当前岗位的旧关联，再重新写入
-        await tx.hspsi_basic_position_belongs.deleteMany({
+        await this.prisma.hspsi_basic_position_belongs.deleteMany({
           where: { position_id: positionId },
         });
 
@@ -357,13 +358,13 @@ export class XinfutongOaSyncService {
           if (!orgOuterRefId) continue;
 
           // 判断组织类型：在组织表中存在为组织（1），否则为部门（2）
-          const orgExists = await tx.hspsi_basic_organization.findFirst({
+          const orgExists = await this.prisma.hspsi_basic_organization.findFirst({
             where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
             select: { org_id: true },
           });
           const orgType = orgExists ? 1 : 2;
 
-          await tx.hspsi_basic_position_belongs.create({
+          await this.prisma.hspsi_basic_position_belongs.create({
             data: {
               position_id: positionId,
               outer_ref_id: orgOuterRefId,
@@ -374,8 +375,7 @@ export class XinfutongOaSyncService {
           });
           stats.belongs_inserted++;
         }
-      }
-    });
+    }
 
     return stats;
   }
@@ -417,8 +417,7 @@ export class XinfutongOaSyncService {
 
     const now = new Date();
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const record of records) {
+    for (const record of records) {
         const outerRefId = record.memberId ?? '';
         if (!outerRefId) continue;
 
@@ -426,7 +425,7 @@ export class XinfutongOaSyncService {
         const postOuterRefId = record.post?.id ?? '';
         let postId = 0n;
         if (postOuterRefId) {
-          const position = await tx.hspsi_basic_position.findFirst({
+          const position = await this.prisma.hspsi_basic_position.findFirst({
             where: { outer_ref_id: postOuterRefId, account_set_id: credential.id },
             select: { id: true },
           });
@@ -457,7 +456,7 @@ export class XinfutongOaSyncService {
         };
 
         // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
-        const existing = await tx.hspsi_basic_staff.findFirst({
+        const existing = await this.prisma.hspsi_basic_staff.findFirst({
           where: { outer_ref_id: outerRefId, account_set_id: credential.id },
           select: { id: true },
         });
@@ -465,14 +464,14 @@ export class XinfutongOaSyncService {
         let staffId: bigint;
         if (existing) {
           // 更新时不覆盖 created_at
-          await tx.hspsi_basic_staff.update({
+          await this.prisma.hspsi_basic_staff.update({
             where: { id: existing.id },
             data: { ...data, updated_at: now },
           });
           staffId = existing.id;
           stats.staff_updated++;
         } else {
-          const created = await tx.hspsi_basic_staff.create({
+          const created = await this.prisma.hspsi_basic_staff.create({
             data: { ...data, created_at: now, updated_at: now },
           });
           staffId = created.id;
@@ -480,7 +479,7 @@ export class XinfutongOaSyncService {
         }
 
         // 同步组织关联：先删除当前员工的旧关联，再重新写入
-        await tx.hspsi_basic_staff_organizations.deleteMany({
+        await this.prisma.hspsi_basic_staff_organizations.deleteMany({
           where: { staff_id: staffId },
         });
 
@@ -490,7 +489,7 @@ export class XinfutongOaSyncService {
           if (!orgOuterRefId) continue;
 
           // 先查组织表（限定 account_set_id），存在则为组织（org_type=1）
-          const orgRow = await tx.hspsi_basic_organization.findFirst({
+          const orgRow = await this.prisma.hspsi_basic_organization.findFirst({
             where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
             select: { org_id: true },
           });
@@ -502,7 +501,7 @@ export class XinfutongOaSyncService {
             orgType = 1;
           } else {
             // 组织表中不存在，则查部门表（限定 account_set_id），存在则为部门（org_type=2）
-            const deptRow = await tx.hspsi_basic_dept.findFirst({
+            const deptRow = await this.prisma.hspsi_basic_dept.findFirst({
               where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
               select: { dept_id: true },
             });
@@ -517,7 +516,7 @@ export class XinfutongOaSyncService {
           // 类型映射：PRIMARY→1（主部门），其他→2（兼任部门）
           const type = org.type === 'PRIMARY' ? 1 : 2;
 
-          await tx.hspsi_basic_staff_organizations.create({
+          await this.prisma.hspsi_basic_staff_organizations.create({
             data: {
               org_id: localOrgId,
               staff_id: staffId,
@@ -531,8 +530,7 @@ export class XinfutongOaSyncService {
           });
           stats.org_inserted++;
         }
-      }
-    });
+    }
 
     return stats;
   }

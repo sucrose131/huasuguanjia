@@ -8,15 +8,22 @@ import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import ScheduledTaskPanel from '@/views/ScheduledTaskPanel.vue';
 
-type Resource = 'roles' | 'users' | 'config';
+type Resource = 'roles' | 'users' | 'config' | 'tasks';
 type Mode = 'create' | 'edit' | 'view';
 
 const route = useRoute();
 const auth = useAuthStore();
 const resource = computed<Resource>(() => String(route.params.resource) as Resource);
 const title = computed(() =>
-  resource.value === 'roles' ? '角色管理' : resource.value === 'users' ? '用户管理' : '系统配置',
+  resource.value === 'roles'
+    ? '角色管理'
+    : resource.value === 'users'
+      ? '用户管理'
+      : resource.value === 'tasks'
+        ? '任务管理'
+        : '系统配置',
 );
 const can = (permission: string) =>
   !!auth.user?.permissions?.some((item) => item === '*' || item === permission);
@@ -289,7 +296,7 @@ async function removeMenu(row: any) {
 watch(resource, () => {
   keyword.value = '';
   statusFilter.value = '';
-  load();
+  if (resource.value !== 'tasks') load();
 });
 watch(
   () => form.orgId,
@@ -302,6 +309,7 @@ watch(
   },
 );
 onMounted(async () => {
+  if (resource.value === 'tasks') return;
   await loadDictionaries();
   await load();
 });
@@ -312,10 +320,16 @@ onMounted(async () => {
     <header class="page-head">
       <div>
         <h2>{{ title }}</h2>
-        <p class="page-subtitle">配置组织权限、用户和系统级业务规则。</p>
+        <p class="page-subtitle">{{
+          resource === 'tasks'
+            ? '配置同步任务开关和 Linux Cron 执行时间，保存后无需重启。'
+            : '配置组织权限、用户和系统级业务规则。'
+        }}</p>
       </div>
     </header>
 
+    <ScheduledTaskPanel v-if="resource === 'tasks'" />
+    <template v-else>
     <div class="panel">
       <SummaryStrip :items="summaryItems" />
       <div class="system-toolbar">
@@ -842,6 +856,7 @@ onMounted(async () => {
         }}</el-button></template
       >
     </el-dialog>
+    </template>
   </section>
 </template>
 

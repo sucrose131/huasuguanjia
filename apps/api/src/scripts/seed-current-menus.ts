@@ -192,6 +192,7 @@ const structure = [
       ['角色管理', 'system:1:view', '/system/roles'],
       ['用户管理', 'system:2:view', '/system/users'],
       ['系统配置', 'system:3:view', '/system/config'],
+      ['任务管理', 'system:4:view', '/system/tasks'],
     ],
   },
 ] as const;

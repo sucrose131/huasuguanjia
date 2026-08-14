@@ -17,6 +17,7 @@ import { DocumentTraceModule } from './document-trace/document-trace.module';
 import { BusinessNumberModule } from './business-number/business-number.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { AttachmentsModule } from './attachments/attachments.module';
+import { ScheduledTaskModule } from './scheduled-task/scheduled-task.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { AttachmentsModule } from './attachments/attachments.module';
     DashboardModule,
     DocumentTraceModule,
     IntegrationsModule,
+    ScheduledTaskModule,
   ],
   controllers: [HealthController],
 })
