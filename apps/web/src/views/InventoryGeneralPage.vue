@@ -124,6 +124,11 @@ async function loadSelectableRows() {
       })) as Row[]);
 }
 
+async function organizationChanged() {
+  form.warehouseId = '';
+  await loadSelectableRows();
+}
+
 function addLine() {
   form.lines.push({
     selectKey: '',
@@ -209,6 +214,8 @@ async function save() {
     ElMessage.success(`${result.message}：${result.businessNo}`);
     dialog.value = false;
     await load();
+  } catch {
+    // 请求失败时 axios 拦截器已弹出错误提示，此处静默处理，避免产生未捕获的 Promise 拒绝
   } finally {
     saving.value = false;
   }
@@ -335,7 +342,7 @@ onMounted(async () => {
               check-strictly
               node-key="value"
               :props="{ label: 'label', children: 'children' }"
-              @change="loadSelectableRows"
+              @change="organizationChanged"
           /></el-form-item>
           <el-form-item label="仓库" required
             ><el-select v-model="form.warehouseId" filterable @change="loadSelectableRows"

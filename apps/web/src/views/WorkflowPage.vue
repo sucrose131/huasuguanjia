@@ -286,6 +286,16 @@ async function loadRequisitionFormOptions(orgId: unknown) {
   options.requisitionDepts = result.departments ?? [];
   options.employees = result.employees ?? [];
 }
+const optionWarehouseType = (item: B) =>
+  Number(item?.warehouseType ?? item?.raw?.warehouseType ?? 0);
+const lineWarehouseType = (line: B) =>
+  Number(line?.categoryWarehouseType ?? goodsOf(line)?.categoryWarehouseType ?? 0);
+const documentWarehouseTypes = computed(() => [
+  ...new Set((form.details ?? []).map(lineWarehouseType).filter(Boolean)),
+]);
+const documentWarehouseType = computed(() =>
+  documentWarehouseTypes.value.length === 1 ? documentWarehouseTypes.value[0] : 0,
+);
 const requisitionWarehouseOptions = computed<B[]>(() => {
   const result =
     group.value === 'requisitions'
@@ -300,13 +310,13 @@ const requisitionWarehouseOptions = computed<B[]>(() => {
   );
   if (selected && !result.some((item: B) => String(item.value) === String(selected.value)))
     result.unshift(selected);
-  return result;
+  return result.filter(
+    (item: B) =>
+      !documentWarehouseType.value || optionWarehouseType(item) === documentWarehouseType.value,
+  );
 });
 const lineGoodsOptions = computed<B[]>(() =>
-  isBom.value || isOrder.value || key.value === 'requisitions/applications' ||
-  (key.value === 'requisitions/outputs' && form.directOutput)
-    ? (options.contextGoods ?? [])
-    : options.goods,
+  isBom.value ? (options.contextGoods ?? []) : options.goods,
 );
 async function loadContextGoods() {
   if (!form.orgId || !form.warehouseId) {
@@ -328,13 +338,7 @@ async function loadContextGoods() {
 }
 async function businessWarehouseChanged() {
   refreshAvailableStocks();
-  if (
-    !isBom.value &&
-    !isOrder.value &&
-    key.value !== 'requisitions/applications' &&
-    !(key.value === 'requisitions/outputs' && form.directOutput)
-  )
-    return;
+  if (!isBom.value) return;
   form.details = [blank()];
   await loadContextGoods();
 }
@@ -896,13 +900,7 @@ async function open(row?: B, view = false) {
       });
     }
     if (isPlan.value && form.goodsId) await loadPlanOrderOptions();
-    if (
-      isBom.value ||
-      isOrder.value ||
-      key.value === 'requisitions/applications' ||
-      (key.value === 'requisitions/outputs' && form.directOutput)
-    )
-      await loadContextGoods();
+    if (isBom.value) await loadContextGoods();
   }
   if (group.value === 'requisitions') await loadRequisitionFormOptions(form.orgId);
   refreshAvailableStocks();
@@ -1110,6 +1108,8 @@ async function save(submit = true) {
     query.page = 1;
     dialog.value = false;
     await load();
+  } catch {
+    // 请求失败时 axios 拦截器已弹出错误提示，此处静默处理，避免产生未捕获的 Promise 拒绝
   } finally {
     saving.value = false;
   }

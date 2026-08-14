@@ -533,7 +533,25 @@ async function loadOrganizationOptions(orgId: unknown) {
 async function organizationChanged(orgId: unknown) {
   form.deptId = '';
   form.warehouseId = '';
+  if (Array.isArray(form.details)) {
+    form.details = ['applications', 'orders'].includes(resource.value) ? [blankLine()] : [];
+  }
   await loadOrganizationOptions(orgId);
+}
+function warehouseChanged() {
+  if (!Array.isArray(form.details)) return;
+  const warehouse = filteredWarehouses.value.find(
+    (item) => String(item.value) === String(form.warehouseId),
+  );
+  const type = optionWarehouseType(warehouse);
+  const kept = (form.details as any[]).filter(
+    (line) => !type || !lineWarehouseType(line) || lineWarehouseType(line) === type,
+  );
+  form.details = kept.length
+    ? kept
+    : ['applications', 'orders'].includes(resource.value)
+      ? [blankLine()]
+      : [];
 }
 function blankLine() {
   return {
@@ -1191,6 +1209,8 @@ async function save(submit = false) {
     );
     dialog.value = false;
     await Promise.all([load(), loadOptions()]);
+  } catch {
+    // 请求失败时 axios 拦截器已弹出错误提示，此处静默处理，避免产生未捕获的 Promise 拒绝
   } finally {
     saving.value = false;
   }
@@ -1305,6 +1325,8 @@ async function confirmOrderPayment() {
     ElMessage.success(result.message ?? '采购付款已生效');
     dialog.value = false;
     await Promise.all([load(), loadOptions()]);
+  } catch {
+    // 请求失败时 axios 拦截器已弹出错误提示，此处静默处理，避免产生未捕获的 Promise 拒绝
   } finally {
     saving.value = false;
   }
@@ -2373,7 +2395,7 @@ onMounted(async () => {
                     :label="item.label"
                     :value="item.value" /></el-select></el-form-item
               ><el-form-item label="目标仓库" prop="warehouseId"
-                ><el-select v-model="form.warehouseId" filterable :disabled="!form.orgId"
+                ><el-select v-model="form.warehouseId" filterable :disabled="!form.orgId" @change="warehouseChanged"
                   ><el-option
                     v-for="item in compatibleWarehouses"
                     :key="item.value"
@@ -2416,6 +2438,7 @@ onMounted(async () => {
                 ><el-select
                   v-model="form.warehouseId"
                   :disabled="!!form.applicationId || !form.orgId"
+                  @change="warehouseChanged"
                   ><el-option
                     v-for="item in compatibleWarehouses"
                     :key="item.value"
@@ -2496,6 +2519,7 @@ onMounted(async () => {
                 ><el-select
                   v-model="form.warehouseId"
                   filterable
+                  @change="warehouseChanged"
                   :disabled="!form.orgId || mode === 'view'"
                   placeholder="请选择同类型仓库"
                   ><el-option

@@ -65,6 +65,7 @@ export class BusinessMasterDataService {
       queryCode: item.query_code,
       goodsName: item.goods_name,
       categoryId: item.goods_catg_id,
+      categoryWarehouseType: warehouse.warehouse_type,
     }));
   }
 
@@ -85,6 +86,13 @@ export class BusinessMasterDataService {
       },
     });
     const categoryById = new Map(categories.map((item) => [String(item.goods_catg_id), item]));
+    const types = [
+      ...new Set(
+        goods.map((item) => categoryById.get(String(item.goods_catg_id))!.warehouse_type),
+      ),
+    ];
+    if (types.length > 1)
+      throw new BadRequestException('同一单据只能包含相同仓库类型的商品，请拆分单据');
     for (const item of goods) {
       const category = categoryById.get(String(item.goods_catg_id))!;
       if (category.warehouse_type !== warehouse.warehouse_type)
