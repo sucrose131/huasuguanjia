@@ -37,7 +37,7 @@ const routes = [
       { path: 'production/:resource', component: WorkflowPage },
       { path: 'sales/:resource', component: WorkflowPage },
       { path: 'requisitions/:resource', component: WorkflowPage },
-      { path: 'system/:resource(roles|users|config)', component: SystemPage },
+      { path: 'system/:resource(roles|users|config|tasks)', component: SystemPage },
       {
         path: 'reports/:report(products|vendors|customers|purchase-detail|purchase-summary|production-detail|production-summary|sales-detail|discount-detail|sales-summary|requisition-detail|requisition-summary|inbound-detail|outbound-detail|loss-detail|overflow-detail|inventory-summary|check-summary|batch-inbound|purchase-payment|purchase-payable)',
         component: ReportPage,

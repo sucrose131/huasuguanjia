@@ -6,6 +6,7 @@ import { XinfutongOaFormService } from './form/form.service';
 import { XinfutongOaApprovalService } from './approval/approval.service';
 import { XinfutongOaApprovalCallbackService } from './approval/approval-callback.service';
 import { XinfutongOaSyncService } from './sync/sync.service';
+import { XinfutongOaOrgSyncJob } from './sync/org-sync-job.service';
 
 /**
  * 薪福通 OA 对接模块
@@ -26,6 +27,7 @@ import { XinfutongOaSyncService } from './sync/sync.service';
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,
+    XinfutongOaOrgSyncJob,
   ],
   exports: [
     XinfutongOaCredentialService,
@@ -34,6 +36,7 @@ import { XinfutongOaSyncService } from './sync/sync.service';
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,
+    XinfutongOaOrgSyncJob,
   ],
 })
 export class XinfutongOaModule {}

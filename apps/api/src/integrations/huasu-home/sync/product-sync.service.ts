@@ -38,6 +38,7 @@ type Tx = Prisma.TransactionClient;
 @Injectable()
 export class HuasuHomeProductSyncService {
   private static readonly logger = new Logger(HuasuHomeProductSyncService.name);
+  private running = false;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -48,6 +49,18 @@ export class HuasuHomeProductSyncService {
    * 手动触发全量商品同步
    */
   async syncProducts(userId = '0'): Promise<HuasuHomeProductSyncStats> {
+    if (this.running) {
+      throw new BadRequestException('华溯商品同步仍在进行，请稍后再试');
+    }
+    this.running = true;
+    try {
+      return await this.syncProductsUnlocked(userId);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async syncProductsUnlocked(userId: string): Promise<HuasuHomeProductSyncStats> {
     const stats = this.emptyStats();
     const data = await this.huasuHome.getProductList();
     const products = data.products ?? [];
