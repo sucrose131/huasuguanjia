@@ -25,7 +25,7 @@ export const OA_FORM_MAPPINGS = {
   purchase_application: {
     businessType: 'purchase_application',
     formKey: 'AAC15400_NFORM_380054577920868353',
-    formId: '380192373354790912',
+    formId: '380224042294837248',
     fields: {
       reason: field('FinInput', 'dhi6d3c7oecn'),
       warehouse: field('FinInput', 'iluym6g473ox'),
@@ -64,7 +64,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_transfer: {
     businessType: 'inventory_transfer',
     formKey: 'AAC15400_NFORM_380056143439593472',
-    formId: '380193193693544450',
+    formId: '380224113162059776',
     fields: {
       transferDate: field('FinDatePicker', '2yr7fsze3kf9'),
       reason: field('FinTextArea', '2529b3mgtnva'),
@@ -87,7 +87,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_adjust: {
     businessType: 'inventory_adjust',
     formKey: 'AAC15400_NFORM_380056968068399104',
-    formId: '380056968066826240',
+    formId: '380224201209085952',
     fields: {
       applicationDate: field('FinDatePicker', '2yr7fsze3kf9'),
       reason: field('FinInput', 'iluym6g473ox'),
@@ -108,7 +108,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_check: {
     businessType: 'inventory_check',
     formKey: 'AAC15400_NFORM_380057975245897728',
-    formId: '380057975236657152',
+    formId: '380224310730555392',
     fields: {
       checkType: field('FinInput', 'eeujb69pcrtx'),
       checkDate: field('FinDatePicker', '2yr7fsze3kf9'),
@@ -138,7 +138,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_loss: {
     businessType: 'inventory_loss',
     formKey: 'AAC15400_NFORM_380058048260145259',
-    formId: '380064275954597888',
+    formId: '380224383746703360',
     fields: {
       businessCategory: field('FinInput', 'eeujb69pcrtx'),
       lossType: field('FinInput', '64z8akrtng2a'),
@@ -165,7 +165,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_loss_output: {
     businessType: 'inventory_loss_output',
     formKey: 'AAC15400_NFORM_380058774110011394',
-    formId: '380192560184557568',
+    formId: '380224497561829376',
     fields: {
       lossType: field('FinInput', 'ap7cuxi0ux2h'),
       lossDate: field('FinDatePicker', '02c6unm5y727'),
@@ -191,7 +191,7 @@ export const OA_FORM_MAPPINGS = {
   inventory_overflow: {
     businessType: 'inventory_overflow',
     formKey: 'AAC15400_NFORM_380058814911807488',
-    formId: '380192624609067008',
+    formId: '380224564133363712',
     fields: {
       overflowType: field('FinInput', 'jdywqu2fs3n6'),
       overflowDate: field('FinDatePicker', '02c6unm5y727'),
@@ -216,7 +216,7 @@ export const OA_FORM_MAPPINGS = {
   production_plan: {
     businessType: 'production_plan',
     formKey: 'AAC15400_NFORM_380059016770420777',
-    formId: '380192693329854464',
+    formId: '380424782624260096',
     fields: {
       organization: field('FinInput', 'iluym6g473ox'),
       product: field('FinInput', '8aqmty9l4urc'),
@@ -261,7 +261,7 @@ export const OA_FORM_MAPPINGS = {
   sales_order: {
     businessType: 'sales_order',
     formKey: 'AAC15400_NFORM_380061383308804096',
-    formId: '380061383294124032',
+    formId: '380425321642459136',
     fields: {
       organization: field('FinInput', 'vwzkeepgpoz8'),
       customerName: field('FinInput', 'zewg1fv7smsj'),

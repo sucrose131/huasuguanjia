@@ -85,4 +85,34 @@ describe('BusinessMasterDataService', () => {
       BadRequestException,
     );
   });
+
+  it('rejects goods with different warehouse types and asks to split the document', async () => {
+    const { service } = fixture({
+      hspsi_goods_info: {
+        findMany: vi.fn().mockResolvedValue([
+          { goods_id: 101n, org_id: 0n, goods_catg_id: 27n, goods_name: '商品A' },
+          { goods_id: 102n, org_id: 0n, goods_catg_id: 28n, goods_name: '商品B' },
+        ]),
+      },
+      hspsi_goods_info_category: {
+        findMany: vi.fn().mockResolvedValue([
+          { goods_catg_id: 27n, warehouse_type: 1, status: 1 },
+          { goods_catg_id: 28n, warehouse_type: 2, status: 1 },
+        ]),
+      },
+    });
+
+    await expect(
+      service.assertGoodsLines(9, 15, [{ goodsId: 101 }, { goodsId: 102 }]),
+    ).rejects.toThrow('同一单据只能包含相同仓库类型的商品，请拆分单据');
+  });
+
+  it('goodsOptions includes categoryWarehouseType for frontend linkage', async () => {
+    const { service } = fixture();
+
+    const result = await service.goodsOptions(9, 15);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ categoryWarehouseType: 2 });
+  });
 });
