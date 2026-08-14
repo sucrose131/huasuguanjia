@@ -556,6 +556,7 @@ describe('PurchaseService production-shortage guards', () => {
     const planUpdate = vi.fn();
     const tx = {
       $queryRaw: vi.fn(),
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
       hspsi_purchase_approve: {
         findFirst: vi.fn().mockResolvedValue({
           pur_id: 7n,
@@ -769,6 +770,7 @@ describe('PurchaseService production-shortage guards', () => {
   it('does not save over an application that is already approved when the row lock is acquired', async () => {
     const tx = {
       $queryRaw: vi.fn(),
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
       hspsi_purchase_approve: {
         findFirst: vi.fn().mockResolvedValue({
           pur_id: 7n,
@@ -913,6 +915,7 @@ describe('PurchaseService production-shortage guards', () => {
     ];
     const tx = {
       $queryRaw: vi.fn(),
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
       hspsi_purchase_approve: {
         findFirst: vi.fn().mockResolvedValue({
           pur_id: 7n,

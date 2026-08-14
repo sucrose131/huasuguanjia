@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
 type B = Record<string, any>;
 const auth = useAuthStore();
@@ -23,6 +24,9 @@ const form = ref<B>({
   remark: '',
 });
 const options = ref<B>({ orgs: [], warehouses: [], goods: [], destinations: [] });
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.value.orgs as OrganizationTreeNode[]),
+);
 
 const visible = computed({ get: () => props.modelValue, set: (v) => emit('update:modelValue', v) });
 const warehouseOptions = computed(() =>
@@ -237,9 +241,16 @@ watch(() => form.value.warehouseId, reloadStocks);
       <div class="lab-hdr-grid">
         <div class="lab-fld">
           <span class="lab-fld-lb">所属组织</span
-          ><el-select v-model="form.orgId" filterable size="small" @change="organizationChanged"
-            ><el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value"
-          /></el-select>
+          ><el-tree-select
+            v-model="form.orgId"
+            :data="organizationTree"
+            filterable
+            check-strictly
+            node-key="value"
+            :props="{ label: 'label', children: 'children' }"
+            size="small"
+            @change="organizationChanged"
+          />
         </div>
         <div class="lab-fld">
           <span class="lab-fld-lb">仓库</span

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { InventoryLine, InventoryPostingService } from './inventory-posting.service';
@@ -851,66 +852,96 @@ export class InventoryService {
     return { id, message: '删除成功' };
   }
   async approveTransfer(id: string, approved: boolean, comment: string, userId: string) {
-    const item = await this.transfer(id);
-    if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
+    return this.prisma.$transaction((tx) =>
+      this.applyTransferApproval(tx, BigInt(id), approved, comment, userId, false),
+    );
+  }
+
+  private async applyTransferApproval(
+    tx: Prisma.TransactionClient,
+    transferId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(transferId);
+    await tx.$queryRaw`SELECT transfer_id FROM hspsi_inventory_transfer WHERE transfer_id=${transferId} FOR UPDATE`;
+    const item = await tx.hspsi_inventory_transfer.findFirst({
+      where: { transfer_id: transferId, deleted_at: null },
+    });
+    if (!item || item.status !== 1 || item.approve_status !== 0)
       throw new BadRequestException('仅待审批调拨单可操作');
-    await this.validateTransferWarehouses(item);
-    await this.prisma.$transaction(async (tx) => {
-      if (approved) {
-        const lines: InventoryLine[] = item.details.map((d: Body) => ({
-          goodsId: d.goodsId,
-          skuId: d.skuId,
-          batchNo: d.batchNo,
-          unitType: d.unitType,
-          quantity: String(d.quantity),
-        }));
-        await this.posting.post(
-          {
-            orgId: item.org_id,
-            warehouseId: item.warehouse_id,
-            direction: -1,
-            operationType: 2,
-            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
-            sourceId: item.transfer_id,
-            sourceType: 'inventory_transfer',
-            sourceNo: item.transfer_no,
-            operationBy: userId,
-            idempotencyKey: `transfer:${id}:out`,
-            remark: '库存调拨出库',
-            lines,
-          },
-          tx,
-        );
-        await this.posting.post(
-          {
-            orgId: item.to_org_id,
-            warehouseId: item.to_warehouse_id,
-            direction: 1,
-            operationType: 1,
-            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
-            sourceId: item.transfer_id,
-            sourceType: 'inventory_transfer',
-            sourceNo: item.transfer_no,
-            operationBy: userId,
-            idempotencyKey: `transfer:${id}:in`,
-            remark: '库存调拨入库',
-            lines,
-          },
-          tx,
-        );
-      }
-      await tx.hspsi_inventory_transfer.update({
-        where: { transfer_id: item.transfer_id },
-        data: {
-          status: approved ? 2 : 0,
-          approve_status: approved ? 1 : 2,
-          approve_comment: comment,
-          approve_by: BigInt(userId),
-          approve_date: new Date(),
-          send_date: approved ? new Date() : null,
-          receive_date: approved ? new Date() : null,
+    if (!fromOa) {
+      const active = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'inventory_transfer',
+          business_id: transferId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
         },
       });
+      if (active) throw new BadRequestException('该调拨单正在OA审批，不能在本系统审批');
+    }
+    const details = await tx.hspsi_inventory_transfer_detail.findMany({
+      where: { transfer_id: transferId },
+    });
+    if (!details.length) throw new BadRequestException('调拨单没有商品明细');
+    const actor = fromOa ? String(item.created_by) : userId;
+    if (approved) {
+      const lines: InventoryLine[] = details.map((d) => ({
+        goodsId: d.goods_id,
+        skuId: d.sku_id,
+        batchNo: d.batch_no,
+        unitType: d.unit_type,
+        quantity: String(d.transfer_qty),
+      }));
+      await this.posting.post(
+        {
+          orgId: item.org_id,
+          warehouseId: item.warehouse_id,
+          direction: -1,
+          operationType: 2,
+          inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
+          sourceId: item.transfer_id,
+          sourceType: 'inventory_transfer',
+          sourceNo: item.transfer_no,
+          operationBy: actor,
+          idempotencyKey: `transfer:${id}:out`,
+          remark: '库存调拨出库',
+          lines,
+        },
+        tx,
+      );
+      await this.posting.post(
+        {
+          orgId: item.to_org_id,
+          warehouseId: item.to_warehouse_id,
+          direction: 1,
+          operationType: 1,
+          inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
+          sourceId: item.transfer_id,
+          sourceType: 'inventory_transfer',
+          sourceNo: item.transfer_no,
+          operationBy: actor,
+          idempotencyKey: `transfer:${id}:in`,
+          remark: '库存调拨入库',
+          lines,
+        },
+        tx,
+      );
+    }
+    await tx.hspsi_inventory_transfer.update({
+      where: { transfer_id: item.transfer_id },
+      data: {
+        status: approved ? 2 : 0,
+        approve_status: approved ? 1 : 2,
+        approve_comment: comment,
+        approve_by: fromOa ? 0n : BigInt(userId),
+        approve_date: new Date(),
+        send_date: approved ? new Date() : null,
+        receive_date: approved ? new Date() : null,
+      },
     });
     return { id, message: approved ? '调拨审批通过，双边库存已过账' : '调拨已驳回' };
   }
@@ -1119,52 +1150,283 @@ export class InventoryService {
     return { id, message: '已提交审批' };
   }
   async approveAdjustment(id: string, approved: boolean, comment: string, userId: string) {
-    const item = await this.adjustment(id);
-    if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
+    return this.prisma.$transaction((tx) =>
+      this.applyAdjustmentApproval(tx, BigInt(id), approved, comment, userId, false),
+    );
+  }
+
+  private async applyAdjustmentApproval(
+    tx: Prisma.TransactionClient,
+    adjustId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(adjustId);
+    await tx.$queryRaw`SELECT adjust_id FROM hspsi_inventory_adjust WHERE adjust_id=${adjustId} FOR UPDATE`;
+    const item = await tx.hspsi_inventory_adjust.findFirst({
+      where: { adjust_id: adjustId, deleted_at: null },
+    });
+    if (!item || item.status !== 1 || item.approve_status !== 0)
       throw new BadRequestException('仅待审批调整单可操作');
-    await this.prisma.$transaction(async (tx) => {
-      if (approved)
-        for (const l of item.details) {
-          const wh = await tx.hspsi_basic_warehouse.findUniqueOrThrow({
-            where: { warehouse_id: BigInt(l.warehouseId) },
-          });
-          await this.posting.post(
-            {
-              orgId: wh.org_id,
-              warehouseId: l.warehouseId,
-              direction: Number(l.adjustType) === 1 ? 1 : -1,
-              operationType: Number(l.adjustType) === 1 ? 1 : 2,
-              inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_ADJUSTMENT,
-              sourceId: item.adjust_id,
-              sourceType: 'inventory_adjust',
-              sourceNo: item.adjust_no,
-              operationBy: userId,
-              idempotencyKey: `adjust:${id}:${l.id}`,
-              remark: item.adjust_reason,
-              lines: [
-                {
-                  goodsId: l.goodsId,
-                  skuId: l.skuId,
-                  batchNo: l.batchNo,
-                  quantity: String(l.quantity),
-                },
-              ],
-            },
-            tx,
-          );
-        }
-      await tx.hspsi_inventory_adjust.update({
-        where: { adjust_id: item.adjust_id },
+    if (!fromOa) {
+      const active = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'inventory_adjust',
+          business_id: adjustId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+      });
+      if (active) throw new BadRequestException('该调整单正在OA审批，不能在本系统审批');
+    }
+    const details = await tx.hspsi_inventory_adjust_detail.findMany({
+      where: { adjust_id: adjustId },
+    });
+    const actor = fromOa ? String(item.created_by) : userId;
+    if (approved)
+      for (const l of details) {
+        const wh = await tx.hspsi_basic_warehouse.findUniqueOrThrow({
+          where: { warehouse_id: l.warehouse_id },
+        });
+        await this.posting.post(
+          {
+            orgId: wh.org_id,
+            warehouseId: l.warehouse_id,
+            direction: l.adjust_type === 1 ? 1 : -1,
+            operationType: l.adjust_type === 1 ? 1 : 2,
+            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_ADJUSTMENT,
+            sourceId: item.adjust_id,
+            sourceType: 'inventory_adjust',
+            sourceNo: item.adjust_no,
+            operationBy: actor,
+            idempotencyKey: `adjust:${id}:${l.detail_id}`,
+            remark: item.adjust_reason,
+            lines: [
+              {
+                goodsId: l.goods_id,
+                skuId: l.sku_id,
+                batchNo: l.batch_no,
+                quantity: String(l.adjust_qty),
+              },
+            ],
+          },
+          tx,
+        );
+      }
+    await tx.hspsi_inventory_adjust.update({
+      where: { adjust_id: item.adjust_id },
+      data: {
+        status: approved ? 1 : 0,
+        approve_status: approved ? 1 : 2,
+        approve_comment: comment,
+        approve_by: fromOa ? 0n : BigInt(userId),
+        approve_date: new Date(),
+      },
+    });
+    return { id, message: approved ? '调整审批通过，库存已过账' : '调整已驳回，可修改后重新提交' };
+  }
+
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: {
+          in: [
+            'inventory_transfer',
+            'inventory_adjust',
+            'inventory_check',
+            'inventory_loss',
+            'inventory_loss_output',
+            'inventory_overflow',
+          ],
+        },
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的库存OA审批实例');
+    if (!['inventory_transfer', 'inventory_adjust'].includes(instance.business_type)) {
+      return this.handleComplexOaApproval(instance, payload, rawPayload, logId);
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const passed = payload.procStatus === 'PASSED';
+      const expected = passed ? 1 : 2;
+      const document =
+        current.business_type === 'inventory_transfer'
+          ? await tx.hspsi_inventory_transfer.findFirst({
+              where: { transfer_id: current.business_id, deleted_at: null },
+            })
+          : await tx.hspsi_inventory_adjust.findFirst({
+              where: { adjust_id: current.business_id, deleted_at: null },
+            });
+      if (!document) throw new NotFoundException('OA审批对应的库存单据不存在');
+      const duplicate =
+        current.proc_status === payload.procStatus && document.approve_status === expected;
+      if (!duplicate) {
+        const comment = this.oaComment(payload.procStatus);
+        if (current.business_type === 'inventory_transfer')
+          await this.applyTransferApproval(tx, current.business_id, passed, comment, '0', true);
+        else
+          await this.applyAdjustmentApproval(tx, current.business_id, passed, comment, '0', true);
+      }
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
         data: {
-          status: approved ? 1 : 0,
-          approve_status: approved ? 1 : 2,
-          approve_comment: comment,
-          approve_by: BigInt(userId),
-          approve_date: new Date(),
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '库存审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        businessType: current.business_type,
+        businessId: current.business_id,
+        procStatus: payload.procStatus,
+      };
+    });
+  }
+
+  private oaComment(status: ApprovalCallbackPayload['procStatus']) {
+    return {
+      PASSED: 'OA审批通过',
+      REJECTED: 'OA审批驳回',
+      CANCELED: 'OA审批取消',
+      DELETED: 'OA审批流程删除',
+    }[status];
+  }
+
+  private async handleComplexOaApproval(
+    instance: any,
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const passed = payload.procStatus === 'PASSED',
+      expected = passed ? 1 : 2,
+      id = instance.business_id as bigint;
+    const document: any =
+      instance.business_type === 'inventory_check'
+        ? await this.prisma.hspsi_inventory_check.findFirst({
+            where: { check_id: id, deleted_at: null },
+          })
+        : instance.business_type === 'inventory_loss'
+          ? await this.prisma.hspsi_inventory_loss.findFirst({
+              where: { loss_id: id, deleted_at: null },
+            })
+          : instance.business_type === 'inventory_loss_output'
+            ? await this.prisma.hspsi_inventory_loss_output.findFirst({
+                where: { loss_id: id, deleted_at: null },
+              })
+            : await this.prisma.hspsi_inventory_overflow.findFirst({
+                where: { overflow_id: id, deleted_at: null },
+              });
+    if (!document) throw new NotFoundException('OA审批对应的库存单据不存在');
+    const duplicate =
+      instance.proc_status === payload.procStatus && document.approve_status === expected;
+    let businessResult: any = {};
+    if (!duplicate) {
+      const actor = String(document.created_by),
+        comment = this.oaComment(payload.procStatus);
+      businessResult =
+        instance.business_type === 'inventory_check'
+          ? await this.approveCheck(String(id), passed, comment, actor, true)
+          : instance.business_type === 'inventory_loss_output'
+            ? await this.approveLossOutput(String(id), passed, comment, actor, true)
+            : await this.approveDocument(
+                instance.business_type === 'inventory_loss' ? 'loss' : 'overflow',
+                String(id),
+                passed,
+                comment,
+                actor,
+                true,
+              );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: instance.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: instance.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '库存审批结果已处理',
+          account_set_id: instance.account_set_id,
         },
       });
     });
-    return { id, message: approved ? '调整审批通过，库存已过账' : '调整已驳回，可修改后重新提交' };
+    return {
+      processed: true,
+      duplicate,
+      businessType: instance.business_type,
+      businessId: id,
+      procStatus: payload.procStatus,
+      ...businessResult,
+    };
+  }
+
+  private async assertNoActiveOa(businessType: string, businessId: bigint, message: string) {
+    const repository = this.prisma.hspsi_oa_approval_instance;
+    if (!repository) return;
+    const active = await repository.findFirst({
+      where: {
+        business_type: businessType,
+        business_id: businessId,
+        proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
+    if (active) throw new BadRequestException(message);
   }
 
   async checks(query: Body) {
@@ -1592,10 +1854,22 @@ export class InventoryService {
     });
     return { id, message: '删除成功' };
   }
-  async approveCheck(id: string, approved: boolean, comment: string, userId: string) {
+  async approveCheck(
+    id: string,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa = false,
+  ) {
     const item = await this.check(id);
     if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
       throw new BadRequestException('仅待审批盘点单可操作');
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        'inventory_check',
+        BigInt(id),
+        '该盘点单正在OA审批，不能在本系统审批',
+      );
     const generated: Array<{ type: string; id: bigint; no: string }> = [];
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT check_id FROM hspsi_inventory_check WHERE check_id=${BigInt(id)} FOR UPDATE`;
@@ -2619,8 +2893,20 @@ export class InventoryService {
     return { id: recordId, message: '报亏出库单已按来源报亏单生成' };
   }
 
-  async approveLossOutput(id: string, approved: boolean, comment: string, userId: string) {
+  async approveLossOutput(
+    id: string,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa = false,
+  ) {
     const documentId = BigInt(id);
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        'inventory_loss_output',
+        documentId,
+        '该盘亏出库单正在OA审批，不能在本系统审批',
+      );
     let inventoryPosted = false;
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT loss_id FROM hspsi_inventory_loss_output WHERE loss_id=${documentId} FOR UPDATE`;
@@ -2807,11 +3093,18 @@ export class InventoryService {
     approved: boolean,
     comment: string,
     userId: string,
+    fromOa = false,
   ) {
     if (type === 'loss-output') throw new BadRequestException('报亏出库请使用确认出库操作');
     const item: Body = await this.document(type, id);
     if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
       throw new BadRequestException('仅待审批单据可操作');
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        type === 'loss' ? 'inventory_loss' : 'inventory_overflow',
+        BigInt(id),
+        '该库存单据正在OA审批，不能在本系统审批',
+      );
     const businessKind = type === 'loss' ? Number(item.businessKind) : 0;
     if (type === 'loss' && businessKind !== 2)
       throw new BadRequestException('中间报亏单已停用，报亏出库只能由库存盘点直接生成');

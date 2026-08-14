@@ -21,6 +21,10 @@ import { buildCategoryTree } from '@/utils/category-tree';
 
 type Mode = 'create' | 'edit' | 'view' | 'cancel' | 'refund' | 'payment';
 type Option = { label: string; value: string | number };
+type OrganizationOption = Option & {
+  raw?: { parentId?: string | number; sort?: number };
+};
+type OrganizationTreeNode = OrganizationOption & { children?: OrganizationTreeNode[] };
 type DocConfig = { title: string; subtitle: string; createText: string; summaries: string[] };
 const route = useRoute();
 const router = useRouter();
@@ -135,6 +139,33 @@ const options = reactive<Record<string, any[]>>({
   applications: [],
   categories: [],
   units: [],
+});
+const organizationTree = computed<OrganizationTreeNode[]>(() => {
+  const nodes = new Map<string, OrganizationTreeNode>();
+  for (const option of options.organizations as OrganizationOption[])
+    nodes.set(String(option.value), { ...option, children: [] });
+
+  const roots: OrganizationTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parentId = String(node.raw?.parentId ?? 0);
+    const parent = parentId !== '0' ? nodes.get(parentId) : undefined;
+    if (parent) parent.children!.push(node);
+    else roots.push(node);
+  }
+
+  const sortNodes = (items: OrganizationTreeNode[]) => {
+    items.sort(
+      (left, right) =>
+        Number(left.raw?.sort ?? 0) - Number(right.raw?.sort ?? 0) ||
+        left.label.localeCompare(right.label, 'zh-CN'),
+    );
+    for (const item of items) {
+      if (item.children?.length) sortNodes(item.children);
+      else delete item.children;
+    }
+  };
+  sortNodes(roots);
+  return roots;
 });
 const quickCategoryTreeProps = {
   value: 'id',
@@ -1573,19 +1604,18 @@ onMounted(async () => {
           placeholder="申请单号或申请原因"
           @keyup.enter="search"
         />
-        <el-select
+        <el-tree-select
           v-if="resource === 'applications'"
           v-model="query.orgId"
+          :data="organizationTree"
           class="query-field"
           clearable
           filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           placeholder="所属组织"
-          ><el-option
-            v-for="item in options.organizations"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
+        />
         <el-select
           v-if="resource === 'applications'"
           v-model="query.warehouseId"
@@ -2327,12 +2357,14 @@ onMounted(async () => {
           >
             <template v-if="resource === 'applications'"
               ><el-form-item label="所属组织" prop="orgId"
-                ><el-select v-model="form.orgId" filterable @change="organizationChanged"
-                  ><el-option
-                    v-for="item in options.organizations"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select></el-form-item
+                ><el-tree-select
+                  v-model="form.orgId"
+                  :data="organizationTree"
+                  filterable
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }"
+                  @change="organizationChanged" /></el-form-item
               ><el-form-item label="申请部门" prop="deptId"
                 ><el-select v-model="form.deptId" filterable :disabled="!form.orgId"
                   ><el-option
@@ -2371,15 +2403,15 @@ onMounted(async () => {
                     :label="item.label"
                     :value="item.value" /></el-select></el-form-item
               ><el-form-item label="所属组织" prop="orgId"
-                ><el-select
+                ><el-tree-select
                   v-model="form.orgId"
+                  :data="organizationTree"
+                  filterable
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }"
                   :disabled="!!form.applicationId"
-                  @change="organizationChanged"
-                  ><el-option
-                    v-for="item in options.organizations"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select></el-form-item
+                  @change="organizationChanged" /></el-form-item
               ><el-form-item label="目标仓库" prop="warehouseId"
                 ><el-select
                   v-model="form.warehouseId"
@@ -2449,17 +2481,16 @@ onMounted(async () => {
                     :value="item.value" /></el-select
               ></el-form-item>
               <el-form-item label="所属组织" :prop="form.directReceipt ? 'orgId' : ''"
-                ><el-select
+                ><el-tree-select
                   v-if="form.directReceipt"
                   v-model="form.orgId"
+                  :data="organizationTree"
                   filterable
-                  @change="organizationChanged"
-                  ><el-option
-                    v-for="item in options.organizations"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select
-                ><el-input v-else :model-value="lookup('organizations', form.orgId)" disabled
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }"
+                  @change="organizationChanged" />
+                <el-input v-else :model-value="lookup('organizations', form.orgId)" disabled
               /></el-form-item>
               <el-form-item label="实际入库仓库" prop="warehouseId"
                 ><el-select
@@ -2643,12 +2674,13 @@ onMounted(async () => {
                     :label="`${item.label} · ${lookup('vendors', item.vendorId)}`"
                     :value="item.value" /></el-select></el-form-item
               ><el-form-item label="所属组织" prop="orgId"
-                ><el-select v-model="form.orgId" filterable
-                  ><el-option
-                    v-for="item in options.organizations"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select></el-form-item
+                ><el-tree-select
+                  v-model="form.orgId"
+                  :data="organizationTree"
+                  filterable
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }" /></el-form-item
               ><el-form-item label="供应商"
                 ><el-input :model-value="vendorOfOrder(form.orderId)" disabled /></el-form-item
               ><el-form-item label="本次付款金额" prop="paymentAmount"

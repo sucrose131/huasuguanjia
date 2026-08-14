@@ -13,6 +13,7 @@ import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 type B = Record<string, any>;
 const PRODUCTION_PLAN_STATUS = {
   DRAFT: 0,
@@ -1120,8 +1121,9 @@ export class ProductionService {
         : '生产计划已创建，原料充足，已进入待审核',
     };
   }
-  async approvePlan(id: string, ok: boolean, comment: string, u: string) {
+  async approvePlan(id: string, ok: boolean, comment: string, u: string, fromOa = false) {
     const planId = BigInt(id);
+    if (!fromOa) await this.assertNoActiveOa(planId, '生产计划已进入OA审批，请在OA中处理');
     const result = await this.guardedTransaction(async (t) => {
       await t.$queryRaw`SELECT plan_id FROM hspsi_production_plan WHERE plan_id=${planId} FOR UPDATE`;
       const plan = await t.hspsi_production_plan.findFirst({
@@ -1250,6 +1252,98 @@ export class ProductionService {
           ? '审批前库存已发生变化，计划已转为缺料并自动生成采购申请'
           : '审批通过，计划已进入生产中',
     };
+  }
+
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const instance = await this.p.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'production_plan',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的生产计划OA审批实例');
+    const plan = await this.p.hspsi_production_plan.findFirst({
+      where: { plan_id: instance.business_id, deleted_at: null },
+    });
+    if (!plan) throw new NotFoundException('OA审批对应的生产计划不存在');
+    const passed = payload.procStatus === 'PASSED';
+    const duplicate =
+      instance.proc_status === payload.procStatus && plan.approve_status === (passed ? 1 : 2);
+    const result = duplicate
+      ? {}
+      : await this.approvePlan(
+          String(plan.plan_id),
+          passed,
+          this.oaComment(payload.procStatus),
+          String(plan.created_by),
+          true,
+        );
+    await this.p.$transaction(async (tx) => {
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: instance.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: instance.id,
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '生产计划审批结果已处理',
+          account_set_id: instance.account_set_id,
+        },
+      });
+    });
+    return {
+      processed: true,
+      duplicate,
+      businessId: plan.plan_id,
+      procStatus: payload.procStatus,
+      ...result,
+    };
+  }
+
+  private oaComment(status: ApprovalCallbackPayload['procStatus']) {
+    return {
+      PASSED: 'OA审批通过',
+      REJECTED: 'OA审批驳回',
+      CANCELED: 'OA审批取消',
+      DELETED: 'OA审批流程删除',
+    }[status];
+  }
+
+  private async assertNoActiveOa(businessId: bigint, message: string) {
+    const repository = this.p.hspsi_oa_approval_instance;
+    if (!repository) return;
+    const active = await repository.findFirst({
+      where: {
+        business_type: 'production_plan',
+        business_id: businessId,
+        proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
+    if (active) throw new BadRequestException(message);
   }
   async deletePlan(id: string, u: string) {
     const planId = BigInt(id);
@@ -2832,12 +2926,7 @@ export class ProductionService {
       });
       if (sourceLines.length !== lines.length)
         throw new BadRequestException('退库明细不属于原BOM出库单');
-      const returned = await this.materialReturnQty(
-        t,
-        sourceOutId,
-        [0, 1],
-        current?.return_id,
-      );
+      const returned = await this.materialReturnQty(t, sourceOutId, [0, 1], current?.return_id);
       const detailData = lines.map((line: B) => {
         const source = sourceLines.find(
           (item) => item.serial_number === Number(line.sourceOutDetailId),

@@ -16,11 +16,15 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { ProductionService } from './production.service';
+import { ProductionOaApprovalService } from './production-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('production')
 export class ProductionController {
-  constructor(@Inject(ProductionService) private readonly s: ProductionService) {}
+  constructor(
+    @Inject(ProductionService) private readonly s: ProductionService,
+    @Inject(ProductionOaApprovalService) private readonly oa: ProductionOaApprovalService,
+  ) {}
   @RequirePermissions('production')
   @Get('product-options')
   productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
@@ -78,13 +82,19 @@ export class ProductionController {
   }
   @RequirePermissions('production')
   @Post('plans')
-  createPlan(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.s.savePlanChecked(null, b, u.id, !!b.submit);
+  async createPlan(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const result = await this.s.savePlanChecked(null, b, u.id, !!b.submit);
+    return result.shortage
+      ? result
+      : { ...result, oa: await this.oa.submitPlan(BigInt(result.id), u.id) };
   }
   @RequirePermissions('production')
   @Patch('plans/:id')
-  updatePlan(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.s.savePlanChecked(id, b, u.id, !!b.submit);
+  async updatePlan(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const result = await this.s.savePlanChecked(id, b, u.id, !!b.submit);
+    return result.shortage
+      ? result
+      : { ...result, oa: await this.oa.submitPlan(BigInt(result.id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/approve')
@@ -93,13 +103,15 @@ export class ProductionController {
   }
   @RequirePermissions('production')
   @Post('plans/:id/recheck')
-  recheckPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.recheckPlan(id, u.id);
+  async recheckPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const result = await this.s.recheckPlan(id, u.id);
+    return result.shortage ? result : { ...result, oa: await this.oa.submitPlan(BigInt(id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/restart')
-  restartPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.restartPlan(id, u.id);
+  async restartPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const result = await this.s.restartPlan(id, u.id);
+    return { ...result, oa: await this.oa.submitPlan(BigInt(id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/terminate')
@@ -188,11 +200,7 @@ export class ProductionController {
   }
   @RequirePermissions('production')
   @Post('material-returns/:id/reverse')
-  reverseMaterialReturn(
-    @Param('id') id: string,
-    @Body() b: any,
-    @CurrentUser() u: AuthUser,
-  ) {
+  reverseMaterialReturn(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.reverseMaterialReturn(id, b, u.id);
   }
   @RequirePermissions('production')

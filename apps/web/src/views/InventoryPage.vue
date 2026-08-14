@@ -22,6 +22,7 @@ type Option = {
   orgId?: string | number;
   warehouseType?: string | number;
 };
+type OrganizationTreeNode = Option & { children?: OrganizationTreeNode[] };
 type Mode = 'create' | 'edit' | 'view';
 
 const route = useRoute();
@@ -157,6 +158,33 @@ const options = reactive<Record<string, Option[] | Row[]>>({
   stocks: [],
   lossSources: [],
   warehouseTabs: [],
+});
+const organizationTree = computed<OrganizationTreeNode[]>(() => {
+  const nodes = new Map<string, OrganizationTreeNode>();
+  for (const option of options.organizations as Option[])
+    nodes.set(String(option.value), { ...option, children: [] });
+
+  const roots: OrganizationTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parentId = String(node.raw?.parentId ?? 0);
+    const parent = parentId !== '0' ? nodes.get(parentId) : undefined;
+    if (parent) parent.children!.push(node);
+    else roots.push(node);
+  }
+
+  const sortNodes = (items: OrganizationTreeNode[]) => {
+    items.sort(
+      (left, right) =>
+        Number(left.raw?.sort ?? 0) - Number(right.raw?.sort ?? 0) ||
+        left.label.localeCompare(right.label, 'zh-CN'),
+    );
+    for (const item of items) {
+      if (item.children?.length) sortNodes(item.children);
+      else delete item.children;
+    }
+  };
+  sortNodes(roots);
+  return roots;
 });
 const dicts = reactive<Record<string, Option[]>>({});
 const dictCodes = [
@@ -1015,21 +1043,18 @@ onMounted(async () => {
           <strong>库存组织</strong>
           <span>请先选择组织，再查看该组织下的仓库和库存</span>
         </div>
-        <el-select
+        <el-tree-select
           v-model="query.orgId"
+          :data="organizationTree"
           class="inventory-org-scope__select"
           clearable
           filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           placeholder="请选择组织"
           @change="organizationChanged"
-        >
-          <el-option
-            v-for="item in options.organizations as Option[]"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
+        />
         <el-radio-group
           v-if="stockScopeReady"
           :model-value="stockView"
@@ -1163,18 +1188,18 @@ onMounted(async () => {
             :value="item.value"
           />
         </el-select>
-        <el-select
+        <el-tree-select
           v-if="resource !== 'stocks'"
           v-model="query.orgId"
+          :data="organizationTree"
           class="query-field"
           clearable
+          filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           placeholder="全部组织"
-          ><el-option
-            v-for="item in options.organizations as Option[]"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
+        />
         <el-select
           v-if="!usesWarehouseTabs"
           v-model="query.warehouseId"
@@ -1721,18 +1746,18 @@ onMounted(async () => {
         <template v-if="resource === 'transfers'">
           <div class="master-grid">
             <el-form-item label="调出组织" prop="orgId"
-              ><el-select
+              ><el-tree-select
                 v-model="form.orgId"
+                :data="organizationTree"
+                filterable
+                check-strictly
+                node-key="value"
+                :props="{ label: 'label', children: 'children' }"
                 @change="
                   form.warehouseId = '';
                   form.toWarehouseId = '';
                   warehouseChanged();
-                "
-                ><el-option
-                  v-for="item in options.organizations as Option[]"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value" /></el-select></el-form-item
+                " /></el-form-item
             ><el-form-item label="调出仓库" prop="warehouseId"
               ><el-select
                 v-model="form.warehouseId"
@@ -1746,12 +1771,14 @@ onMounted(async () => {
                   :label="item.label"
                   :value="item.value" /></el-select></el-form-item
             ><el-form-item label="调入组织" prop="toOrgId"
-              ><el-select v-model="form.toOrgId" @change="form.toWarehouseId = ''"
-                ><el-option
-                  v-for="item in options.organizations as Option[]"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value" /></el-select></el-form-item
+              ><el-tree-select
+                v-model="form.toOrgId"
+                :data="organizationTree"
+                filterable
+                check-strictly
+                node-key="value"
+                :props="{ label: 'label', children: 'children' }"
+                @change="form.toWarehouseId = ''" /></el-form-item
             ><el-form-item label="调入仓库" prop="toWarehouseId"
               ><el-select v-model="form.toWarehouseId" :disabled="!form.warehouseId"
                 ><el-option
@@ -1833,14 +1860,15 @@ onMounted(async () => {
                 </el-select>
               </el-form-item>
               <el-form-item label="组织" prop="orgId">
-                <el-select v-model="form.orgId" :disabled="mode !== 'create'">
-                  <el-option
-                    v-for="item in options.organizations as Option[]"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                <el-tree-select
+                  v-model="form.orgId"
+                  :data="organizationTree"
+                  filterable
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }"
+                  :disabled="mode !== 'create'"
+                />
               </el-form-item>
               <el-form-item label="仓库" prop="warehouseId">
                 <el-select v-model="form.warehouseId" :disabled="mode !== 'create'">
@@ -1886,8 +1914,13 @@ onMounted(async () => {
               <el-input model-value="报损出库单" disabled />
             </el-form-item>
             <el-form-item label="组织" prop="orgId"
-              ><el-select
+              ><el-tree-select
                 v-model="form.orgId"
+                :data="organizationTree"
+                filterable
+                check-strictly
+                node-key="value"
+                :props="{ label: 'label', children: 'children' }"
                 :disabled="
                   mode === 'view' ||
                   ['loss-outputs', 'overflow-inputs'].includes(resource) ||
@@ -1898,12 +1931,9 @@ onMounted(async () => {
                   form.warehouseId = '';
                   warehouseChanged();
                 "
-                ><el-option
-                  v-for="item in options.organizations as Option[]"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value" /></el-select
-            ></el-form-item>
+              />
+              ></el-form-item
+            >
             <el-form-item label="仓库" prop="warehouseId"
               ><el-select
                 v-model="form.warehouseId"

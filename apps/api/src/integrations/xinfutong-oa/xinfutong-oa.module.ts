@@ -6,6 +6,9 @@ import { XinfutongOaFormService } from './form/form.service';
 import { XinfutongOaApprovalService } from './approval/approval.service';
 import { XinfutongOaApprovalCallbackService } from './approval/approval-callback.service';
 import { XinfutongOaSyncService } from './sync/sync.service';
+import { AttachmentsModule } from '../../attachments/attachments.module';
+import { OaDocumentSubmissionService } from './approval/document-submission.service';
+import { OaStarterContextService } from './approval/starter-context.service';
 
 /**
  * 薪福通 OA 对接模块
@@ -18,6 +21,7 @@ import { XinfutongOaSyncService } from './sync/sync.service';
  * - sync/        同步层：组织/岗位/成员同步到本地表
  */
 @Module({
+  imports: [AttachmentsModule],
   providers: [
     XinfutongOaClient,
     XinfutongOaCredentialService,
@@ -26,6 +30,8 @@ import { XinfutongOaSyncService } from './sync/sync.service';
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,
+    OaDocumentSubmissionService,
+    OaStarterContextService,
   ],
   exports: [
     XinfutongOaCredentialService,
@@ -34,6 +40,8 @@ import { XinfutongOaSyncService } from './sync/sync.service';
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,
+    OaDocumentSubmissionService,
+    OaStarterContextService,
   ],
 })
 export class XinfutongOaModule {}

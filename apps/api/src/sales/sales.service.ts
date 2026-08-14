@@ -15,6 +15,7 @@ import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 type B = Record<string, any>;
 
 import {
@@ -761,11 +762,12 @@ export class SalesService {
     });
     return { id: idv, message: '销售订单已保存' };
   }
-  async approveOrder(id: string, approved: boolean, comment: string, u: string) {
+  async approveOrder(id: string, approved: boolean, comment: string, u: string, fromOa = false) {
     const orderId = BigInt(id),
       snapshot = await this.order(id);
     if (Number(snapshot.propertyType) === 1)
       throw new BadRequestException('销售订单无需审批，请直接办理后续业务');
+    if (!fromOa) await this.assertNoActiveOa(orderId, '折价销售单已进入OA审批，请在OA中处理');
     const isTrustedDiscount =
       Number(snapshot.propertyType) === 2 &&
       this.trustedDiscountSource(snapshot.businessSourceType) &&
@@ -3010,9 +3012,10 @@ export class SalesService {
   async receiveExternalAfterSales(sourceSystem: string, body: B) {
     if (!body || Array.isArray(body) || typeof body !== 'object')
       throw new BadRequestException('外部售后请求体无效');
-    const source = String(sourceSystem ?? '').trim().toLowerCase();
-    if (!/^[a-z0-9_]{2,32}$/.test(source))
-      throw new BadRequestException('外部售后来源无效');
+    const source = String(sourceSystem ?? '')
+      .trim()
+      .toLowerCase();
+    if (!/^[a-z0-9_]{2,32}$/.test(source)) throw new BadRequestException('外部售后来源无效');
     const externalRequestId = String(
       body.externalRequestId ?? body.requestId ?? body.id ?? '',
     ).trim();
@@ -3738,5 +3741,97 @@ export class SalesService {
       await this.refreshOrderServiceStatus(t, service.so_id);
       return { id, returnId: exit.so_exit_id, message: '售后已自动生成并确认退货返库' };
     });
+  }
+
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const instance = await this.p.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'sales_order',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的折价销售OA审批实例');
+    const order = await this.p.hspsi_sale_order.findFirst({
+      where: { so_id: instance.business_id, so_property_type: 2, deleted_at: null },
+    });
+    if (!order) throw new NotFoundException('OA审批对应的折价销售单不存在');
+    const passed = payload.procStatus === 'PASSED';
+    const duplicate =
+      instance.proc_status === payload.procStatus && order.approve_status === (passed ? 1 : 2);
+    const result = duplicate
+      ? {}
+      : await this.approveOrder(
+          String(order.so_id),
+          passed,
+          this.oaComment(payload.procStatus),
+          String(order.created_by),
+          true,
+        );
+    await this.p.$transaction(async (tx) => {
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: instance.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: instance.id,
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '折价销售审批结果已处理',
+          account_set_id: instance.account_set_id,
+        },
+      });
+    });
+    return {
+      processed: true,
+      duplicate,
+      businessId: order.so_id,
+      procStatus: payload.procStatus,
+      ...result,
+    };
+  }
+
+  private oaComment(status: ApprovalCallbackPayload['procStatus']) {
+    return {
+      PASSED: 'OA审批通过',
+      REJECTED: 'OA审批驳回',
+      CANCELED: 'OA审批取消',
+      DELETED: 'OA审批流程删除',
+    }[status];
+  }
+
+  private async assertNoActiveOa(businessId: bigint, message: string) {
+    const repository = this.p.hspsi_oa_approval_instance;
+    if (!repository) return;
+    const active = await repository.findFirst({
+      where: {
+        business_type: 'sales_order',
+        business_id: businessId,
+        proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
+    if (active) throw new BadRequestException(message);
   }
 }
