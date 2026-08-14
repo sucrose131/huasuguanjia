@@ -199,7 +199,7 @@ export class ShifangQingyuanGoodsSyncService {
 
     const unitType = this.resolveUnitType(goods.unit, unitByName);
     const defaultAttr = this.pickDefaultAttr(attrs);
-    const salePrice = this.centsToDecimal(goods.price);
+    const salePrice = this.yuanToDecimal(goods.price);
     const defaultSpecModels = this.clip(defaultAttr.name || `规格${defaultAttr.id}`, 200);
 
     // 判断 source_type
@@ -436,8 +436,8 @@ export class ShifangQingyuanGoodsSyncService {
       spec_models: this.clip(attr.name || `规格${attr.id}`, 200),
       image: this.clip(attr.pic_url ?? '', 255),
       pcs_qty: 1, // 库存不同步，固定为1
-      const_price: this.centsToDecimal(attr.cost_price),
-      sale_price: this.centsToDecimal(attr.price),
+      const_price: this.yuanToDecimal(attr.cost_price),
+      sale_price: this.yuanToDecimal(attr.price),
       unit_type: unitType,
       is_default: isDefault ? 1 : 0,
       sort: attr.sort ?? 0,
@@ -771,10 +771,10 @@ export class ShifangQingyuanGoodsSyncService {
     return Number(goods.is_on_sale) !== 1 || Number(goods.status) !== 1;
   }
 
-  /** 分 → 元（Decimal） */
-  private centsToDecimal(cents: number | null | undefined): Prisma.Decimal {
-    if (cents == null || isNaN(cents)) return new Prisma.Decimal(0);
-    return new Prisma.Decimal(cents).div(100);
+  /** 元 → Decimal（接口金额已是元，不做 ÷100） */
+  private yuanToDecimal(yuan: number | null | undefined): Prisma.Decimal {
+    if (yuan == null || isNaN(yuan)) return new Prisma.Decimal(0);
+    return new Prisma.Decimal(yuan);
   }
 
   private clip(value: string, max: number): string {

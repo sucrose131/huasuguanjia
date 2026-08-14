@@ -42,7 +42,7 @@ import {
 } from '../huasu-home.constants';
 import { HuasuHomeService } from '../huasu-home.service';
 import type { HuasuHomeOrder, HuasuHomeOrderListData } from '../huasu-home.types';
-import { HuasuHomeExternalInventoryPostingService } from './external-inventory-posting.service';
+import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
 import { HuasuHomeOrderSyncService } from './order-sync.service';
 
 function loadEnvOverride(filePath: string) {
@@ -109,7 +109,7 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
     redis = new RedisService(config);
     await redis.ensureConnected();
     const businessNumber = new BusinessNumberService(redis, prisma as never, config);
-    const externalPosting = new HuasuHomeExternalInventoryPostingService(prisma as never);
+    const externalPosting = new ExternalInventoryPostingService(prisma as never);
 
     service = new HuasuHomeOrderSyncService(
       prisma as never,
@@ -132,6 +132,8 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
   async function ensureOrderList() {
     if (!orderList?.list?.length) {
       orderList = await huasuHome.getOrderList({
+        page: 1,
+        page_size: 20,
         updated_at: '1970-01-01 00:00:00',
       });
     }
@@ -474,6 +476,8 @@ describe('HuasuHomeOrderSyncService 订单同步集成测试（真实请求）',
     '能真实拉取订单列表',
     async () => {
       orderList = await huasuHome.getOrderList({
+        page: 1,
+        page_size: 20,
         updated_at: '1970-01-01 00:00:00',
       });
 

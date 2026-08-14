@@ -99,9 +99,9 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/list" \
 | mch_id | int | 商户ID |
 | goods_name | string | 商品名称 |
 | subtitle | string | 副标题 |
-| price | int | 售价（分） |
-| original_price | int | 原价（分） |
-| cost_price | int | 成本价（分） |
+| price | decimal | 售价 |
+| original_price | decimal | 原价（划线价仅展示） |
+| cost_price | decimal | 成本价 |
 | unit | string | 单位 |
 | cover_pic | string | 封面图URL |
 | bannar_pic | array | 轮播图列表（JSON自动解码） |
@@ -119,12 +119,12 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/list" \
 | virtual_sales | int | 虚拟销量 |
 | sales_num | int | 实际销量 |
 | buy_num_limit | int | 限购数量，-1=不限 |
-| freight_type | int | 运费类型 |
+| freight_type | string | 物流方式【1快递发货 2上门自提】逗号分隔 |
 | freight_rules_type | int | 运费规则类型 |
 | freight_id | int | 运费模板ID |
-| shipping_fee | int | 固定运费（分） |
+| shipping_fee | decimal | 自定义运费金额 |
 | free_shipping_num | int | 满件包邮 |
-| free_shipping_money | int | 满额包邮（分） |
+| free_shipping_money | decimal | 商品满额包邮 |
 | goods_type | int | 商品类型：1=实物，2=虚拟 |
 | detail | string | 商品详情（HTML） |
 | is_area_limit | int | 是否区域限制 |
@@ -138,7 +138,7 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/list" \
 | created_at | int | 创建时间戳 |
 | updated_at | int | 更新时间戳 |
 | is_show | int | 是否显示 |
-| comment_score | float | 评论评分 |
+| comment_score | decimal | 评分 |
 | goods_no | string | 商品编号 |
 | is_pay_limit | int | 是否限制支付方式 |
 | pay_limit | object | 支付限制配置（JSON自动解码） |
@@ -156,9 +156,9 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/list" \
 | name | string | 规格名称 |
 | sign_id | string | 规格标识 |
 | stock | int | 库存 |
-| price | int | 售价（分） |
-| original_price | int | 原价（分） |
-| cost_price | int | 成本价（分） |
+| price | decimal | 价格 |
+| original_price | decimal | 原价 |
+| cost_price | decimal | 成本价 |
 | goods_no | string | 商品编号 |
 | weight | int | 重量（克） |
 | pic_url | string | 规格图片URL |
@@ -510,10 +510,10 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/detail" \
 |------|------|------|
 | level | int | 代理等级权重 |
 | name | string | 代理等级名称 |
-| direct_over_reward | int | 直推超越奖励（分） |
-| direct_equal_reward | int | 直推平级奖励（分） |
-| indirect_over_reward | int | 间推超越奖励（分） |
-| indirect_equal_reward | int | 间推平级奖励（分） |
+| direct_over_reward | decimal | 直推超越奖励（元） |
+| direct_equal_reward | decimal | 直推平级奖励（元） |
+| indirect_over_reward | decimal | 间推超越奖励（元） |
+| indirect_equal_reward | decimal | 间推平级奖励（元） |
 
 #### give_goods_num 数组元素结构
 
@@ -935,7 +935,7 @@ curl -X POST "http://api.ten.com/open-api/v1/goods/constants" \
 
 ### 金额单位
 
-所有金额字段（price、original_price、cost_price、shipping_fee 等）单位均为**分**，前端展示时需除以100转换为元。
+所有金额字段（price、original_price、cost_price、shipping_fee、free_shipping_money 等）数据库类型均为 `decimal(10,2)`，单位为**元**，保留2位小数，前端直接展示无需转换。
 
 ### 排序规则
 

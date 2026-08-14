@@ -11,7 +11,7 @@
  * - gift_plan 清空后停用旧 conversion_rule
  * - 源端不再返回的商品保留 mapping / 平台商品，仅告警
  * - 分页空页退出（避免 total 偏大死循环）
- * - 分→元金额转换
+ * - 金额按元直落（不做 ÷100）
  *
  * 运行：
  *   pnpm --filter @hspsi/api test goods-sync.unit.spec
@@ -479,7 +479,7 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     vi.clearAllMocks();
   });
 
-  it('普通商品同步：创建 SPU + SKU + STANDARD mapping，金额分→元正确', async () => {
+  it('普通商品同步：创建 SPU + SKU + STANDARD mapping，金额按元直落正确', async () => {
     const ctx = createContext();
     const item = buildStandardGoods();
     ctx.shifangQingyuan.getGoodsList
@@ -497,11 +497,11 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     // SPU
     const goods = ctx.goodsStore[0]!;
     expect(goods.goods_name).toBe('尝鲜装');
-    expect(goods.sale_price.toNumber()).toBeCloseTo(6.86, 2); // 686分 → 6.86元
+    expect(goods.sale_price.toNumber()).toBeCloseTo(686, 2); // 接口已是元
 
     // SKU
     const sku = ctx.skuStore[0]!;
-    expect(sku.sale_price.toNumber()).toBeCloseTo(6.86, 2);
+    expect(sku.sale_price.toNumber()).toBeCloseTo(686, 2);
     expect(sku.pcs_qty).toBe(1); // 库存不同步
 
     // Mapping：source_type=STANDARD

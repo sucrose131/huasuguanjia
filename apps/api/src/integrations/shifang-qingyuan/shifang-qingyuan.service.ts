@@ -7,8 +7,16 @@ import {
   type ShifangQingyuanGoodsDetailData,
   type ShifangQingyuanGoodsListData,
   type ShifangQingyuanGoodsListQuery,
+  type ShifangQingyuanOrderConstantsData,
+  type ShifangQingyuanOrderDetailData,
+  type ShifangQingyuanOrderListData,
+  type ShifangQingyuanOrderListQuery,
+  type ShifangQingyuanRefundListData,
+  type ShifangQingyuanRefundListQuery,
   type ShifangQingyuanRequestOptions,
   type ShifangQingyuanResponse,
+  type ShifangQingyuanUserListData,
+  type ShifangQingyuanUserListQuery,
 } from './shifang-qingyuan.types';
 
 /**
@@ -183,6 +191,91 @@ export class ShifangQingyuanService {
       '/open-api/v1/goods/constants',
       {},
     );
+    return response.data!;
+  }
+
+  /**
+   * 获取订单列表
+   * POST /open-api/v1/order/list
+   */
+  async getOrderList(query?: ShifangQingyuanOrderListQuery): Promise<ShifangQingyuanOrderListData> {
+    const body: Record<string, unknown> = {};
+    if (query?.page != null) body.page = query.page;
+    if (query?.limit != null) body.limit = query.limit;
+    if (query?.order_no) body.order_no = query.order_no;
+    if (query?.order_status != null) body.order_status = query.order_status;
+    if (query?.pay_status != null) body.pay_status = query.pay_status;
+    if (query?.shipping_status != null) body.shipping_status = query.shipping_status;
+    if (query?.start_time) body.start_time = query.start_time;
+    if (query?.end_time) body.end_time = query.end_time;
+
+    const response = await this.post<ShifangQingyuanOrderListData>('/open-api/v1/order/list', body);
+    return response.data!;
+  }
+
+  /**
+   * 获取订单详情
+   * POST /open-api/v1/order/detail
+   */
+  async getOrderDetail(orderId: number): Promise<ShifangQingyuanOrderDetailData> {
+    const response = await this.post<ShifangQingyuanOrderDetailData>('/open-api/v1/order/detail', {
+      order_id: orderId,
+    });
+    return response.data!;
+  }
+
+  /**
+   * 获取售后列表
+   * POST /open-api/v1/order/refund-list
+   */
+  async getRefundList(
+    query?: ShifangQingyuanRefundListQuery,
+  ): Promise<ShifangQingyuanRefundListData> {
+    const body: Record<string, unknown> = {};
+    if (query?.page != null) body.page = query.page;
+    if (query?.limit != null) body.limit = query.limit;
+    if (query?.order_id != null) body.order_id = query.order_id;
+    if (query?.refund_status != null) body.refund_status = query.refund_status;
+    if (query?.type != null) body.type = query.type;
+    if (query?.start_time) body.start_time = query.start_time;
+    if (query?.end_time) body.end_time = query.end_time;
+
+    const response = await this.post<ShifangQingyuanRefundListData>(
+      '/open-api/v1/order/refund-list',
+      body,
+    );
+    return response.data!;
+  }
+
+  /**
+   * 获取订单常量
+   * POST /open-api/v1/order/constants
+   */
+  async getOrderConstants(): Promise<ShifangQingyuanOrderConstantsData> {
+    const response = await this.post<ShifangQingyuanOrderConstantsData>(
+      '/open-api/v1/order/constants',
+      {},
+    );
+    return response.data!;
+  }
+
+  /**
+   * 获取用户列表
+   * POST /open-api/v1/user/list
+   * 对应 docs/global/integrations/shifang-qingyuan/user-api.md §1
+   * 每条已含 user / user_level / cloud_stock_agent，同步主流程不调用 detail。
+   */
+  async getUserList(query?: ShifangQingyuanUserListQuery): Promise<ShifangQingyuanUserListData> {
+    const body: Record<string, unknown> = {};
+    if (query?.page != null) body.page = query.page;
+    if (query?.limit != null) body.limit = query.limit;
+    if (query?.keyword) body.keyword = query.keyword;
+    if (query?.level != null) body.level = query.level;
+    if (query?.status != null) body.status = query.status;
+    if (query?.start_time) body.start_time = query.start_time;
+    if (query?.end_time) body.end_time = query.end_time;
+
+    const response = await this.post<ShifangQingyuanUserListData>('/open-api/v1/user/list', body);
     return response.data!;
   }
 }

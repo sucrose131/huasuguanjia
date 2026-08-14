@@ -3,9 +3,12 @@ import { AuthModule } from '../../auth/auth.module';
 import { BusinessNumberModule } from '../../business-number/business-number.module';
 import { HuasuHomeController } from './huasu-home.controller';
 import { HuasuHomeService } from './huasu-home.service';
-import { HuasuHomeExternalInventoryPostingService } from './sync/external-inventory-posting.service';
+import { ExternalInventoryPostingService } from '../common/external-inventory-posting.service';
+import { HuasuHomeConferenceOrderSyncService } from './sync/conference-order-sync.service';
+import { HuasuHomeInstallmentOrderSyncService } from './sync/installment-order-sync.service';
 import { HuasuHomeOrderSyncService } from './sync/order-sync.service';
 import { HuasuHomeProductSyncService } from './sync/product-sync.service';
+import { HuasuHomeUserSyncService } from './sync/user-sync.service';
 
 @Module({
   imports: [AuthModule, BusinessNumberModule],
@@ -13,9 +16,19 @@ import { HuasuHomeProductSyncService } from './sync/product-sync.service';
   providers: [
     HuasuHomeService,
     HuasuHomeProductSyncService,
-    HuasuHomeExternalInventoryPostingService,
+    ExternalInventoryPostingService,
     HuasuHomeOrderSyncService,
+    HuasuHomeConferenceOrderSyncService,
+    HuasuHomeInstallmentOrderSyncService,
+    HuasuHomeUserSyncService,
   ],
-  exports: [HuasuHomeService, HuasuHomeProductSyncService, HuasuHomeOrderSyncService],
+  exports: [
+    HuasuHomeService,
+    HuasuHomeProductSyncService,
+    HuasuHomeOrderSyncService,
+    HuasuHomeConferenceOrderSyncService,
+    HuasuHomeInstallmentOrderSyncService,
+    HuasuHomeUserSyncService,
+  ],
 })
 export class HuasuHomeModule {}

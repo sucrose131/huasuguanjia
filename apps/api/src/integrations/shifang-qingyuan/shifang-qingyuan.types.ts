@@ -30,11 +30,11 @@ export interface ShifangQingyuanGoods {
   mch_id: number;
   goods_name: string;
   subtitle: string;
-  /** 售价（分） */
+  /** 售价（元） */
   price: number;
-  /** 原价（分） */
+  /** 原价（元） */
   original_price: number;
-  /** 成本价（分） */
+  /** 成本价（元） */
   cost_price: number;
   unit: string;
   cover_pic: string;
@@ -114,11 +114,11 @@ export interface ShifangQingyuanGoodsAttr {
   name: string;
   sign_id: string;
   stock: number;
-  /** 售价（分） */
+  /** 售价（元） */
   price: number;
-  /** 原价（分） */
+  /** 原价（元） */
   original_price: number;
-  /** 成本价（分） */
+  /** 成本价（元） */
   cost_price: number;
   goods_no: string;
   weight: number;
@@ -240,3 +240,348 @@ export interface ShifangQingyuanGoodsConstantsData {
   cloud_stock_gift_plan: Record<string, ShifangQingyuanConstantField>;
   cloud_stock_upgrade_bag: Record<string, ShifangQingyuanConstantField>;
 }
+
+/* ==================== 订单列表 / 详情 / 售后 ==================== */
+
+/** 订单主信息（qimall_order）；金额字段单位为元（与商品接口一致） */
+export interface ShifangQingyuanOrder {
+  id: number;
+  mall_id: number;
+  mch_id: number;
+  store_id: number;
+  user_id: number;
+  order_no: string;
+  out_trade_no: string;
+  mobile: string;
+  province: number;
+  city: number;
+  area: number;
+  town: number;
+  community: number;
+  address: string;
+  region_name: string;
+  zip: string;
+  receiver_name: string;
+  remark: string;
+  seller_remark: string;
+  shipping_type: number;
+  shipping_money: number;
+  reduce_shipping_money: number;
+  refund_money: number;
+  /** 实付金额（元） */
+  pay_money: number;
+  /** 商品优惠后总价（元） */
+  goods_price: number;
+  /** 商品原本总价（元） */
+  original_goods_price: number;
+  ip: string;
+  coupon_id: number;
+  coupon_money: number;
+  score: number;
+  score_money: number;
+  order_status: number;
+  pay_status: number;
+  shipping_status: number;
+  review_status: number;
+  is_feedback: number;
+  payment_type: number;
+  marketing_id: number;
+  marketing_type: string;
+  invoice_id: number;
+  status: number;
+  is_comment: number;
+  is_recycle: number;
+  is_virtual: number;
+  is_new_user: number;
+  pay_time: number;
+  shipping_time: number;
+  sign_time: number;
+  consign_time: number;
+  finish_time: number;
+  close_time: number;
+  extra_info: string;
+  order_source: string;
+  created_at: number;
+  updated_at: number;
+  is_bill: number;
+  bill_time: number;
+  clerk_code: string;
+  is_print: number;
+  extra_data?: unknown;
+  goods_subtype: number;
+}
+
+/** 订单明细（qimall_order_detail）；金额字段单位为元 */
+export interface ShifangQingyuanOrderDetail {
+  id: number;
+  mall_id: number;
+  order_id: number;
+  user_id: number;
+  mch_id: number;
+  store_id: number;
+  goods_id: number;
+  goods_name: string;
+  goods_attr_id: number;
+  goods_attr_name: string;
+  sign_id: string;
+  attr_groups_format: string;
+  /** 单价（元） */
+  price: number;
+  cost_price: number;
+  num: number;
+  adjust_money: number;
+  /** 行优惠后总价（元） */
+  goods_price: number;
+  /** 行原本总价（元） */
+  original_goods_price: number;
+  pic_url: string;
+  marketing_id: number;
+  marketing_type: string;
+  order_type: number;
+  give_score: number;
+  order_status: number;
+  shipping_status: number;
+  is_feedback: number;
+  remark: string;
+  is_evaluate: number;
+  refund_balance_money: number;
+  is_virtual: number;
+  status: number;
+  extra_info: string;
+  created_at: number;
+  updated_at: number;
+  order_source: string;
+  shipped_num: number;
+  extra_data?: unknown;
+  unit: string;
+  goods_subtype: number;
+  marketing?: unknown;
+}
+
+/** 售后单（qimall_order_refund） */
+export interface ShifangQingyuanOrderRefund {
+  id: number;
+  mall_id: number;
+  mch_id: number;
+  store_id: number;
+  user_id: number;
+  order_id: number;
+  order_detail_id: number;
+  order_no: string;
+  type: number;
+  reason: string;
+  remark: string;
+  pic_list?: unknown[];
+  refuse_remark: string;
+  express: string;
+  express_no: string;
+  saler_express: string;
+  customer_name: string;
+  saler_express_no: string;
+  saler_address?: unknown;
+  is_refund: number;
+  refund_at: number;
+  /** 申请退款金额（元） */
+  refund_price: number;
+  /** 实际退款金额（元） */
+  reality_refund_price: number;
+  express_at: number;
+  saler_express_at: number;
+  step_status: number;
+  refund_status: number;
+  status: number;
+  created_at: number;
+  updated_at: number;
+  goods_type: number;
+  refund_remark: string;
+  old_reality_refund_price: number;
+  num: number;
+  order_source: string;
+  is_auto_refund: number;
+  steps?: ShifangQingyuanOrderRefundStep[];
+}
+
+export interface ShifangQingyuanOrderRefundStep {
+  id: number;
+  order_refund_id: number;
+  role: number;
+  content: string;
+  step_num: number;
+  step_status: number;
+  status: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 物流（qimall_order_express） */
+export interface ShifangQingyuanOrderExpress {
+  id: number;
+  order_id: number;
+  cs_order_id: number;
+  order_detail_ids?: unknown;
+  shipping_type: number;
+  express_id: number;
+  express_name: string;
+  express_no: string;
+  customer_name: string;
+  buyer_id: number;
+  buyer_name: string;
+  operator_id: number;
+  operator_username: string;
+  memo: string;
+  status: number;
+  created_at: number;
+  updated_at: number;
+  nums?: unknown;
+  source_table: string;
+  source_table_id: number;
+  edit_num: number;
+}
+
+/** 列表/详情共用完整订单快照（list 自 2026-08-12 起与 detail 同构） */
+export interface ShifangQingyuanOrderDetailData {
+  order: ShifangQingyuanOrder;
+  details: ShifangQingyuanOrderDetail[];
+  refunds?: ShifangQingyuanOrderRefund[];
+  actions?: unknown[];
+  behavior_logs?: unknown[];
+  express?: ShifangQingyuanOrderExpress[];
+  extra?: unknown;
+  invoice?: unknown;
+  /** list 独有：下单会员（已过滤敏感字段） */
+  user?: unknown;
+}
+
+/** 列表单条 = 完整快照 */
+export type ShifangQingyuanOrderListItem = ShifangQingyuanOrderDetailData;
+
+export interface ShifangQingyuanOrderListData {
+  list: ShifangQingyuanOrderListItem[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+  };
+}
+
+export interface ShifangQingyuanOrderListQuery {
+  page?: number;
+  limit?: number;
+  order_no?: string;
+  order_status?: number;
+  pay_status?: number;
+  shipping_status?: number;
+  start_time?: string;
+  end_time?: string;
+}
+
+export interface ShifangQingyuanRefundListQuery {
+  page?: number;
+  limit?: number;
+  order_id?: number;
+  refund_status?: number;
+  type?: number;
+  start_time?: string;
+  end_time?: string;
+}
+
+export interface ShifangQingyuanRefundListItem {
+  refund: ShifangQingyuanOrderRefund;
+  steps?: ShifangQingyuanOrderRefundStep[];
+  detail?: ShifangQingyuanOrderDetail;
+  order?: ShifangQingyuanOrder;
+}
+
+export interface ShifangQingyuanRefundListData {
+  list: ShifangQingyuanRefundListItem[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+  };
+}
+
+export interface ShifangQingyuanOrderConstantsData {
+  order: Record<string, ShifangQingyuanConstantField>;
+  order_detail: Record<string, ShifangQingyuanConstantField>;
+  order_refund: Record<string, ShifangQingyuanConstantField>;
+  order_refund_step: Record<string, ShifangQingyuanConstantField>;
+  order_action: Record<string, ShifangQingyuanConstantField>;
+  order_behavior_logs: Record<string, ShifangQingyuanConstantField>;
+  order_express: Record<string, ShifangQingyuanConstantField>;
+}
+
+/* ==================== 用户列表 / 详情 ==================== */
+
+/** 用户主信息（qimall_user 全量字段 + 补充字段，已过滤 password、transaction_password） */
+export interface ShifangQingyuanUser {
+  id: number;
+  mall_id: number;
+  username?: string;
+  mobile?: string;
+  nickname?: string;
+  birthday?: string;
+  parent_id?: number;
+  parent_mobile?: string;
+  parent_username?: string;
+  parent_nickname?: string;
+  status?: number;
+  level?: number;
+  level_name?: string;
+  created_at?: number;
+  updated_at?: number;
+  [key: string]: unknown;
+}
+
+/** 会员等级记录（qimall_user_level）；level=0 时为 null */
+export interface ShifangQingyuanUserLevel {
+  id: number;
+  mall_id: number;
+  level: number;
+  name: string;
+  status?: number;
+  [key: string]: unknown;
+}
+
+/** 云库存代理（全量字段 + level_name）；非代理为 null */
+export interface ShifangQingyuanCloudStockAgent {
+  id: number;
+  mall_id: number;
+  user_id: number;
+  level?: number;
+  level_name?: string;
+  status?: number;
+  [key: string]: unknown;
+}
+
+/** 列表/详情共用：每个用户含 user / user_level / cloud_stock_agent */
+export interface ShifangQingyuanUserItem {
+  user: ShifangQingyuanUser;
+  user_level: ShifangQingyuanUserLevel | null;
+  cloud_stock_agent: ShifangQingyuanCloudStockAgent | null;
+}
+
+export interface ShifangQingyuanUserListData {
+  list: ShifangQingyuanUserItem[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+  };
+}
+
+export interface ShifangQingyuanUserListQuery {
+  page?: number;
+  limit?: number;
+  keyword?: string;
+  level?: number;
+  status?: number;
+  start_time?: string;
+  end_time?: string;
+}
+
+/**
+ * 平台客户身份描述（hspsi_basic_customer.levels）
+ * 仅存中文标签数组，例如：["经销商","城市合伙人"]
+ */
+export type CustomerIdentityLevels = string[];

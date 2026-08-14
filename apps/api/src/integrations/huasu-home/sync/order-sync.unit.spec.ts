@@ -1,7 +1,7 @@
 /**
  * 华溯之家订单同步单元测试（mock，不打真实外部接口）
  *
- * 覆盖：未支付跳过、幂等跳过、建单+收款、商品未映射/机构未映射失败
+ * 覆盖：未支付跳过、幂等跳过、建单+收款、客户全量创建/更新（含 levels）、商品未映射/机构未映射失败
  *
  * 运行：
  *   pnpm --filter @hspsi/api test order-sync.unit.spec
@@ -54,7 +54,20 @@ function baseOrder(overrides: Partial<HuasuHomeOrder> = {}): HuasuHomeOrder {
         price: 199,
       },
     ],
-    user: { id: 501, nickname: '华溯会员', mobile: '13800000000', gender: 1 },
+    user: {
+      id: 501,
+      nickname: '华溯会员',
+      mobile: '13800000000',
+      gender: 1,
+      birth: '1990-01-02',
+      status: 1,
+      remark: '会员备注',
+      is_centenarian: 1,
+      centenarian_type: 1,
+      is_provincial_partner: 1,
+      level: { id: 99, level: 1, name: '全家福会员' },
+      level_id: 99,
+    },
     referrer: { nickname: '推荐人', mobile: '13900000000' },
     shipments: [],
     after_sales_type: 0,
@@ -108,12 +121,12 @@ function createService() {
         customer_id: 7001n,
         ...data,
       })),
+      update: vi.fn(),
       findFirstOrThrow: vi.fn().mockResolvedValue({
         customer_id: 7001n,
         name: '华溯会员',
         mobile: '13800000000',
       }),
-      update: vi.fn(),
     },
     hspsi_goods_source_mapping: {
       findFirst: vi.fn().mockResolvedValue({
@@ -210,19 +223,36 @@ function createService() {
 
   const prisma = {
     hspsi_sys_data_source: {
-      findFirst: vi.fn().mockResolvedValue({
+      findUnique: vi.fn().mockResolvedValue({
         id: 9n,
         code: HUASU_HOME_DATA_SOURCE_CODE,
         status: 1,
+        deleted_at: null,
       }),
     },
     hspsi_sale_order_source_mapping: {
-      findFirst: vi.fn().mockImplementation(async ({ where }) => {
+      findFirst: vi.fn().mockImplementation(async ({ where, orderBy }) => {
         if (where?.id) {
           return [...mappingStore.values()].find((item) => item.id === where.id) ?? null;
         }
-        const key = `${where.source_order_type}:${where.source_order_id}`;
-        return mappingStore.get(key) ?? null;
+        if (where?.source_order_id) {
+          const key = `${where.source_order_type}:${where.source_order_id}`;
+          return mappingStore.get(key) ?? null;
+        }
+        const rows = [...mappingStore.values()].filter((row) => {
+          if (where?.source_order_type && row.source_order_type !== where.source_order_type) {
+            return false;
+          }
+          if (where?.sync_status != null && row.sync_status !== where.sync_status) return false;
+          if (where?.source_updated_at?.not === null && !row.source_updated_at) return false;
+          return true;
+        });
+        const dir = orderBy?.source_updated_at === 'asc' ? 1 : -1;
+        rows.sort(
+          (a, b) =>
+            dir * ((a.source_updated_at?.getTime() ?? 0) - (b.source_updated_at?.getTime() ?? 0)),
+        );
+        return rows[0] ?? null;
       }),
       create: vi.fn().mockImplementation(async ({ data }) => {
         const row = { id: mappingSeq++, so_id: 0n, ...data };
@@ -281,6 +311,11 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(stats.skipped).toBe(1);
     expect(stats.created).toBe(0);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(huasuHome.getOrderList).toHaveBeenCalledWith({
+      page: 1,
+      page_size: 200,
+      updated_at: '2026-01-01 00:00:00',
+    });
   });
 
   it('支付中订单不同步建单（skipped）', async () => {
@@ -292,6 +327,43 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     const stats = await service.syncOrders('1', { updated_at: '2026-01-01 00:00:00' });
     expect(stats.skipped).toBe(1);
     expect(stats.created).toBe(0);
+  });
+
+  it('普通订单存在且非空 order_installment_no 时应跳过，避免与分期重复', async () => {
+    const { service, huasuHome, prisma } = createService();
+    huasuHome.getOrderList.mockResolvedValue({
+      list: [baseOrder({ order_installment_no: 'OI2607300100000730294' })],
+    });
+
+    const stats = await service.syncOrders('1', { updated_at: '2026-01-01 00:00:00' });
+    expect(stats.skipped).toBe(1);
+    expect(stats.created).toBe(0);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('普通订单未返回 order_installment_no 字段时应按普通单处理', async () => {
+    const ctx = createService();
+    const order = baseOrder();
+    expect(Object.prototype.hasOwnProperty.call(order, 'order_installment_no')).toBe(false);
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(order);
+
+    const stats = await ctx.service.syncOrderBySn(order.order_sn, '1');
+    expect(stats.created).toBe(1);
+    expect(stats.skipped).toBe(0);
+  });
+
+  it('普通订单 order_installment_no 为空串或 null 时仍按普通单处理', async () => {
+    const ctx = createService();
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(baseOrder({ order_installment_no: '' }));
+    const empty = await ctx.service.syncOrderBySn('OR-empty', '1');
+    expect(empty.created).toBe(1);
+
+    const ctx2 = createService();
+    ctx2.huasuHome.getOrderInfo.mockResolvedValue(
+      baseOrder({ order_installment_no: null as unknown as string }),
+    );
+    const nulled = await ctx2.service.syncOrderBySn('OR-null', '1');
+    expect(nulled.created).toBe(1);
   });
 
   it('已支付订单可建销售单、映射、收款与状态事件', async () => {
@@ -323,6 +395,66 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(createArg.business_source_type).toBe('');
     expect(createArg.business_source_id).toBe(0n);
     expect(createArg.customer_name).toBe('测试用户');
+
+    expect(ctx.tx.hspsi_basic_customer.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: '华溯会员',
+          mobile: '13800000000',
+          gender: 1,
+          referrer_name: '推荐人',
+          referrer_mobile: '13900000000',
+          related_customer_id: 501n,
+          status: 1,
+          remark: '会员备注',
+          levels: ['全家福会员', '省级合伙人', '百岁加会员-主卡'],
+        }),
+      }),
+    );
+  });
+
+  it('已存在客户时全量更新（含 levels）', async () => {
+    const ctx = createService();
+    ctx.tx.hspsi_basic_customer.findFirst.mockResolvedValue({
+      customer_id: 7001n,
+      name: '旧名',
+      mobile: '13700000000',
+    });
+    const order = baseOrder({
+      user: {
+        id: 501,
+        nickname: '新昵称',
+        mobile: '13600000000',
+        gender: 2,
+        birth: '1991-03-04',
+        status: 1,
+        remark: '新备注',
+        is_centenarian: 0,
+        centenarian_type: 0,
+        is_provincial_partner: 0,
+        level: { level: 2, name: '事业合伙人' },
+      },
+      referrer: { nickname: '新推荐人', mobile: '13500000000' },
+    });
+    ctx.huasuHome.getOrderInfo.mockResolvedValue(order);
+
+    const stats = await ctx.service.syncOrderBySn(order.order_sn, '1');
+    expect(stats.failed).toBe(0);
+    expect(ctx.tx.hspsi_basic_customer.create).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_basic_customer.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { customer_id: 7001n },
+        data: expect.objectContaining({
+          name: '新昵称',
+          mobile: '13600000000',
+          gender: 2,
+          referrer_name: '新推荐人',
+          referrer_mobile: '13500000000',
+          remark: '新备注',
+          levels: ['事业合伙人'],
+        }),
+      }),
+    );
   });
 
   it('商品未映射时整单失败并写入失败痕迹', async () => {
@@ -472,5 +604,143 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(stats.failed).toBe(0);
     expect(stats.exits).toBe(0);
     expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
+  });
+
+  it('分页拉列表：按返回 total 翻页', async () => {
+    const { service, huasuHome } = createService();
+    huasuHome.getOrderList.mockImplementation(async ({ page }: { page: number }) => {
+      if (page === 1) {
+        return {
+          list: [
+            baseOrder({ id: 1, order_sn: 'OR-1', order_status: HUASU_HOME_ORDER_STATUS.PENDING_PAY }),
+            baseOrder({ id: 2, order_sn: 'OR-2', order_status: HUASU_HOME_ORDER_STATUS.PAYING }),
+          ],
+          page: 1,
+          page_size: 2,
+          total: 3,
+        };
+      }
+      if (page === 2) {
+        return {
+          list: [
+            baseOrder({ id: 3, order_sn: 'OR-3', order_status: HUASU_HOME_ORDER_STATUS.PENDING_PAY }),
+          ],
+          page: 2,
+          page_size: 2,
+          total: 3,
+        };
+      }
+      throw new Error(`unexpected page ${page}`);
+    });
+
+    const stats = await service.syncOrders('1', {
+      updated_at: '2026-01-01 00:00:00',
+      page_size: 2,
+    });
+
+    expect(stats.fetched).toBe(3);
+    expect(stats.skipped).toBe(3);
+    expect(huasuHome.getOrderList).toHaveBeenCalledTimes(2);
+    expect(huasuHome.getOrderList).toHaveBeenNthCalledWith(1, {
+      page: 1,
+      page_size: 2,
+      updated_at: '2026-01-01 00:00:00',
+    });
+    expect(huasuHome.getOrderList).toHaveBeenNthCalledWith(2, {
+      page: 2,
+      page_size: 2,
+      updated_at: '2026-01-01 00:00:00',
+    });
+  });
+
+  it('本页已覆盖 total 时不再请求下一页', async () => {
+    const { service, huasuHome } = createService();
+    huasuHome.getOrderList.mockResolvedValue({
+      list: [
+        baseOrder({ id: 1, order_sn: 'OR-1', order_status: HUASU_HOME_ORDER_STATUS.PENDING_PAY }),
+        baseOrder({ id: 2, order_sn: 'OR-2', order_status: HUASU_HOME_ORDER_STATUS.PENDING_PAY }),
+      ],
+      page: 1,
+      page_size: 2,
+      total: 2,
+    });
+
+    const stats = await service.syncOrders('1', {
+      updated_at: '2026-01-01 00:00:00',
+      page_size: 2,
+    });
+
+    expect(stats.fetched).toBe(2);
+    expect(huasuHome.getOrderList).toHaveBeenCalledTimes(1);
+  });
+
+  it('total 偏大但下一页为空时停止，避免死循环', async () => {
+    const { service, huasuHome } = createService();
+    huasuHome.getOrderList.mockImplementation(async ({ page }: { page: number }) => {
+      if (page === 1) {
+        return {
+          list: [
+            baseOrder({ id: 1, order_sn: 'OR-1', order_status: HUASU_HOME_ORDER_STATUS.PENDING_PAY }),
+          ],
+          page: 1,
+          page_size: 1,
+          total: 500,
+        };
+      }
+      return { list: [], page, page_size: 1, total: 500 };
+    });
+
+    const stats = await service.syncOrders('1', {
+      updated_at: '2026-01-01 00:00:00',
+      page_size: 1,
+    });
+
+    expect(stats.fetched).toBe(1);
+    expect(huasuHome.getOrderList).toHaveBeenCalledTimes(2);
+  });
+
+  it('空列表只请求第一页', async () => {
+    const { service, huasuHome } = createService();
+    huasuHome.getOrderList.mockResolvedValue({ list: [] });
+
+    const stats = await service.syncOrders('1', { updated_at: '2026-01-01 00:00:00' });
+    expect(stats.fetched).toBe(0);
+    expect(huasuHome.getOrderList).toHaveBeenCalledTimes(1);
+    expect(huasuHome.getOrderList).toHaveBeenCalledWith({
+      page: 1,
+      page_size: 200,
+      updated_at: '2026-01-01 00:00:00',
+    });
+  });
+
+  it('page_size 超过上限时按 1000 截断', async () => {
+    const { service, huasuHome } = createService();
+    huasuHome.getOrderList.mockResolvedValue({ list: [] });
+
+    await service.syncOrders('1', { updated_at: '2026-01-01 00:00:00', page_size: 5000 });
+    expect(huasuHome.getOrderList).toHaveBeenCalledWith({
+      page: 1,
+      page_size: 1000,
+      updated_at: '2026-01-01 00:00:00',
+    });
+  });
+
+  it('同步进行中再次触发应拒绝', async () => {
+    const { service, huasuHome } = createService();
+    let release!: (value: { list: HuasuHomeOrder[] }) => void;
+    huasuHome.getOrderList.mockImplementation(
+      () =>
+        new Promise<{ list: HuasuHomeOrder[] }>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const first = service.syncOrders('1', { updated_at: '2026-01-01 00:00:00' });
+    await vi.waitFor(() => expect(huasuHome.getOrderList).toHaveBeenCalled());
+    await expect(service.syncOrders('1', { updated_at: '2026-01-01 00:00:00' })).rejects.toThrow(
+      /仍在进行/,
+    );
+    release({ list: [] });
+    await first;
   });
 });
