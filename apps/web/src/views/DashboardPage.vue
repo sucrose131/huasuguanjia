@@ -73,6 +73,10 @@ const money = (value: any) =>
   auth.amountAccess.canViewAmount
     ? `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`
     : '****';
+const messageText = (item: any) =>
+  Object.prototype.hasOwnProperty.call(item, 'amount')
+    ? `${item.content || ''} ${money(item.amount)}。`
+    : item.content || '暂无消息内容';
 const dateText = (value: any) => (value ? String(value).replace('T', ' ').slice(0, 16) : '—');
 
 async function loadOverview() {
@@ -250,7 +254,7 @@ onMounted(load);
                   v-else-if="item.category === '审批消息'" /><Bell v-else /></el-icon></span
             ><span class="message-copy"
               ><strong>{{ item.title }}<i v-if="!item.isRead" /></strong
-              ><small>{{ item.content || '暂无消息内容' }}</small
+              ><small>{{ messageText(item) }}</small
               ><time>{{ dateText(item.createdAt) }}</time></span
             ><b>›</b>
           </button>

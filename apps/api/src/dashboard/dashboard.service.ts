@@ -454,7 +454,7 @@ export class DashboardService {
         })
       : [];
     const noticeMap = new Map(notices.map((notice) => [notice.id, notice]));
-    let rows = all.map((message) => {
+    let rows: Array<Record<string, any>> = all.map((message) => {
       const notice = noticeMap.get(message.notice_id);
       const messageCategory =
         (notice?.level ?? 1) >= 2
@@ -493,7 +493,7 @@ export class DashboardService {
           orderBy: { created_at: 'desc' },
         }),
       ]);
-    const generated = todoResult.items.map((item) => ({
+    const generated: Array<Record<string, any>> = todoResult.items.map((item) => ({
       id: `generated-approval-${item.id}`,
       title: `${item.docType}待处理`,
       content: `单据 ${item.docNo} 已进入待审批队列，请及时处理。`,
@@ -523,7 +523,8 @@ export class DashboardService {
       generated.push({
         id: `generated-sales-${latestSale.so_id}`,
         title: '销售订单业务动态',
-        content: `销售订单 ${latestSale.so_no}，客户“${latestSale.customer_name}”，订单金额 ¥${Number(latestSale.fact_amount).toLocaleString('zh-CN')}。`,
+        content: `销售订单 ${latestSale.so_no}，客户“${latestSale.customer_name}”，订单金额`,
+        amount: Number(latestSale.fact_amount),
         category: '业务消息',
         isRead: 1,
         readTime: null,
@@ -533,7 +534,8 @@ export class DashboardService {
       generated.push({
         id: `generated-purchase-${latestPurchase.po_id}`,
         title: '采购订单业务动态',
-        content: `采购订单 ${latestPurchase.po_no}，采购金额 ¥${Number(latestPurchase.pay_amout).toLocaleString('zh-CN')}。`,
+        content: `采购订单 ${latestPurchase.po_no}，采购金额`,
+        amount: Number(latestPurchase.pay_amout),
         category: '业务消息',
         isRead: 1,
         readTime: null,

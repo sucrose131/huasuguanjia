@@ -1,11 +1,17 @@
 import { ForbiddenException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { GLOBAL_AMOUNT_FIELDS } from './amount-field-registry';
 import { AmountAccessService } from './amount-access.service';
 
-function setup(options?: { user?: Record<string, unknown> | null; access?: Record<string, unknown> | null }) {
+function setup(options?: {
+  user?: Record<string, unknown> | null;
+  access?: Record<string, unknown> | null;
+}) {
   const prisma: any = {
     hspsi_sys_user: {
-      findFirst: vi.fn().mockResolvedValue(options?.user === undefined ? { id: 3n, status: 1 } : options.user),
+      findFirst: vi
+        .fn()
+        .mockResolvedValue(options?.user === undefined ? { id: 3n, status: 1 } : options.user),
     },
     hspsi_sys_user_amount_access: {
       findUnique: vi.fn().mockResolvedValue(options?.access ?? null),
@@ -71,6 +77,36 @@ describe('AmountAccessService', () => {
       orderNo: 'PO001',
       totalAmount: null,
       details: [{ goodsName: '试剂', unitPrice: null, quantity: 10 }],
+    });
+  });
+
+  it('masks inventory alert and check amount fields returned by their APIs', () => {
+    const { service } = setup();
+    const result = service.maskFields(
+      {
+        alertValue: 90,
+        check: {
+          all_value: 100,
+          less_value: 10,
+          overflow_value: 5,
+          less_process_value: 4,
+          overflow_process_value: 2,
+          all_qty: 12,
+        },
+      },
+      GLOBAL_AMOUNT_FIELDS,
+    );
+
+    expect(result).toEqual({
+      alertValue: null,
+      check: {
+        all_value: null,
+        less_value: null,
+        overflow_value: null,
+        less_process_value: null,
+        overflow_process_value: null,
+        all_qty: 12,
+      },
     });
   });
 

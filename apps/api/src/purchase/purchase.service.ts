@@ -26,6 +26,7 @@ type OperationHistoryItem = {
   operatorName?: string;
   occurredAt: Date | null;
   detail?: string;
+  amount?: number;
   timeNote?: string;
 };
 @Injectable()
@@ -3929,6 +3930,7 @@ export class PurchaseService {
       occurredAt: Date | null | undefined,
       detail = '',
       timeNote = '',
+      amount?: number,
     ) =>
       items.push({
         key,
@@ -3937,6 +3939,7 @@ export class PurchaseService {
         operatorId: String(operatorId ?? 0),
         occurredAt: occurredAt ?? null,
         ...(detail ? { detail } : {}),
+        ...(amount !== undefined ? { amount } : {}),
         ...(timeNote ? { timeNote } : {}),
       });
 
@@ -4020,7 +4023,9 @@ export class PurchaseService {
           item.pay_no,
           item.created_by,
           item.created_at,
-          `付款金额 ¥${Number(item.fact_pay_amount).toFixed(2)}`,
+          '付款金额',
+          '',
+          Number(item.fact_pay_amount),
         ),
       );
     } else if (resource === 'receipts') {
@@ -4105,7 +4110,9 @@ export class PurchaseService {
         '付款已生效',
         row.created_by,
         row.created_at,
-        `付款金额 ¥${Number(row.fact_pay_amount).toFixed(2)}`,
+        '付款金额',
+        '',
+        Number(row.fact_pay_amount),
       );
     } else if (resource === 'refunds') {
       const row = await this.prisma.hspsi_purchase_refund.findFirst({
@@ -4125,7 +4132,9 @@ export class PurchaseService {
           flow.flow_no,
           flow.created_by,
           flow.created_at,
-          `退款金额 ¥${Number(flow.refund_amount).toFixed(2)}`,
+          '退款金额',
+          '',
+          Number(flow.refund_amount),
         ),
       );
       if (row.refund_status === 3) {
