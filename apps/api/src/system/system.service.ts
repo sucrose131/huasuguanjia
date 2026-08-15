@@ -8,12 +8,16 @@ import {
 import { Prisma } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { PrismaService } from '../database/prisma.service';
+import { AmountAccessService } from '../amount-access/amount-access.service';
 
 type Body = Record<string, any>;
 
 @Injectable()
 export class SystemService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(AmountAccessService) private readonly amountAccess: AmountAccessService,
+  ) {}
 
   private integer(value: unknown, field: string, minimum = 0) {
     const result = Number(value);
@@ -211,7 +215,7 @@ export class SystemService {
   }
 
   async users() {
-    const [users, userRoles, roles, organizations, departments, statusMap, scopeMap] =
+    const [users, userRoles, roles, organizations, departments, amountAccessRows, statusMap, scopeMap] =
       await Promise.all([
         this.prisma.hspsi_sys_user.findMany({
           where: { deleted_at: null },
@@ -221,6 +225,7 @@ export class SystemService {
         this.prisma.hspsi_sys_role.findMany({ where: { deleted_at: null } }),
         this.prisma.hspsi_basic_organization.findMany({ where: { deleted_at: null } }),
         this.prisma.hspsi_basic_dept.findMany({ where: { deleted_at: null } }),
+        this.prisma.hspsi_sys_user_amount_access.findMany(),
         this.dictionary('system_account_status'),
         this.dictionary('role_scope_type'),
       ]);
@@ -236,6 +241,14 @@ export class SystemService {
         .map((item) => roleMap.get(item.role_id))
         .filter(Boolean) as typeof roles;
       const scopeValues = assignedRoles.map((role) => role.data_scope_type);
+      const configuredAmountAccess = amountAccessRows.find((item) => item.user_id === user.id);
+      const amountAccess =
+        user.status === 1 && configuredAmountAccess
+          ? this.amountAccess.fromFlags(
+              configuredAmountAccess.can_view_amount,
+              configuredAmountAccess.can_edit_amount,
+            )
+          : this.amountAccess.fromFlags(0, 0);
       const effectiveScope = scopeValues.includes(1)
         ? 1
         : scopeValues.includes(2)
@@ -255,6 +268,10 @@ export class SystemService {
         department: user.dept_id ? (deptMap.get(String(user.dept_id)) ?? '') : '',
         roleIds: assignedRoles.map((role) => String(role.id)),
         roleNames: assignedRoles.map((role) => role.name),
+        amountAccess: amountAccess.level,
+        canViewAmount: amountAccess.canViewAmount,
+        canEditAmount: amountAccess.canEditAmount,
+        amountGrantReason: configuredAmountAccess?.grant_reason ?? '',
         dataScope: {
           scopeTypeValue: effectiveScope,
           scopeType: scopeMap.get(String(effectiveScope)) ?? '',
@@ -272,6 +289,10 @@ export class SystemService {
         updatedAt: user.updated_at,
       };
     });
+  }
+
+  updateUserAmountAccess(id: string, body: Body, userId: string) {
+    return this.amountAccess.saveForUser(id, body, userId);
   }
 
   async userOptions() {

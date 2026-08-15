@@ -8,6 +8,9 @@ import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { buildCategoryTree } from '@/utils/category-tree';
+import { useAuthStore } from '@/stores/auth';
+const auth = useAuthStore();
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const rows = ref<any[]>([]),
   total = ref(0),
   loading = ref(false),
@@ -470,12 +473,14 @@ onMounted(async () => {
           ><el-form-item label="参考基础件成本"
             ><el-input-number
               v-model="form.costPrice"
+              :disabled="mode === 'view' || !canEditAmount"
               :min="0"
               :precision="2"
               style="width: 100%" /></el-form-item
           ><el-form-item label="销售价"
             ><el-input-number
               v-model="form.salePrice"
+              :disabled="mode === 'view' || !canEditAmount"
               :min="0"
               :precision="2"
               style="width: 100%" /></el-form-item
@@ -529,12 +534,14 @@ onMounted(async () => {
               ><template #default="s"
                 ><el-input-number
                   v-model="s.row.costPrice"
+                  :disabled="mode === 'view' || !canEditAmount"
                   :min="0"
                   :precision="2" /></template></el-table-column
             ><el-table-column label="销售价" width="130"
               ><template #default="s"
                 ><el-input-number
                   v-model="s.row.salePrice"
+                  :disabled="mode === 'view' || !canEditAmount"
                   :min="0"
                   :precision="2" /></template></el-table-column
             ><el-table-column label="默认 SKU" width="105"

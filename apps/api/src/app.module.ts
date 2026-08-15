@@ -18,6 +18,7 @@ import { BusinessNumberModule } from './business-number/business-number.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { AttachmentsModule } from './attachments/attachments.module';
 import { ScheduledTaskModule } from './scheduled-task/scheduled-task.module';
+import { AmountAccessModule } from './amount-access/amount-access.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ScheduledTaskModule } from './scheduled-task/scheduled-task.module';
     RedisModule,
     BusinessNumberModule,
     AttachmentsModule,
+    AmountAccessModule,
     AuthModule,
     BaseDataModule,
     GoodsModule,

@@ -10,4 +10,8 @@ export const dateText = (value: unknown, time = false) => {
     ? `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     : day;
 };
-export const moneyText = (value: unknown) => Number(value ?? 0).toFixed(2);
+export const moneyText = (value: unknown) => {
+  const level = localStorage.getItem('hspsi_amount_access') ?? 'none';
+  if (!['view', 'edit'].includes(level) || value === null || value === undefined) return '****';
+  return Number(value).toFixed(2);
+};

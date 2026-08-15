@@ -28,6 +28,7 @@ type Mode = 'create' | 'edit' | 'view';
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const resource = computed(() => String(route.params.resource));
 const meta: Record<
   string,
@@ -2367,6 +2368,7 @@ onMounted(async () => {
                     :precision="2"
                     :disabled="
                       mode === 'view' ||
+                      !canEditAmount ||
                       ['loss-outputs', 'overflow-inputs'].includes(resource) ||
                       viewingOverflowInput ||
                       generatedDamageLocked

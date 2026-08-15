@@ -61,6 +61,16 @@ export class SystemController {
     return this.service.updateUser(id, body, user.id);
   }
 
+  @Put('users/:id/amount-access')
+  @RequirePermissions('system:update')
+  updateUserAmountAccess(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.updateUserAmountAccess(id, body, user.id);
+  }
+
   @Get('menus')
   @RequirePermissions('system:view', 'system:3:view')
   menus() {

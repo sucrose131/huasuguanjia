@@ -29,6 +29,10 @@ type DocConfig = { title: string; subtitle: string; createText: string; summarie
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+const protectedMoneyText = (value: unknown) =>
+  canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
 const resource = computed(() => String(route.params.resource));
 const configs: Record<string, DocConfig> = {
   applications: {
@@ -687,7 +691,7 @@ async function enrichLine(line: any) {
   line.skuLabel = selected?.label;
   if (selected?.unitType) line.unitType = selected.unitType;
   else if (!Number(line.unitType) && product.unitType) line.unitType = product.unitType;
-  if (resource.value === 'orders' && !Number(line.totalAmount)) {
+  if (resource.value === 'orders' && canViewAmount.value && !Number(line.totalAmount)) {
     const referencePrice = Number(selected?.costPrice ?? product.costPrice ?? 0);
     line.totalAmount = Number(line.quantity ?? 0) * referencePrice;
   }
@@ -947,6 +951,10 @@ async function sourceReceiptChanged() {
   await Promise.all(form.details.map(enrichLine));
 }
 async function openCreate() {
+  if (resource.value === 'orders' && !canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能新增采购订单');
+    return;
+  }
   if (resource.value === 'refunds') {
     ElMessage.warning('采购退款任务只能由采购退货自动生成');
     return;
@@ -1045,6 +1053,10 @@ function normalizeDetail(data: any) {
   return data;
 }
 async function open(modeValue: Mode, row: any) {
+  if (resource.value === 'orders' && modeValue === 'edit' && !canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，已切换为只读查看');
+    modeValue = 'view';
+  }
   mode.value = modeValue;
   error.value = '';
   try {
@@ -1156,6 +1168,10 @@ function validateLines() {
   return true;
 }
 async function save(submit = false) {
+  if (resource.value === 'orders' && !canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能保存采购订单');
+    return;
+  }
   if (
     resource.value === 'receipts' &&
     form.directReceipt &&
@@ -1273,6 +1289,10 @@ async function startPurchase(row: any) {
   await Promise.all([load(), loadOptions()]);
 }
 async function openOrderPayment(row: any) {
+  if (!canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能登记采购付款');
+    return;
+  }
   if (!Number(row.vendorId)) {
     ElMessage.warning('请先选择供应商并保存采购订单');
     return;
@@ -1404,6 +1424,10 @@ function refundRequestKey() {
   );
 }
 async function openRefund(row: any) {
+  if (!canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能登记采购退款');
+    return;
+  }
   mode.value = 'refund';
   error.value = '';
   try {
@@ -1504,7 +1528,8 @@ function editable(row: any) {
     return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
   if (resource.value === 'refunds' || resource.value === 'payments') return false;
   if (resource.value === 'receipts') return Number(row.confirmStatus) === 0;
-  if (resource.value === 'orders') return Number(row.orderStatus) === 1 && !row.applicationId;
+  if (resource.value === 'orders')
+    return canEditAmount.value && Number(row.orderStatus) === 1 && !row.applicationId;
   return false;
 }
 function removable(row: any) {
@@ -1553,6 +1578,10 @@ function openOperationHistory(row: any) {
   operationHistoryVisible.value = true;
 }
 function openOrderGeneration(row: any, previewMode: 'all' | 'partial' | 'related') {
+  if (previewMode !== 'related' && !canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能生成采购订单');
+    return;
+  }
   orderGenerationApplicationId.value = String(row.id);
   orderGenerationMode.value = previewMode;
   orderGenerationVisible.value = true;
@@ -1611,6 +1640,10 @@ onMounted(async () => {
       <el-button
         v-if="!['returns', 'refunds', 'payments'].includes(resource)"
         type="primary"
+        :disabled="resource === 'orders' && !canEditAmount"
+        :title="
+          resource === 'orders' && !canEditAmount ? '当前账号没有金额编辑权限' : undefined
+        "
         @click="openCreate"
         >{{ config.createText }}</el-button
       >
@@ -1884,17 +1917,17 @@ onMounted(async () => {
             >
             <el-table-column label="订单总金额" width="120" align="right"
               ><template #default="s"
-                >¥ {{ moneyText(s.row.payableAmount ?? s.row.totalAmount) }}</template
+                >{{ protectedMoneyText(s.row.payableAmount ?? s.row.totalAmount) }}</template
               ></el-table-column
             >
             <el-table-column label="净已付" width="120" align="right"
               ><template #default="s"
-                >¥ {{ moneyText(s.row.netPaidAmount ?? 0) }}</template
+                >{{ protectedMoneyText(s.row.netPaidAmount ?? 0) }}</template
               ></el-table-column
             >
             <el-table-column label="待付款" width="120" align="right"
               ><template #default="s"
-                >¥ {{ moneyText(s.row.remainingPayable ?? 0) }}</template
+                >{{ protectedMoneyText(s.row.remainingPayable ?? 0) }}</template
               ></el-table-column
             >
             <el-table-column label="付款进度" width="104"
@@ -2740,23 +2773,23 @@ onMounted(async () => {
             </div>
             <div class="master-grid purchase-master-grid order-payment-summary">
               <el-form-item label="订单总金额"
-                ><el-input :model-value="`¥ ${moneyText(orderTotalAmount)}`" disabled
+                ><el-input :model-value="protectedMoneyText(orderTotalAmount)" disabled
               /></el-form-item>
               <el-form-item label="退货后应付"
-                ><el-input :model-value="`¥ ${moneyText(orderEffectivePayable)}`" disabled
+                ><el-input :model-value="protectedMoneyText(orderEffectivePayable)" disabled
               /></el-form-item>
               <el-form-item label="累计付款"
-                ><el-input :model-value="`¥ ${moneyText(form.paidAmount ?? 0)}`" disabled
+                ><el-input :model-value="protectedMoneyText(form.paidAmount ?? 0)" disabled
               /></el-form-item>
               <el-form-item label="累计退款"
-                ><el-input :model-value="`¥ ${moneyText(form.refundedAmount ?? 0)}`" disabled
+                ><el-input :model-value="protectedMoneyText(form.refundedAmount ?? 0)" disabled
               /></el-form-item>
               <el-form-item label="净已付款"
-                ><el-input :model-value="`¥ ${moneyText(orderNetPaidAmount)}`" disabled
+                ><el-input :model-value="protectedMoneyText(orderNetPaidAmount)" disabled
               /></el-form-item>
               <el-form-item label="本次付款金额"
                 ><el-input-number
-                  v-if="mode === 'create'"
+                  v-if="mode === 'create' && canEditAmount"
                   v-model="form.currentPaymentAmount"
                   :min="0"
                   :max="orderTotalAmount"
@@ -2764,7 +2797,7 @@ onMounted(async () => {
                   controls-position="right" /><el-input v-else model-value="—" disabled
               /></el-form-item>
               <el-form-item label="付款后待付"
-                ><el-input :model-value="`¥ ${moneyText(orderRemainingAfterPayment)}`" disabled
+                ><el-input :model-value="protectedMoneyText(orderRemainingAfterPayment)" disabled
               /></el-form-item>
               <el-form-item label="付款进度"
                 ><el-input
@@ -2894,7 +2927,7 @@ onMounted(async () => {
               <el-table-column label="采购单价" width="112" align="right"
                 ><template #default="s"
                   ><el-input-number
-                    v-if="mode !== 'view'"
+                    v-if="mode !== 'view' && canEditAmount"
                     v-model="s.row.unitPrice"
                     :min="0"
                     :precision="2"
@@ -3145,13 +3178,14 @@ onMounted(async () => {
                 align="right"
                 ><template #default="s"
                   ><el-input-number
-                    v-if="mode !== 'view'"
+                    v-if="mode !== 'view' && canEditAmount"
                     v-model="s.row.totalAmount"
                     :min="0.01"
                     :precision="2"
                     controls-position="right"
-                  /><span v-else class="readonly-cell number-cell"
-                    >¥ {{ moneyText(s.row.totalAmount) }}</span
+                  /><span v-else class="readonly-cell number-cell">{{
+                    protectedMoneyText(s.row.totalAmount)
+                  }}</span
                   ></template
                 ></el-table-column
               >
@@ -3161,7 +3195,7 @@ onMounted(async () => {
                 width="120"
                 align="right"
                 ><template #default="s"
-                  >¥ {{ moneyText(calculatedOrderUnitPrice(s.row)) }}</template
+                  >{{ protectedMoneyText(calculatedOrderUnitPrice(s.row)) }}</template
                 ></el-table-column
               >
               <el-table-column
@@ -3259,10 +3293,8 @@ onMounted(async () => {
               合计：{{
                 form.details.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0)
               }}
-              件　订单金额 ¥
-              {{
-                moneyText(form.details.reduce((sum: number, item: any) => sum + amount(item), 0))
-              }}
+              件　订单金额
+              {{ protectedMoneyText(form.details.reduce((sum: number, item: any) => sum + amount(item), 0)) }}
             </div>
           </template>
         </div>
@@ -3372,6 +3404,7 @@ onMounted(async () => {
           <el-form-item v-if="quickCatalogMode === 'sku'" label="基础件成本">
             <el-input-number
               v-model="quickCatalogForm.costPrice"
+              :disabled="!canEditAmount"
               :min="0"
               :precision="2"
               style="width: 100%"
@@ -3380,6 +3413,7 @@ onMounted(async () => {
           <el-form-item v-if="quickCatalogMode === 'sku'" label="销售价">
             <el-input-number
               v-model="quickCatalogForm.salePrice"
+              :disabled="!canEditAmount"
               :min="0"
               :precision="2"
               style="width: 100%"
@@ -3410,6 +3444,8 @@ onMounted(async () => {
       v-model="orderGenerationVisible"
       :application-id="orderGenerationApplicationId"
       :mode="orderGenerationMode"
+      :can-view-amount="canViewAmount"
+      :can-edit-amount="canEditAmount"
       @generated="load"
     />
   </section>
