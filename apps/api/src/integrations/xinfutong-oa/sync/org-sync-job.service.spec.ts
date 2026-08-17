@@ -51,10 +51,11 @@ describe('XinfutongOaOrgSyncJob', () => {
     });
     sync.syncMembers.mockImplementation(async () => {
       order.push('syncMembers');
-      return { staff_inserted: 1, staff_updated: 0, org_inserted: 0 };
+      return { staff_inserted: 1, staff_updated: 0, org_inserted: 0, user_inserted: 1, user_updated: 0, user_skipped: 0 };
     });
     const summary = await job.syncAll();
     expect(order).toEqual(['orgs', 'syncOrgs', 'positions', 'syncPositions', 'members', 'syncMembers']);
     expect(summary).toContain('测试账套');
+    expect(summary).toContain('账号+1/0/0');
   });
 });

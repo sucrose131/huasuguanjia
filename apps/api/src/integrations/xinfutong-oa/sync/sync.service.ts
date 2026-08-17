@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { hash } from 'bcryptjs';
 import { PrismaService } from '../../../database/prisma.service';
 import type { AccountSetCredential } from '../core/credential.service';
 import type {
@@ -34,6 +35,23 @@ export interface MemberSyncStats {
   staff_inserted: number;
   staff_updated: number;
   org_inserted: number;
+  user_inserted: number;
+  user_updated: number;
+  user_skipped: number;
+}
+
+export type LoginUserUpsertResult = 'inserted' | 'updated' | 'skipped';
+
+/** 去掉空白后的手机号，用作登录账号。 */
+export function normalizeMobile(value: unknown): string {
+  return String(value ?? '').replace(/\s+/g, '').trim();
+}
+
+/** 初始密码取手机号中的数字后六位；不足六位则无法建号。 */
+export function loginPasswordFromMobile(mobile: string): string | null {
+  const digits = mobile.replace(/\D/g, '');
+  if (digits.length < 6) return null;
+  return digits.slice(-6);
 }
 
 /**
@@ -396,6 +414,8 @@ export class XinfutongOaSyncService {
    * - 每次同步前清除当前员工的组织关联，再重新写入
    * - 组织关联的 org_type：先查组织表(1)，否则查部门表(2)，都查不到则跳过
    * - 组织关联的 type 映射：PRIMARY→1（主部门），其他→2（兼任部门）
+   * - 同步后按手机号幂等写入 hspsi_sys_user：同一手机号一条，初始密码后六位，不分配角色
+   * - OA 人员全部失效或删除时禁用对应登录账号；admin 永不禁用
    *
    * @param credential 账套凭证
    * @param records OA 企业成员记录数组
@@ -409,6 +429,9 @@ export class XinfutongOaSyncService {
       staff_inserted: 0,
       staff_updated: 0,
       org_inserted: 0,
+      user_inserted: 0,
+      user_updated: 0,
+      user_skipped: 0,
     };
 
     if (records.length === 0) {
@@ -444,7 +467,7 @@ export class XinfutongOaSyncService {
         const data = {
           post_id: postId,
           name: record.name ?? '',
-          mobile: record.mobile ?? '',
+          mobile: normalizeMobile(record.mobile),
           staff_code: record.number ?? '',
           out_staff_id: record.idRelation?.staffId ?? '',
           gender,
@@ -484,6 +507,8 @@ export class XinfutongOaSyncService {
         });
 
         const organizations = record.organizations ?? [];
+        let primaryOrgId: bigint | null = null;
+        let primaryDeptId: bigint | null = null;
         for (const org of organizations) {
           const orgOuterRefId = org.organizationId ?? '';
           if (!orgOuterRefId) continue;
@@ -496,6 +521,7 @@ export class XinfutongOaSyncService {
 
           let localOrgId: bigint;
           let orgType: number;
+          let deptOrgId: bigint | null = null;
           if (orgRow) {
             localOrgId = orgRow.org_id;
             orgType = 1;
@@ -503,18 +529,28 @@ export class XinfutongOaSyncService {
             // 组织表中不存在，则查部门表（限定 account_set_id），存在则为部门（org_type=2）
             const deptRow = await this.prisma.hspsi_basic_dept.findFirst({
               where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
-              select: { dept_id: true },
+              select: { dept_id: true, org_id: true },
             });
             if (!deptRow) {
               // 本地组织和部门均未同步时跳过，避免产生脏数据
               continue;
             }
             localOrgId = deptRow.dept_id;
+            deptOrgId = deptRow.org_id || null;
             orgType = 2;
           }
 
           // 类型映射：PRIMARY→1（主部门），其他→2（兼任部门）
           const type = org.type === 'PRIMARY' ? 1 : 2;
+          if (type === 1) {
+            if (orgType === 1) {
+              primaryOrgId = localOrgId;
+              primaryDeptId = null;
+            } else {
+              primaryDeptId = localOrgId;
+              primaryOrgId = deptOrgId;
+            }
+          }
 
           await this.prisma.hspsi_basic_staff_organizations.create({
             data: {
@@ -530,8 +566,80 @@ export class XinfutongOaSyncService {
           });
           stats.org_inserted++;
         }
+
+        const userResult = await this.upsertLoginUserByMobile({
+          mobile: data.mobile,
+          name: data.name,
+          orgId: primaryOrgId,
+          deptId: primaryDeptId,
+        });
+        if (userResult === 'inserted') stats.user_inserted += 1;
+        else if (userResult === 'updated') stats.user_updated += 1;
+        else stats.user_skipped += 1;
     }
 
     return stats;
+  }
+
+  /**
+   * 按手机号幂等写入后台登录账号。同一手机号只保留一条，不分配角色。
+   * 已有账号不改密码和角色；OA 侧该手机号已无有效人员时禁用登录。
+   */
+  async upsertLoginUserByMobile(input: {
+    mobile: string;
+    name: string;
+    orgId?: bigint | null;
+    deptId?: bigint | null;
+  }): Promise<LoginUserUpsertResult> {
+    const mobile = normalizeMobile(input.mobile);
+    const password = loginPasswordFromMobile(mobile);
+    if (!mobile || !password) return 'skipped';
+
+    const nickname = input.name.trim().slice(0, 50) || mobile;
+    const now = new Date();
+    const existing = await this.prisma.hspsi_sys_user.findFirst({
+      where: { username: mobile },
+    });
+    const validStaff = await this.prisma.hspsi_basic_staff.findFirst({
+      where: { mobile, status: 1, deleted_at: null },
+      select: { id: true },
+    });
+    const enabled = Boolean(validStaff);
+
+    if (!existing) {
+      await this.prisma.hspsi_sys_user.create({
+        data: {
+          username: mobile,
+          phone: mobile,
+          nickname,
+          password: await hash(password, 12),
+          org_id: input.orgId ?? null,
+          dept_id: input.deptId ?? null,
+          status: enabled ? 1 : 2,
+          created_by: 0n,
+          updated_by: 0n,
+          created_at: now,
+          updated_at: now,
+        },
+      });
+      return 'inserted';
+    }
+
+    if (existing.username === 'admin') {
+      return 'updated';
+    }
+
+    await this.prisma.hspsi_sys_user.update({
+      where: { id: existing.id },
+      data: {
+        nickname,
+        phone: mobile,
+        status: enabled ? 1 : 2,
+        deleted_at: null,
+        updated_by: 0n,
+        updated_at: now,
+      },
+    });
+    return 'updated';
   }
 }

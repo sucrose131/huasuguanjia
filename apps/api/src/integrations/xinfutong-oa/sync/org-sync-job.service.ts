@@ -36,7 +36,8 @@ export class XinfutongOaOrgSyncJob {
         `${credential.name}: 组织+${orgStats.org_inserted}/${orgStats.org_updated}` +
         ` 部门+${orgStats.dept_inserted}/${orgStats.dept_updated}` +
         ` 职位+${positionStats.position_inserted}/${positionStats.position_updated}` +
-        ` 人员+${memberStats.staff_inserted}/${memberStats.staff_updated}`;
+        ` 人员+${memberStats.staff_inserted}/${memberStats.staff_updated}` +
+        ` 账号+${memberStats.user_inserted}/${memberStats.user_updated}/${memberStats.user_skipped}`;
       XinfutongOaOrgSyncJob.logger.log(summary);
       summaries.push(summary);
     }
