@@ -567,11 +567,16 @@ export class XinfutongOaSyncService {
           stats.org_inserted++;
         }
 
+        // OA 同步负责创建/更新登录身份，并显式绑定人员；角色和金额白名单保持本地独立维护。
+        // 人员停用、删除、岗位或主组织不完整时，登录账号同步停用。
+        const identityUsable = status === 1 && !deletedAt && postId > 0n && primaryOrgId !== null;
         const userResult = await this.upsertLoginUserByMobile({
           mobile: data.mobile,
           name: data.name,
           orgId: primaryOrgId,
           deptId: primaryDeptId,
+          staffId,
+          identityUsable,
         });
         if (userResult === 'inserted') stats.user_inserted += 1;
         else if (userResult === 'updated') stats.user_updated += 1;
@@ -590,6 +595,8 @@ export class XinfutongOaSyncService {
     name: string;
     orgId?: bigint | null;
     deptId?: bigint | null;
+    staffId?: bigint | null;
+    identityUsable?: boolean;
   }): Promise<LoginUserUpsertResult> {
     const mobile = normalizeMobile(input.mobile);
     const password = loginPasswordFromMobile(mobile);
@@ -597,14 +604,21 @@ export class XinfutongOaSyncService {
 
     const nickname = input.name.trim().slice(0, 50) || mobile;
     const now = new Date();
-    const existing = await this.prisma.hspsi_sys_user.findFirst({
+    let existing = await this.prisma.hspsi_sys_user.findFirst({
       where: { username: mobile },
     });
+    // 已由管理员显式关联过同一人员时沿用原账号，避免再创建手机号重复账号。
+    if (!existing && input.staffId) {
+      existing = await this.prisma.hspsi_sys_user.findFirst({
+        where: { staff_id: input.staffId },
+      });
+    }
     const validStaff = await this.prisma.hspsi_basic_staff.findFirst({
       where: { mobile, status: 1, deleted_at: null },
       select: { id: true },
     });
-    const enabled = Boolean(validStaff);
+    const enabled = input.identityUsable ?? Boolean(validStaff);
+    const staffId = input.staffId ?? validStaff?.id ?? null;
 
     if (!existing) {
       await this.prisma.hspsi_sys_user.create({
@@ -615,6 +629,7 @@ export class XinfutongOaSyncService {
           password: await hash(password, 12),
           org_id: input.orgId ?? null,
           dept_id: input.deptId ?? null,
+          staff_id: staffId,
           status: enabled ? 1 : 2,
           created_by: 0n,
           updated_by: 0n,
@@ -629,11 +644,20 @@ export class XinfutongOaSyncService {
       return 'updated';
     }
 
+    if (existing.staff_id && staffId && existing.staff_id !== staffId) {
+      XinfutongOaSyncService.logger.warn(
+        `手机号 ${mobile} 已关联其他 OA 人员，跳过自动改绑`,
+      );
+      return 'skipped';
+    }
+
     await this.prisma.hspsi_sys_user.update({
       where: { id: existing.id },
       data: {
         nickname,
         phone: mobile,
+        ...(staffId ? { staff_id: staffId } : {}),
+        ...(input.orgId ? { org_id: input.orgId, dept_id: input.deptId ?? null } : {}),
         status: enabled ? 1 : 2,
         deleted_at: null,
         updated_by: 0n,

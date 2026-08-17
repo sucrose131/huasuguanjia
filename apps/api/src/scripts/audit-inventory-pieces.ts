@@ -132,7 +132,7 @@ async function main() {
     note:
       issues.length > 0
         ? '请先补齐单位和换算系数，并确认历史库存单位口径；本脚本不会修改数据。'
-        : '基础资料未发现阻断项；仍需在执行历史库存迁移前完成人工抽样确认。',
+        : '商品、SKU、库存汇总和批次库存单位口径一致，未发现阻断项。',
   };
   console.log(JSON.stringify(report, null, 2));
 }

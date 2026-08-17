@@ -42,6 +42,7 @@ const organizationTree = computed(() =>
   ),
 );
 const deptOptions = ref<any[]>([]);
+const staffOptions = ref<any[]>([]);
 const dicts = reactive<Record<string, any[]>>({});
 const loading = ref(false);
 const saving = ref(false);
@@ -121,6 +122,16 @@ const directoryMenus = computed(() =>
 const filteredDepartments = computed(() =>
   deptOptions.value.filter((item) => !form.orgId || String(item.orgId) === String(form.orgId)),
 );
+const selectedStaff = computed(() =>
+  staffOptions.value.find((item) => String(item.id) === String(form.staffId)),
+);
+const needsAuthorizedOrganizations = computed(() =>
+  (form.roleIds ?? []).some((id: string) =>
+    roleOptions.value.some(
+      (role) => String(role.id) === String(id) && Number(role.dataScope) === 4,
+    ),
+  ),
+);
 const allMenusSelected = computed({
   get: () =>
     pageMenus.value.length > 0 &&
@@ -167,6 +178,7 @@ async function loadSupport() {
     roleOptions.value = options.roles ?? [];
     orgOptions.value = options.organizations ?? [];
     deptOptions.value = options.departments ?? [];
+    staffOptions.value = options.staff ?? [];
   }
 }
 
@@ -208,6 +220,8 @@ function resetForm() {
       phone: '',
       orgId: '',
       deptId: '',
+      staffId: '',
+      authorizedOrgIds: [],
       roleIds: [],
       status: 1,
     });
@@ -247,6 +261,8 @@ function open(nextMode: Mode, row?: any) {
         phone: row.phone,
         orgId: row.orgId,
         deptId: row.deptId,
+        staffId: row.staffId,
+        authorizedOrgIds: (row.authorizedOrgIds ?? []).map(String),
         roleIds: (row.roleIds ?? []).map(String),
         status: row.statusValue,
       });
@@ -274,6 +290,8 @@ function validate() {
       return '初始密码至少6个字符';
     if (!form.orgId) return '请选择所属公司';
     if (!form.roleIds?.length) return '请至少选择一个角色';
+    if (needsAuthorizedOrganizations.value && !form.authorizedOrgIds?.length)
+      return '指定组织数据范围至少选择一个组织';
   }
   return '';
 }
@@ -340,6 +358,16 @@ watch(resource, () => {
   statusFilter.value = '';
   if (resource.value !== 'tasks') load();
 });
+watch(
+  () => form.staffId,
+  () => {
+    if (!form.staffId || !selectedStaff.value) return;
+    form.orgId = selectedStaff.value.orgId;
+    form.deptId = selectedStaff.value.deptId || '';
+    if (mode.value === 'create' || !String(form.name ?? '').trim()) form.name = selectedStaff.value.name;
+    if (!String(form.phone ?? '').trim()) form.phone = selectedStaff.value.mobile || '';
+  },
+);
 watch(
   () => form.orgId,
   () => {
@@ -498,6 +526,9 @@ onMounted(async () => {
           >
           <el-table-column prop="department" label="所属部门" min-width="130"
             ><template #default="{ row }">{{ row.department || '—' }}</template></el-table-column
+          >
+          <el-table-column label="岗位" min-width="130" show-overflow-tooltip
+            ><template #default="{ row }">{{ row.positionName || '—' }}</template></el-table-column
           >
           <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
             ><template #default="{ row }">{{
@@ -684,6 +715,13 @@ onMounted(async () => {
             <span class="detail-label">所属部门</span><span>{{ current.department || '—' }}</span>
           </div>
           <div class="detail-item">
+            <span class="detail-label">关联人员</span
+            ><span>{{ current.staffName || '本地账号（未关联 OA 人员）' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">所属岗位</span><span>{{ current.positionName || '—' }}</span>
+          </div>
+          <div class="detail-item">
             <span class="detail-label">所属角色</span
             ><span>{{ current.roleNames?.join('、') || '—' }}</span>
           </div>
@@ -799,6 +837,20 @@ onMounted(async () => {
             <el-form-item label="用户姓名 *"
               ><el-input v-model="form.name" maxlength="50"
             /></el-form-item>
+            <el-form-item label="关联 OA 人员"
+              ><el-select
+                v-model="form.staffId"
+                clearable
+                filterable
+                :disabled="mode === 'view'"
+                placeholder="本地测试账号可不关联"
+                style="width: 100%"
+                ><el-option
+                  v-for="item in staffOptions"
+                  :key="item.id"
+                  :label="`${item.name} · ${item.positionName} · ${item.orgName}`"
+                  :value="item.id" /></el-select
+            ></el-form-item>
             <el-form-item label="联系电话"
               ><el-input v-model="form.phone" maxlength="20"
             /></el-form-item>
@@ -810,18 +862,27 @@ onMounted(async () => {
                 check-strictly
                 node-key="value"
                 :props="{ label: 'label', children: 'children' }"
+                :disabled="mode === 'view' || !!form.staffId"
                 style="width: 100%"
               />
               ></el-form-item
             >
             <el-form-item label="所属部门"
-              ><el-select v-model="form.deptId" clearable filterable style="width: 100%"
+              ><el-select
+                v-model="form.deptId"
+                clearable
+                filterable
+                :disabled="mode === 'view' || !!form.staffId"
+                style="width: 100%"
                 ><el-option
                   v-for="item in filteredDepartments"
                   :key="item.id"
                   :label="item.name"
                   :value="item.id" /></el-select
             ></el-form-item>
+            <el-form-item label="所属岗位"
+              ><el-input :model-value="selectedStaff?.positionName || current?.positionName || '—'" disabled
+            /></el-form-item>
             <el-form-item label="数据范围 *"
               ><el-input
                 :model-value="
@@ -856,6 +917,21 @@ onMounted(async () => {
                 }}</small></el-checkbox
               ></el-checkbox-group
             >
+          </div>
+          <div v-if="needsAuthorizedOrganizations" class="permission-section">
+            <div class="permission-title">指定组织范围 *</div>
+            <el-tree-select
+              v-model="form.authorizedOrgIds"
+              :data="organizationTree"
+              multiple
+              filterable
+              check-strictly
+              show-checkbox
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
+              :disabled="mode === 'view'"
+              style="width: 100%"
+            />
           </div>
         </template>
 

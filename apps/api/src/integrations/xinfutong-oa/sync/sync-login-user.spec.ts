@@ -74,6 +74,8 @@ describe('XinfutongOaSyncService.upsertLoginUserByMobile', () => {
         name: '张三',
         orgId: 2n,
         deptId: 3n,
+        staffId: 1n,
+        identityUsable: true,
       }),
     ).resolves.toBe('inserted');
 
@@ -83,6 +85,7 @@ describe('XinfutongOaSyncService.upsertLoginUserByMobile', () => {
     expect(data.nickname).toBe('张三');
     expect(data.org_id).toBe(2n);
     expect(data.dept_id).toBe(3n);
+    expect(data.staff_id).toBe(1n);
     expect(data.status).toBe(1);
     expect(await compare('345678', data.password)).toBe(true);
     expect(prisma.hspsi_sys_user_role.createMany).not.toHaveBeenCalled();
@@ -107,6 +110,26 @@ describe('XinfutongOaSyncService.upsertLoginUserByMobile', () => {
     });
     expect(prisma.hspsi_sys_user.update.mock.calls[0][0].data.nickname).toBe('李四');
     expect(prisma.hspsi_sys_user_role.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('账号已关联其他 OA 人员时拒绝自动改绑', async () => {
+    prisma.hspsi_sys_user.findFirst.mockResolvedValue({
+      id: 9n,
+      username: '13812345678',
+      staff_id: 8n,
+    });
+    prisma.hspsi_basic_staff.findFirst.mockResolvedValue({ id: 1n });
+
+    await expect(
+      service.upsertLoginUserByMobile({
+        mobile: '13812345678',
+        name: '张三',
+        staffId: 1n,
+        identityUsable: true,
+      }),
+    ).resolves.toBe('skipped');
+
+    expect(prisma.hspsi_sys_user.update).not.toHaveBeenCalled();
   });
 
   it('该手机号已无有效 OA 人员时禁用登录账号', async () => {

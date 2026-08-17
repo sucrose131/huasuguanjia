@@ -1697,6 +1697,7 @@ onMounted(async () => {
         ><el-pagination
           v-model:current-page="query.page"
           v-model:page-size="query.pageSize"
+          :teleported="false"
           layout="prev, pager, next, sizes"
           :total="total"
           @change="load"
