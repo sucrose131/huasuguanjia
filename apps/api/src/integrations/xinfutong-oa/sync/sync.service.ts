@@ -530,6 +530,33 @@ export class XinfutongOaSyncService {
           });
           stats.org_inserted++;
         }
+
+        // 已显式关联到该 OA 人员的本地登录账号只同步身份归属，不改变角色和金额白名单。
+        // OA 人员停用、删除或身份链不完整时立即停用本地账号，避免残留会话继续进入系统。
+        const primaryMembership = await this.prisma.hspsi_basic_staff_organizations.findFirst({
+          where: { staff_id: staffId, type: 1, deleted_at: null },
+        });
+        let loginOrgId: bigint | null = null;
+        let loginDeptId: bigint | null = null;
+        if (primaryMembership?.org_type === 1) loginOrgId = primaryMembership.org_id;
+        if (primaryMembership?.org_type === 2) {
+          const department = await this.prisma.hspsi_basic_dept.findFirst({
+            where: { dept_id: primaryMembership.org_id, status: 1, deleted_at: null },
+          });
+          if (department) {
+            loginOrgId = department.org_id;
+            loginDeptId = department.dept_id;
+          }
+        }
+        const identityUsable = status === 1 && !deletedAt && postId > 0n && loginOrgId !== null;
+        await this.prisma.hspsi_sys_user.updateMany({
+          where: { staff_id: staffId, deleted_at: null },
+          data: {
+            ...(loginOrgId ? { org_id: loginOrgId, dept_id: loginDeptId } : {}),
+            ...(!identityUsable ? { status: 2 } : {}),
+            updated_at: now,
+          },
+        });
     }
 
     return stats;

@@ -82,6 +82,13 @@ function resetProgressForm() {
     occurredAt: new Date(),
   });
 }
+function serviceProgressStatusType(item: B): 'success' | 'warning' | 'danger' | 'info' {
+  const label = String(item.statusName ?? item.status ?? '');
+  if (label.includes('完成')) return 'success';
+  if (label.includes('取消') || label.includes('关闭')) return 'info';
+  if (label.includes('失败') || label.includes('驳回')) return 'danger';
+  return 'warning';
+}
 const isMoney = computed(() => ['payments', 'refunds'].includes(resource.value)),
   isService = computed(() => resource.value === 'services'),
   isBom = computed(() => key.value === 'production/boms'),
@@ -3308,11 +3315,16 @@ watch(key, async () => {
       <section v-if="isService && mode !== 'create' && form.id" class="service-progress-panel">
         <div class="service-progress-title">
           <div><strong>售后处理进展</strong><span>多次记录，原始售后申请不会被覆盖</span></div>
-          <el-button v-if="progressForm.id" link type="primary" @click="resetProgressForm">
+          <el-button
+            v-if="mode !== 'view' && progressForm.id"
+            link
+            type="primary"
+            @click="resetProgressForm"
+          >
             取消编辑
           </el-button>
         </div>
-        <div class="service-progress-editor">
+        <div v-if="mode !== 'view'" class="service-progress-editor">
           <el-input
             v-model="progressForm.content"
             type="textarea"
@@ -3321,47 +3333,75 @@ watch(key, async () => {
             show-word-limit
             placeholder="记录本次沟通、处理动作和下一步安排"
           />
-          <el-select v-model="progressForm.status" placeholder="处理后状态">
-            <el-option
-              v-for="item in options.dictionaries.after_sale_event_status || []"
-              :key="item.value"
-              :label="item.label"
-              :value="Number(item.value)"
+          <div class="service-progress-editor-row">
+            <el-select v-model="progressForm.status" placeholder="处理后状态">
+              <el-option
+                v-for="item in options.dictionaries.after_sale_event_status || []"
+                :key="item.value"
+                :label="item.label"
+                :value="Number(item.value)"
+              />
+            </el-select>
+            <el-date-picker
+              v-model="progressForm.occurredAt"
+              type="datetime"
+              placeholder="实际处理时间"
+              style="width: 100%"
             />
-          </el-select>
-          <el-date-picker
-            v-model="progressForm.occurredAt"
-            type="datetime"
-            placeholder="实际处理时间"
-            style="width: 100%"
-          />
-          <el-button type="primary" :loading="progressSaving" @click="saveServiceProgress">
-            {{ progressForm.id ? '保存进展修改' : '添加进展' }}
-          </el-button>
+            <el-button type="primary" :loading="progressSaving" @click="saveServiceProgress">
+              {{ progressForm.id ? '保存进展修改' : '添加进展' }}
+            </el-button>
+          </div>
         </div>
-        <el-empty v-if="!serviceProgresses.length" description="暂无处理进展" :image-size="48" />
-        <el-timeline v-else class="service-progress-list">
-          <el-timeline-item
-            v-for="item in serviceProgresses"
-            :key="item.id"
-            :timestamp="`${dateText(item.occurredAt, true)} · ${item.handlerIdName || item.createdByName || '未知操作人'}`"
-            placement="top"
+        <el-table
+          class="service-progress-table"
+          :data="serviceProgresses"
+          row-key="id"
+          border
+          stripe
+          table-layout="fixed"
+          max-height="320"
+          empty-text="暂无处理进展"
+        >
+          <el-table-column label="处理时间" width="168">
+            <template #default="{ row }">{{ dateText(row.occurredAt, true) }}</template>
+          </el-table-column>
+          <el-table-column prop="content" label="处理内容" min-width="300" show-overflow-tooltip />
+          <el-table-column label="处理状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :type="serviceProgressStatusType(row)">
+                {{ row.statusName || row.status || '—' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="记录来源" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" type="info">
+                {{ row.sourceTypeName || '人工记录' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="处理人" width="120" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ row.handlerIdName || row.createdByName || '未知操作人' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-if="mode !== 'view'"
+            fixed="right"
+            label="操作"
+            width="110"
+            align="center"
           >
-            <div class="service-progress-card">
-              <div>
-                <el-tag size="small" effect="plain">{{ item.statusName || item.status }}</el-tag>
-                <el-tag size="small" effect="plain" type="info">
-                  {{ item.sourceTypeName || '人工记录' }}
-                </el-tag>
-              </div>
-              <p>{{ item.content }}</p>
-              <div v-if="Number(item.sourceType) === 1" class="service-progress-actions">
-                <el-button link type="primary" @click="editServiceProgress(item)">编辑</el-button>
-                <el-button link type="danger" @click="deleteServiceProgress(item)">删除</el-button>
-              </div>
-            </div>
-          </el-timeline-item>
-        </el-timeline>
+            <template #default="{ row }">
+              <template v-if="Number(row.sourceType) === 1">
+                <el-button link type="primary" @click="editServiceProgress(row)">编辑</el-button>
+                <el-button link type="danger" @click="deleteServiceProgress(row)">删除</el-button>
+              </template>
+              <span v-else class="service-progress-readonly">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
       </section>
       <DocumentAttachments
         v-if="mode !== 'create' && attachmentType && form.id"
@@ -3523,15 +3563,12 @@ watch(key, async () => {
   border: 1px solid #e4e7ed;
   border-radius: 6px;
 }
-.service-progress-title,
-.service-progress-editor,
-.service-progress-card {
-  display: flex;
-  gap: 10px;
-}
 .service-progress-title {
+  display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 .service-progress-title span {
   margin-left: 10px;
@@ -3539,34 +3576,24 @@ watch(key, async () => {
   font-size: 12px;
 }
 .service-progress-editor {
-  align-items: flex-start;
-  margin: 12px 0 18px;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: #f8faff;
+  border: 1px solid #e5e9f0;
+  border-radius: 4px;
 }
-.service-progress-editor .el-textarea {
-  flex: 1;
+.service-progress-editor-row {
+  display: grid;
+  grid-template-columns: 180px 220px max-content;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
 }
-.service-progress-editor .el-select,
-.service-progress-editor .el-date-editor {
-  width: 180px;
+.service-progress-table {
+  width: 100%;
 }
-.service-progress-list {
-  padding-left: 6px;
-}
-.service-progress-card {
-  position: relative;
-  flex-direction: column;
-  padding: 10px 12px;
-  background: #f7f9fc;
-  border-radius: 5px;
-}
-.service-progress-card p {
-  margin: 0;
-  white-space: pre-wrap;
-}
-.service-progress-actions {
-  position: absolute;
-  top: 8px;
-  right: 10px;
+.service-progress-readonly {
+  color: #a8abb2;
 }
 .funds-section {
   margin-bottom: 8px;
@@ -3643,6 +3670,9 @@ watch(key, async () => {
   .order-totals {
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+  .service-progress-editor-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

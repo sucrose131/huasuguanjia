@@ -304,7 +304,11 @@ function remoteSearchGoods(line: any, keyword: string) {
 }
 function searchedGoods(line: any) {
   const keyword = String(line.goodsSearchKeyword ?? '').trim();
-  return keyword ? compatibleGoods(line, line.remoteGoods ?? []) : availableGoods(line);
+  const items = keyword ? compatibleGoods(line, line.remoteGoods ?? []) : availableGoods(line);
+  const selected = byId('goods', line.goodsId);
+  if (!keyword && selected && !items.some((item) => String(item.id) === String(selected.id)))
+    return [selected, ...items];
+  return items;
 }
 const quickGoodsName = (line: any) => String(line.goodsSearchKeyword ?? '').trim();
 const rules: FormRules = {
@@ -537,9 +541,6 @@ async function loadOrganizationOptions(orgId: unknown) {
 async function organizationChanged(orgId: unknown) {
   form.deptId = '';
   form.warehouseId = '';
-  if (Array.isArray(form.details)) {
-    form.details = ['applications', 'orders'].includes(resource.value) ? [blankLine()] : [];
-  }
   await loadOrganizationOptions(orgId);
 }
 function warehouseChanged() {
@@ -1092,7 +1093,11 @@ async function open(modeValue: Mode, row: any) {
     }
     if (form.orgId) await loadOrganizationOptions(form.orgId);
     if (Array.isArray(form.details)) await Promise.all(form.details.map(enrichLine));
-    if (resource.value === 'receipts' && modeValue === 'edit' && form.warehouseId) {
+    if (
+      ['applications', 'orders', 'receipts'].includes(resource.value) &&
+      modeValue === 'edit' &&
+      form.warehouseId
+    ) {
       const selectedWarehouse = filteredWarehouses.value.find(
         (item) => String(item.value) === String(form.warehouseId),
       );
@@ -1102,7 +1107,7 @@ async function open(modeValue: Mode, row: any) {
           optionWarehouseType(selectedWarehouse) !== documentWarehouseType.value)
       ) {
         form.warehouseId = '';
-        ElMessage.warning('原入库仓库与商品分类不匹配，请重新选择同组织、同类型仓库');
+        ElMessage.warning('原目标仓库与商品分类不匹配，请重新选择同组织、同类型仓库');
       }
     }
     dialog.value = true;
@@ -2242,6 +2247,7 @@ onMounted(async () => {
           v-model:current-page="query.page"
           v-model:page-size="query.pageSize"
           :total="total"
+          :teleported="false"
           layout="prev, pager, next, sizes"
           @change="load"
         />

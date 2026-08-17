@@ -20,6 +20,6 @@ import { AmountAccessModule } from '../amount-access/amount-access.module';
   ],
   controllers: [AuthController],
   providers: [AuthService, AuthGuard, PermissionGuard],
-  exports: [AuthGuard, PermissionGuard, JwtModule],
+  exports: [AuthService, AuthGuard, PermissionGuard, JwtModule],
 })
 export class AuthModule {}

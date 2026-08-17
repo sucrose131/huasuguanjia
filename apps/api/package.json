@@ -16,7 +16,10 @@
     "backfill:purchase-refunds": "tsx src/scripts/backfill-purchase-refunds.ts",
     "verify:document-chain": "tsx src/scripts/verify-document-chain.ts",
     "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts",
+    "verify:organization-permissions": "tsx src/scripts/verify-organization-permissions.ts",
+    "verify:data-scopes": "tsx src/scripts/verify-data-scopes.ts",
     "audit:inventory-pieces": "tsx src/scripts/audit-inventory-pieces.ts",
+    "audit:organization-permissions": "tsx src/scripts/audit-organization-permissions.ts",
     "attachments:orphans": "tsx src/scripts/cleanup-oss-orphans.ts",
     "attachments:orphans:clean": "tsx src/scripts/cleanup-oss-orphans.ts --execute"
   },

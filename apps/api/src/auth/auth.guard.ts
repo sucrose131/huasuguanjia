@@ -6,14 +6,14 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { RedisService } from '../redis/redis.service';
 import { AuthRequest, AuthUser } from './auth.types';
+import { AuthService } from './auth.service';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
     @Inject(JwtService) private readonly jwt: JwtService,
-    @Inject(RedisService) private readonly redis: RedisService,
+    @Inject(AuthService) private readonly auth: AuthService,
   ) {}
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthRequest>();
@@ -21,9 +21,7 @@ export class AuthGuard implements CanActivate {
     if (!token) throw new UnauthorizedException('请先登录');
     try {
       const payload = await this.jwt.verifyAsync<AuthUser & { sid: string }>(token);
-      await this.redis.ensureConnected();
-      if (!(await this.redis.client.exists(`session:${payload.sid}`))) throw new Error('expired');
-      request.user = payload;
+      request.user = await this.auth.resolveSession(payload.sid, payload.id);
       return true;
     } catch {
       throw new UnauthorizedException('登录已失效，请重新登录');
