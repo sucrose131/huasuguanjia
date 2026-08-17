@@ -15,6 +15,7 @@ type Option = { value: string | number; label: string; raw?: Row };
 
 const route = useRoute();
 const auth = useAuthStore();
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const resource = computed(() => String(route.params.resource));
 const isInput = computed(() => resource.value === 'general-inputs');
 const title = computed(() => (isInput.value ? '通用入库单' : '通用出库单'));
@@ -416,7 +417,7 @@ onMounted(async () => {
           <el-table-column label="基础件成本" width="140"
             ><template #default="s"
               ><el-input-number
-                v-if="isInput && !viewing"
+                v-if="isInput && !viewing && canEditAmount"
                 v-model="s.row.baseCost"
                 :min="0"
                 :precision="4"

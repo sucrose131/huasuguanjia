@@ -2453,7 +2453,10 @@ export class InventoryService {
         throw new BadRequestException('明细数量必须为正整数');
       if (requiresAvailable && quantity > Number(stock.inventory_qty))
         throw new BadRequestException(`批次 ${batchNo || '无批号'} 处理数量超过当前库存`);
-      const amount = Number(line.amount ?? quantity * Number(line.unitPrice ?? 0));
+      const unitCost = Number(stock.inventory_qty)
+        ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
+        : 0;
+      const amount = quantity * unitCost;
       if (!Number.isFinite(amount) || amount < 0)
         throw new BadRequestException('明细金额不能为负数');
       return { goodsId, skuId, batchNo, unitType: stock.unit_type, quantity, amount };

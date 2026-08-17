@@ -7,8 +7,15 @@ import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.s
 import { PurchaseController } from './purchase.controller';
 import { PurchaseService } from './purchase.service';
 import { XinfutongOaModule } from '../integrations/xinfutong-oa/xinfutong-oa.module';
+import { AmountAccessModule } from '../amount-access/amount-access.module';
 @Module({
-  imports: [AuthModule, AttachmentsModule, InventoryModule, XinfutongOaModule],
+  imports: [
+    AuthModule,
+    AttachmentsModule,
+    InventoryModule,
+    XinfutongOaModule,
+    AmountAccessModule,
+  ],
   controllers: [PurchaseController],
   providers: [PurchaseService, PurchaseOaApprovalService, PurchaseReturnOaApprovalService],
   exports: [PurchaseService, PurchaseReturnOaApprovalService],

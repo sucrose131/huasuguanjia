@@ -15,11 +15,15 @@ import { PermissionGuard } from '../auth/permission.guard';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { InventoryGeneralService } from './inventory-general.service';
+import { AmountAccessService } from '../amount-access/amount-access.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
 export class InventoryGeneralController {
-  constructor(@Inject(InventoryGeneralService) private readonly service: InventoryGeneralService) {}
+  constructor(
+    @Inject(InventoryGeneralService) private readonly service: InventoryGeneralService,
+    @Inject(AmountAccessService) private readonly amountAccess: AmountAccessService,
+  ) {}
 
   @Get('general-orders/config')
   @RequirePermissions('inventory')
@@ -53,8 +57,17 @@ export class InventoryGeneralController {
 
   @Post('general-inputs')
   @RequirePermissions('inventory')
-  createInput(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.create(1, body, user.id);
+  async createInput(@Body() body: any, @CurrentUser() user: AuthUser) {
+    const access = await this.amountAccess.forUser(user.id);
+    const protectedBody = access.canEditAmount
+      ? body
+      : {
+          ...body,
+          lines: Array.isArray(body.lines)
+            ? body.lines.map(({ baseCost: _baseCost, ...line }: Record<string, any>) => line)
+            : body.lines,
+        };
+    return this.service.create(1, protectedBody, user.id);
   }
 
   @Get('general-outputs')

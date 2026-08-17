@@ -1828,6 +1828,18 @@ model hspsi_sys_user {
   @@index([org_id], map: "idx_org_id")
 }
 
+/// 本地系统用户金额白名单；无记录即无权限，不参与 OA 同步。
+model hspsi_sys_user_amount_access {
+  user_id         BigInt   @id @db.UnsignedBigInt
+  can_view_amount Int      @default(0) @db.TinyInt
+  can_edit_amount Int      @default(0) @db.TinyInt
+  grant_reason    String   @default("") @db.VarChar(255)
+  created_by      BigInt   @default(0)
+  updated_by      BigInt   @default(0)
+  created_at      DateTime @default(now()) @db.DateTime(0)
+  updated_at      DateTime @default(now()) @db.DateTime(0)
+}
+
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sys_user_role {
   user_id Int @db.UnsignedInt

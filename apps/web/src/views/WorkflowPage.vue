@@ -30,6 +30,7 @@ const route = useRoute(),
   auth = useAuthStore(),
   group = computed(() => String(route.path.split('/')[1])),
   resource = computed(() => String(route.params.resource));
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const key = computed(() => `${group.value}/${resource.value}`),
   current = computed<B>(() => businessConfigs[key.value] ?? businessConfigs['production/boms']!),
   rows = ref<B[]>([]),
@@ -212,6 +213,7 @@ const moneyLimit = computed(() =>
 );
 const moneySaveDisabled = computed(
   () =>
+    !canEditAmount.value ||
     !form.orderId ||
     !form.orgId ||
     !form.deptId ||
@@ -833,6 +835,10 @@ async function sourceChanged() {
   }
 }
 async function open(row?: B, view = false) {
+  if (!view && (isOrder.value || isMoney.value) && !canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，只能查看金额相关单据');
+    return;
+  }
   moneyOrderLocked.value = false;
   temporaryCreateMode.value = false;
   reset();
@@ -1646,6 +1652,7 @@ watch(key, async () => {
           key !== 'requisitions/outputs'
         "
         type="primary"
+        :disabled="(isOrder || isMoney) && !canEditAmount"
         @click="open()"
         >{{ current.createText || '新增' + current.title }}</el-button
       >
@@ -2804,6 +2811,7 @@ watch(key, async () => {
                 :max="moneyLimit"
                 :step="0.01"
                 :precision="2"
+                :disabled="!canEditAmount"
                 style="width: 100%"
             /></el-form-item>
             <el-form-item :label="resource === 'payments' ? '付款方式' : '退款方式'"
@@ -3260,7 +3268,7 @@ watch(key, async () => {
                 v-model="s.row.price"
                 :min="0"
                 :precision="2"
-                :disabled="mode === 'view'"
+                :disabled="mode === 'view' || !canEditAmount"
               />
             </template>
           </el-table-column>

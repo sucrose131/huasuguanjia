@@ -18,6 +18,9 @@ import { AuthUser } from '../auth/auth.types';
 import { PurchaseService } from './purchase.service';
 import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
+import { AmountAccessService } from '../amount-access/amount-access.service';
+import { PURCHASE_ORDER_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
+import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
 export class PurchaseController {
@@ -26,7 +29,22 @@ export class PurchaseController {
     @Inject(PurchaseOaApprovalService) private oaApproval: PurchaseOaApprovalService,
     @Inject(PurchaseReturnOaApprovalService)
     private returnOaApproval: PurchaseReturnOaApprovalService,
+    @Inject(AmountAccessService) private amountAccess: AmountAccessService,
   ) {}
+
+  private async protectPurchaseAmounts<T>(value: T, userId: string): Promise<T> {
+    const access = await this.amountAccess.forUser(userId);
+    const protectedValue = access.canViewAmount
+      ? value
+      : this.amountAccess.maskFields(value, PURCHASE_ORDER_AMOUNT_FIELDS);
+    if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
+      return protectedValue;
+    return {
+      ...protectedValue,
+      amountAccess: access.level,
+      amountMasked: !access.canViewAmount,
+    } as T;
+  }
   @RequirePermissions('purchase')
   @Get(':resource/:id/operation-history')
   operationHistory(@Param('resource') resource: string, @Param('id') id: string) {
@@ -39,8 +57,8 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Get('applications/:id')
-  application(@Param('id') id: string) {
-    return this.service.application(id);
+  async application(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.application(id), u.id);
   }
   @RequirePermissions('purchase')
   @Post('applications')
@@ -82,11 +100,12 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/generate-order')
-  generateApplicationOrder(
+  async generateApplicationOrder(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    await this.amountAccess.assertCanEdit(u.id);
     return this.service.generateApplicationOrder(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -96,26 +115,28 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Get('orders')
-  orders(@Query() q: Record<string, string>) {
-    return this.service.orders(q);
+  async orders(@Query() q: Record<string, string>, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.orders(q), u.id);
   }
   @RequirePermissions('purchase')
   @Get('orders/:id')
-  order(@Param('id') id: string) {
-    return this.service.order(id);
+  async order(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.order(id), u.id);
   }
   @RequirePermissions('purchase')
   @Post('orders')
-  createOrder(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+  async createOrder(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+    await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveOrder(null, b, u.id);
   }
   @RequirePermissions('purchase')
   @Patch('orders/:id')
-  updateOrder(
+  async updateOrder(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveOrder(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -158,16 +179,18 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('receipts')
-  createReceipt(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+  async createReceipt(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+    if (b.directReceipt) await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveReceipt(null, b, u.id);
   }
   @RequirePermissions('purchase')
   @Patch('receipts/:id')
-  updateReceipt(
+  async updateReceipt(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    if (b.directReceipt) await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveReceipt(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -282,6 +305,7 @@ export class PurchaseController {
     return this.service.refund(id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Post('refunds/:id/flows')
   createRefundFlow(
     @Param('id') id: string,
@@ -306,11 +330,13 @@ export class PurchaseController {
     return this.service.payment(id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Post('payments')
   createPayment(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
     return this.service.savePayment(null, b, u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Patch('payments/:id')
   updatePayment(
     @Param('id') id: string,

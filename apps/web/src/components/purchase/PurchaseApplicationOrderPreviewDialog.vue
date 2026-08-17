@@ -14,6 +14,8 @@ const props = defineProps<{
   modelValue: boolean;
   applicationId: string;
   mode: PreviewMode;
+  canViewAmount: boolean;
+  canEditAmount: boolean;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
@@ -69,6 +71,8 @@ const lookup = (name: string, value: unknown) =>
   options[name]?.find((item) => String(item.value) === String(value))?.label ?? '—';
 const orderStatus = (value: unknown) =>
   orderStatuses.value.find((item) => String(item.value) === String(value))?.label ?? '—';
+const protectedMoneyText = (value: unknown) =>
+  props.canViewAmount ? `¥ ${moneyText(value)}` : '****';
 const canSelect = (row: any) => row.generationStatus !== 'generated';
 const rowUnitPrice = (row: any) => {
   const quantity = Number(row.quantity ?? 0);
@@ -108,9 +112,9 @@ async function load() {
     data.details = (data.details ?? []).map((line: any) => {
       const product = products.get(String(line.goodsId));
       const sku = (product?.skus ?? []).find((item: any) => String(item.id) === String(line.skuId));
-      const referencePrice = Number(
-        line.referencePrice ?? sku?.costPrice ?? product?.costPrice ?? 0,
-      );
+      const referencePrice = props.canViewAmount
+        ? Number(line.referencePrice ?? sku?.costPrice ?? product?.costPrice ?? 0)
+        : null;
       return {
         ...line,
         goodsCode: product?.queryCode ?? '',
@@ -118,7 +122,10 @@ async function load() {
         skuName: sku?.specModels || sku?.skuName || sku?.skuNo || `规格 ${line.skuId}`,
         unitType: line.unitType || sku?.unitType || product?.unitType,
         referencePrice,
-        totalAmount: Number((referencePrice * Number(line.quantity ?? 0)).toFixed(2)),
+        totalAmount:
+          referencePrice == null
+            ? null
+            : Number((referencePrice * Number(line.quantity ?? 0)).toFixed(2)),
       };
     });
     application.value = data;
@@ -138,6 +145,10 @@ function close() {
 }
 
 async function submitOrder() {
+  if (!props.canEditAmount) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能生成采购订单');
+    return;
+  }
   if (!form.vendorId) {
     ElMessage.warning('请选择本次采购订单的供应商');
     return;
@@ -217,7 +228,7 @@ watch(
           <el-table-column prop="itemCount" label="商品种类" width="96" align="right" />
           <el-table-column prop="quantity" label="采购数量" width="104" align="right" />
           <el-table-column label="订单金额" width="128" align="right">
-            <template #default="scope">¥ {{ moneyText(scope.row.totalAmount) }}</template>
+            <template #default="scope">{{ protectedMoneyText(scope.row.totalAmount) }}</template>
           </el-table-column>
           <el-table-column label="订单状态" width="104">
             <template #default="scope">
@@ -333,34 +344,42 @@ watch(
             <template #default="scope">{{ scope.row.generatedOrderNo || '—' }}</template>
           </el-table-column>
           <el-table-column label="参考价格" width="112" align="right">
-            <template #default="scope">¥ {{ moneyText(scope.row.referencePrice) }}</template>
+            <template #default="scope">{{ protectedMoneyText(scope.row.referencePrice) }}</template>
           </el-table-column>
           <el-table-column label="采购总金额" width="154" align="right">
             <template #default="scope">
               <el-input-number
+                v-if="canEditAmount"
                 v-model="scope.row.totalAmount"
                 :min="0"
                 :precision="2"
                 controls-position="right"
                 :disabled="scope.row.generationStatus === 'generated'"
               />
+              <span v-else>{{ protectedMoneyText(scope.row.totalAmount) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="采购单价" width="120" align="right">
-            <template #default="scope">¥ {{ moneyText(rowUnitPrice(scope.row)) }}</template>
+            <template #default="scope">{{ protectedMoneyText(rowUnitPrice(scope.row)) }}</template>
           </el-table-column>
         </el-table>
         <div class="generation-summary">
           <span>已选 {{ effectiveRows.length }} 项</span>
           <span>采购数量 {{ selectedQuantity }}</span>
-          <strong>订单金额 ¥ {{ moneyText(selectedAmount) }}</strong>
+          <strong>订单金额 {{ protectedMoneyText(selectedAmount) }}</strong>
         </div>
       </template>
     </div>
 
     <template #footer>
       <el-button @click="close">关闭</el-button>
-      <el-button v-if="isGeneration" type="primary" :loading="submitting" @click="submitOrder">
+      <el-button
+        v-if="isGeneration"
+        type="primary"
+        :loading="submitting"
+        :disabled="!canEditAmount"
+        @click="submitOrder"
+      >
         提交生成采购订单
       </el-button>
     </template>

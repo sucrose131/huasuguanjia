@@ -49,9 +49,13 @@ const error = ref('');
 const keyword = ref('');
 const statusFilter = ref<string | number>('');
 const dialog = ref(false);
+const amountDialog = ref(false);
 const mode = ref<Mode>('create');
 const current = ref<any>(null);
 const form = reactive<any>({});
+const amountSaving = ref(false);
+const amountCurrent = ref<any>(null);
+const amountForm = reactive({ level: 'none', grantReason: '' });
 
 const filteredRows = computed(() =>
   rows.value.filter((row) => {
@@ -63,7 +67,14 @@ const filteredRows = computed(() =>
       resource.value === 'roles'
         ? [row.name, ...(row.menuPermissions ?? []), ...(row.actionPermissions ?? [])]
         : resource.value === 'users'
-          ? [row.account, row.name, row.department, row.phone, ...(row.roleNames ?? [])]
+          ? [
+              row.account,
+              row.name,
+              row.department,
+              row.phone,
+              amountAccessLabel(row.amountAccess),
+              ...(row.roleNames ?? []),
+            ]
           : [row.name, row.path, row.permission, row.type];
     return values.join(' ').includes(word);
   }),
@@ -127,6 +138,14 @@ function dictionaryLabel(code: string, value: any) {
 }
 function timeText(value: any) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '—';
+}
+
+function amountAccessLabel(level: string) {
+  return level === 'edit' ? '可编辑' : level === 'view' ? '仅查看' : '无权限';
+}
+
+function amountAccessTag(level: string) {
+  return level === 'edit' ? 'success' : level === 'view' ? 'primary' : 'info';
 }
 
 async function loadDictionaries() {
@@ -280,6 +299,29 @@ async function save() {
     await load();
   } finally {
     saving.value = false;
+  }
+}
+
+function openAmountAccess(row: any) {
+  amountCurrent.value = row;
+  amountForm.level = row.amountAccess ?? 'none';
+  amountForm.grantReason = '';
+  amountDialog.value = true;
+}
+
+async function saveAmountAccess() {
+  if (!amountForm.grantReason.trim()) {
+    ElMessage.warning('请填写授权或变更原因');
+    return;
+  }
+  amountSaving.value = true;
+  try {
+    await api.put(`/system/users/${amountCurrent.value.id}/amount-access`, amountForm);
+    ElMessage.success(amountForm.level === 'none' ? '金额权限已取消' : '金额权限已保存');
+    amountDialog.value = false;
+    await load();
+  } finally {
+    amountSaving.value = false;
   }
 }
 
@@ -462,6 +504,13 @@ onMounted(async () => {
               row.roleNames?.join('、') || '—'
             }}</template></el-table-column
           >
+          <el-table-column label="金额权限" width="104" align="center"
+            ><template #default="{ row }"
+              ><el-tag :type="amountAccessTag(row.amountAccess)">{{
+                amountAccessLabel(row.amountAccess)
+              }}</el-tag></template
+            ></el-table-column
+          >
           <el-table-column label="数据范围" width="130"
             ><template #default="{ row }">{{
               row.dataScope?.scopeType || '未配置'
@@ -477,9 +526,9 @@ onMounted(async () => {
               }}</el-tag></template
             ></el-table-column
           >
-          <el-table-column label="操作" width="132" fixed="right" align="center"
+          <el-table-column label="操作" width="176" fixed="right" align="center"
             ><template #default="{ row }"
-              ><TableRowActions
+              ><TableRowActions :show-more="can('system:update')"
                 ><el-button link type="primary" @click="open('view', row)">查看</el-button
                 ><el-button
                   v-if="can('system:update')"
@@ -487,6 +536,10 @@ onMounted(async () => {
                   type="primary"
                   @click="open('edit', row)"
                   >编辑</el-button
+                ><template #more
+                  ><el-dropdown-item @click="openAmountAccess(row)"
+                    >金额权限</el-dropdown-item
+                  ></template
                 ></TableRowActions
               ></template
             ></el-table-column
@@ -856,6 +909,58 @@ onMounted(async () => {
         }}</el-button></template
       >
     </el-dialog>
+
+    <el-dialog
+      v-model="amountDialog"
+      width="560"
+      title="配置金额权限"
+      :close-on-click-modal="false"
+    >
+      <div class="amount-access-user">
+        <div>
+          <span>用户姓名</span><strong>{{ amountCurrent?.name || '—' }}</strong>
+        </div>
+        <div>
+          <span>登录账号</span><strong>{{ amountCurrent?.account || '—' }}</strong>
+        </div>
+        <div>
+          <span>所属公司</span><strong>{{ amountCurrent?.orgName || '—' }}</strong>
+        </div>
+      </div>
+      <el-alert
+        title="金额权限独立于角色、岗位和 OA；未进入白名单时默认不能查看或编辑金额。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <el-form label-position="top" class="amount-access-form">
+        <el-form-item label="金额权限 *">
+          <el-radio-group v-model="amountForm.level" class="amount-access-levels">
+            <el-radio-button value="none">无权限</el-radio-button>
+            <el-radio-button value="view">仅查看</el-radio-button>
+            <el-radio-button value="edit" :disabled="Number(amountCurrent?.statusValue) !== 1"
+              >可编辑</el-radio-button
+            >
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="授权或变更原因 *">
+          <el-input
+            v-model="amountForm.grantReason"
+            type="textarea"
+            :rows="3"
+            maxlength="255"
+            show-word-limit
+            placeholder="请填写业务负责人确认、取消授权或其他变更原因"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="amountDialog = false">取消</el-button>
+        <el-button type="primary" :loading="amountSaving" @click="saveAmountAccess"
+          >保存</el-button
+        >
+      </template>
+    </el-dialog>
     </template>
   </section>
 </template>
@@ -960,6 +1065,39 @@ onMounted(async () => {
   color: var(--hs-muted);
   font-size: 9px;
 }
+.amount-access-user {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.amount-access-user > div {
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+.amount-access-user span,
+.amount-access-user strong {
+  display: block;
+}
+.amount-access-user span {
+  margin-bottom: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.amount-access-form {
+  margin-top: 18px;
+}
+.amount-access-levels {
+  width: 100%;
+}
+.amount-access-levels :deep(.el-radio-button) {
+  flex: 1;
+}
+.amount-access-levels :deep(.el-radio-button__inner) {
+  width: 100%;
+}
 .table-wrap :deep(.el-table) {
   min-width: 1180px;
 }
@@ -979,6 +1117,9 @@ onMounted(async () => {
   }
   .action-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .amount-access-user {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 540px) {

@@ -5,9 +5,11 @@ import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import { PermissionGuard } from './permission.guard';
+import { AmountAccessModule } from '../amount-access/amount-access.module';
 
 @Module({
   imports: [
+    AmountAccessModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

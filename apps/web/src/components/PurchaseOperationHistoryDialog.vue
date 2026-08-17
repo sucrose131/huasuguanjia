@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
+import { moneyText } from '@/utils/format';
 
 type HistoryItem = {
   key: string;
@@ -10,6 +11,7 @@ type HistoryItem = {
   operatorName: string;
   occurredAt: string | null;
   detail?: string;
+  amount?: number | null;
   timeNote?: string;
 };
 
@@ -46,6 +48,12 @@ function dateTimeText(value: string | null) {
     second: '2-digit',
     hour12: false,
   }).format(date);
+}
+
+function detailText(item: HistoryItem) {
+  if (!Object.prototype.hasOwnProperty.call(item, 'amount')) return item.detail ?? '';
+  const amount = moneyText(item.amount);
+  return `${item.detail ?? '金额'} ${amount === '****' ? amount : `¥ ${amount}`}`;
 }
 
 async function load() {
@@ -100,7 +108,9 @@ watch(
               <el-tag size="small" effect="plain">{{ item.result }}</el-tag>
             </header>
             <p><span>操作人</span>{{ item.operatorName }}</p>
-            <p v-if="item.detail"><span>说明</span>{{ item.detail }}</p>
+            <p v-if="item.detail || Object.prototype.hasOwnProperty.call(item, 'amount')">
+              <span>说明</span>{{ detailText(item) }}
+            </p>
             <p v-if="item.timeNote" class="time-note"><span>时间说明</span>{{ item.timeNote }}</p>
           </article>
         </el-timeline-item>

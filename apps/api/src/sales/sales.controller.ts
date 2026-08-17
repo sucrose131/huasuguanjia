@@ -19,6 +19,7 @@ import { SalesService } from './sales.service';
 import { SalesOaApprovalService } from './sales-oa-approval.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApproveOrderDto } from './dto/approve-order.dto';
+import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('sales')
 export class SalesController {
@@ -67,11 +68,13 @@ export class SalesController {
     return this.s.order(id);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('orders')
   createOrder(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
     return this.s.saveOrder(null, dto as any, u.id, 1);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Patch('orders/:id')
   updateOrder(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
     return this.s.saveOrder(id, dto as any, u.id, 1);
@@ -172,6 +175,7 @@ export class SalesController {
     return this.s.payment(id, 1);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('payments')
   payment(@Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.createPayment(b, 1, u.id);
@@ -192,6 +196,7 @@ export class SalesController {
     return this.s.payment(id, 2);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('refunds')
   refund(@Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.createPayment(b, 2, u.id);
@@ -207,12 +212,14 @@ export class SalesController {
     return this.s.orders(q, 2);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('discount-orders')
   async createDiscount(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
     const result = await this.s.saveOrder(null, dto as any, u.id, 2);
     return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Patch('discount-orders/:id')
   async updateDiscount(
     @Param('id') id: string,

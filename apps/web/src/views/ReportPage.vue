@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Download, Refresh, Warning } from '@element-plus/icons-vue';
 import { api } from '@/api';
+import { useAuthStore } from '@/stores/auth';
 
 type Kind = 'text' | 'money' | 'number';
 type Column = { key: string; label: string; kind?: Kind; min?: number };
@@ -18,6 +19,7 @@ type Report = {
 type Row = Record<string, any>;
 
 const route = useRoute();
+const auth = useAuthStore();
 const key = computed(() => String(route.params.report));
 const loading = ref(false);
 const error = ref('');
@@ -76,7 +78,9 @@ const status = (row: Row) =>
 const num = (value: any) =>
   value === '' || value === null || value === undefined ? null : Number(value);
 const money = (value: any) =>
-  value === '' || value === null || value === undefined
+  !auth.amountAccess.canViewAmount
+    ? '****'
+    : value === '' || value === null || value === undefined
     ? ''
     : `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`;
 const c = (key: string, label: string, min = 110, kind: Kind = 'text'): Column => ({
