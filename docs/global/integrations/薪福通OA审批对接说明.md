@@ -67,14 +67,31 @@
 
 ### 2.2 入站事件（OA → 平台）
 
+统一接收地址（事件订阅配置此 URL，不再按事件编号拆路径）：
+
+```text
+POST /api/integrations/xinfutong-oa/events
+```
+
+旧路径 `POST /api/integrations/xinfutong-oa/events/XFTOAFPS` 仍兼容，新配置请改用统一入口。
+
 | 事件编号 | 事件名称 | 触发时机 | 服务实现 |
 |---------|---------|---------|---------|
-| XFTOAFPS | OA审批流程结束事件 | 流程到达终态（PASSED/REJECTED/CANCELED/DELETED） | `ApprovalCallbackService.handleProcessFinishEvent` |
+| XFT00000 | 连接测试 | 保存回调 URL 时 | 立即返回成功报文体，不验签、不落库 |
+| XFTOAFPS | OA审批流程结束事件 | 流程到达终态（PASSED/REJECTED/CANCELED/DELETED） | 验签解密后 `ApprovalCallbackService.handleProcessFinishEvent` |
+
+入站报文外层为事件订阅信封（`eventId`、`eventRcdInf`、`prjCod`、`eventTime`、`eventCd`、`businessKey`、`appId`、`signature`）。正式事件须在 3 秒内以 HTTP 200 返回：
+
+```json
+{ "rtnCod": "200", "errMsg": "" }
+```
+
+验签失败返回 `{ "rtnCod": "001", "errMsg": "验签失败" }`。`eventRcdInf` 解密后的业务字段见各事件文档；`XFTOAFPS` 的业务字段仍为 `prjCod` / `procStatus` / `busKey` / `procInstId` / `procKey`。
 
 ### 2.3 接口调用规范
 
 - **认证方式**：SM2签名 + SM4加解密（加密应用），由 `XinfutongOaClient` 统一处理
-- **凭证来源**：`hspsi_sys_account_set` 表，由 `XinfutongOaCredentialService` 提供
+- **凭证来源**：`hspsi_sys_account_set` 表，由 `XinfutongOaCredentialService` 提供；出站用 `app_id` / `app_secret`，入站事件验签用同一行的 `event_public_key`
 - **超时时间**：默认60秒
 - **返回码校验**：`returnCode === 'SUC0000'` 表示成功
 - **环境地址**：生产 `https://api.cmbchina.com`，测试 `https://api.cmburl.cn:8065`
@@ -191,7 +208,17 @@ Content-Type: multipart/form-data
 事件编号：XFTOAFPS
 触发条件：流程到达终态
 
-回调报文：
+外层信封：
+  eventId: string         // 事件 id，本事件为 XFTOAFPS
+  eventRcdInf: string     // SM4 加密后的事件变更信息
+  prjCod?: string         // 企业号（平台类事件可能没有）
+  eventTime: string       // 变更时间
+  eventCd: number         // 事件唯一记录码
+  businessKey: string     // 事件业务码（幂等键之一）
+  appId: string           // 应用 id
+  signature: string       // SM2 签名（对 eventId、prjCod、eventTime、eventCd）
+
+解密后的业务报文：
   prjCod: string      // 企业号
   procStatus: string  // 终态：PASSED|REJECTED|CANCELED|DELETED
   busKey: string      // 业务编号
@@ -199,13 +226,13 @@ Content-Type: multipart/form-data
   procKey: string     // 流程Key
 ```
 
-华溯管家 DEV 联调回调入口：
+华溯管家事件订阅回调入口：
 
 ```text
-POST /api/integrations/xinfutong-oa/events/XFTOAFPS
+POST /api/integrations/xinfutong-oa/events
 ```
 
-根据 OA 技术人员确认，该事件回调无需鉴权。任何到达接口的报文都会先写入 `hspsi_oa_approval_callback_log`；平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致。校验或处理失败时保留 `processed=0` 和失败原因，成功后更新为 `processed=1`；重复通知通过状态机幂等处理。
+该入口无需登录鉴权，但正式事件必须按报文中的 `appId` 匹配 `hspsi_sys_account_set.app_id`，使用该应用自己的 `event_public_key` 做 SM2 验签，并解密 `eventRcdInf`。公钥由薪福通在该应用配置回调 URL 后生成，按账套写入数据库，不是全局环境变量。连接测试事件 `XFT00000` 无签名，立即返回 `{ "rtnCod": "200", "errMsg": "" }`。任何到达接口的正式事件原文都会先写入 `hspsi_oa_approval_callback_log`；平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致。验签失败保留 `processed=0` 并以 `rtnCod=001` 回包；业务校验或处理失败时保留失败原因，成功后更新为 `processed=1`；重复通知通过状态机幂等处理。成功处理同样返回 `{ "rtnCod": "200", "errMsg": "" }`，不使用本系统默认的 `{ code, data }` 包装。
 
 ## 3. 表单控件数据格式速查表
 

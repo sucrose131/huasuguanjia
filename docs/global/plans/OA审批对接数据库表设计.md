@@ -8,7 +8,7 @@
 
 - **不改造现有业务表**：审批状态通过 `hspsi_oa_approval_instance.business_type + business_id` 反查关联，业务表的 `approve_status` 等字段保持原样用于本地审批流程
 - **幂等由代码层保证**：推送幂等通过分布式锁 + 状态机实现，回调幂等通过状态机判断，不依赖数据库唯一索引
-- **人员映射复用现有字段**：通过 `sys_user.username → staff.mobile(+account_set_id) → staff.outer_ref_id` 链路获取OA人员标识，无需新建映射表
+- **人员映射复用现有字段**：OA 组织同步按手机号写入 `hspsi_sys_user.username`；审批发起时再经 `sys_user.username → staff.mobile(+account_set_id) → staff.outer_ref_id` 取 OA 人员标识，无需新建映射表
 - **字段映射与取值逻辑分离**：mapping 表只存 OA uniqueName ↔ 本地字段名的映射，ID→文本、字典→文本等转换逻辑在代码中按 business_type 策略模式实现
 
 ---
@@ -280,13 +280,13 @@ model hspsi_oa_approval_callback_log {
 
 ## OA人员映射
 
-OA人员标识通过现有字段链路获取，无需新建映射表：
+OA人员标识通过现有字段链路获取，无需新建映射表。`xinfutong-oa:org` 人员同步按手机号幂等写入 `hspsi_sys_user`：登录账号=`staff.mobile`，同一手机号一条，新建密码为手机号后六位且不分配角色；OA 人员全部失效或删除时停用登录账号。
 
 ```
 sys_user.username → staff.mobile(+account_set_id) → staff.outer_ref_id
 ```
 
-- `hspsi_sys_user.username`：系统用户登录账号
+- `hspsi_sys_user.username`：系统用户登录账号（OA 同步时等于规范化手机号）
 - `hspsi_basic_staff.mobile`：员工手机号（与登录账号匹配）
 - `hspsi_basic_staff.account_set_id`：账套ID（区分不同企业）
 - `hspsi_basic_staff.outer_ref_id`：OA企业成员ID（提交审批时作为发起人标识）

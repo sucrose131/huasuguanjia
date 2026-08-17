@@ -13,6 +13,8 @@ export interface AccountSetCredential {
   appId: string;
   /** 授权密钥（hex，用于 SM2 加签与 SM4 加密） */
   appSecret: string;
+  /** 事件订阅验签公钥（SM2 未压缩 hex，130 位；按应用配置） */
+  eventPublicKey: string;
 }
 
 /**
@@ -43,19 +45,30 @@ export class XinfutongOaCredentialService {
     }
     const records = await this.prisma.hspsi_sys_account_set.findMany({
       where: { status: 1, deleted_at: null },
-      select: { id: true, name: true, app_id: true, app_secret: true },
+      select: { id: true, name: true, app_id: true, app_secret: true, event_public_key: true },
     });
     const credentials: AccountSetCredential[] = records.map((r) => ({
       id: r.id,
       name: r.name,
       appId: r.app_id,
       appSecret: r.app_secret,
+      eventPublicKey: r.event_public_key,
     }));
     if (credentials.length === 0) {
       XinfutongOaCredentialService.logger.warn('hspsi_sys_account_set 表中没有启用的应用配置');
     }
     this.cache = { credentials, expireAt: Date.now() + this.cacheTtlMs };
     return credentials;
+  }
+
+  /**
+   * 按应用 ID 获取启用账套凭证
+   */
+  async getByAppId(appId: string): Promise<AccountSetCredential | null> {
+    const normalized = appId.trim();
+    if (!normalized) return null;
+    const all = await this.getAllEnabled();
+    return all.find((c) => c.appId === normalized) ?? null;
   }
 
   /**

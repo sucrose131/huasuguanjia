@@ -1902,17 +1902,18 @@ model hspsi_business_document_relation {
 
 /// 账套信息表，保存外部系统（如薪福通）调用的 app_id / app_secret 等凭证
 model hspsi_sys_account_set {
-  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  name       String    @default("") @db.VarChar(100)
-  app_id     String    @unique(map: "uk_app_id") @default("") @db.VarChar(100)
-  app_secret String    @default("") @db.VarChar(255)
-  status     Int       @default(1) @db.TinyInt
-  remark     String    @default("") @db.VarChar(255)
-  created_by BigInt    @default(0) @db.UnsignedBigInt
-  updated_by BigInt    @default(0) @db.UnsignedBigInt
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @default(now()) @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name             String    @default("") @db.VarChar(100)
+  app_id           String    @unique(map: "uk_app_id") @default("") @db.VarChar(100)
+  app_secret       String    @default("") @db.VarChar(255)
+  event_public_key String    @default("") @db.VarChar(255)
+  status           Int       @default(1) @db.TinyInt
+  remark           String    @default("") @db.VarChar(255)
+  created_by       BigInt    @default(0) @db.UnsignedBigInt
+  updated_by       BigInt    @default(0) @db.UnsignedBigInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+  updated_at       DateTime  @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
