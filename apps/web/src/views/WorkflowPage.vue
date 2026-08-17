@@ -22,6 +22,7 @@ import LabOutboundDialog from '@/components/production/LabOutboundDialog.vue';
 import BatchMaterialTable from '@/components/production/BatchMaterialTable.vue';
 import InputDialog from '@/components/production/InputDialog.vue';
 import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
+import RemoteSelect from '@/components/RemoteSelect.vue';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 type B = Record<string, any>;
 const route = useRoute(),
@@ -315,9 +316,6 @@ const requisitionWarehouseOptions = computed<B[]>(() => {
       !documentWarehouseType.value || optionWarehouseType(item) === documentWarehouseType.value,
   );
 });
-const lineGoodsOptions = computed<B[]>(() =>
-  isBom.value ? (options.contextGoods ?? []) : options.goods,
-);
 async function loadContextGoods() {
   if (!form.orgId || !form.warehouseId) {
     options.contextGoods = [];
@@ -1281,13 +1279,112 @@ const canAnalyzeGap = (r: B) =>
   approvedOrder(r) &&
   Number(r.propertyType ?? r.so_property_type) === 1 &&
   Number(r.orderStatus ?? r.order_status) === 1;
-const selectableSalesOrders = computed(() =>
-  !isMoney.value || moneyOrderLocked.value
-    ? options.orders
-    : options.orders.filter((item: B) =>
-        resource.value === 'payments' ? canReceive(item) : canRefund(item),
-      ),
-);
+function mergeIntoOptions(listName: string, items: B[]) {
+  const list = options[listName] as B[];
+  for (const item of items)
+    if (!list.some((x: B) => String(x.id) === String(item.id))) list.push(item);
+}
+async function searchGoodsOptions(keyword: string) {
+  if (!String(keyword ?? '').trim())
+    return (options.goods as B[]).map((g: B) => ({
+      value: g.id,
+      label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
+    }));
+  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
+  const items = (r.items ?? []) as B[];
+  mergeIntoOptions('goods', items);
+  return items.map((g: B) => ({
+    value: g.id,
+    label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
+  }));
+}
+async function searchBomOptions(keyword: string) {
+  if (!String(keyword ?? '').trim())
+    return (options.boms as B[]).map((x: B) => ({ value: x.id, label: x.bomName ?? x.bomNo ?? '' }));
+  const r: any = await api.get('/production/boms', {
+    params: { keyword, pageSize: 50, status: 1 },
+  });
+  const items = (r.items ?? []) as B[];
+  mergeIntoOptions('boms', items);
+  return items.map((x: B) => ({ value: x.id, label: x.bomName ?? x.bomNo ?? '' }));
+}
+async function searchPlanOptions(keyword: string) {
+  if (!String(keyword ?? '').trim()) {
+    const base = (options.plans as B[]).filter((p: B) =>
+      isInput.value
+        ? Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty)
+        : true,
+    );
+    return base.map((x: B) => ({
+      value: x.id,
+      label: isInput.value ? `${x.planNo} · ${x.goodsName ?? ''}`.trim() : x.planNo,
+    }));
+  }
+  const r: any = await api.get('/production/plans', { params: { keyword, pageSize: 50 } });
+  const items = (r.items ?? []) as B[];
+  mergeIntoOptions('plans', items);
+  const eligible = isInput.value
+    ? items.filter(
+        (p: B) => Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty),
+      )
+    : items;
+  return eligible.map((x: B) => ({
+    value: x.id,
+    label: isInput.value ? `${x.planNo} · ${x.goodsName ?? ''}`.trim() : x.planNo,
+  }));
+}
+async function searchSalesOrderOptions(keyword: string) {
+  const filter = (items: B[]) =>
+    !isMoney.value || moneyOrderLocked.value
+      ? items
+      : items.filter((item: B) =>
+          resource.value === 'payments' ? canReceive(item) : canRefund(item),
+        );
+  if (!String(keyword ?? '').trim())
+    return filter(options.orders as B[]).map((x: B) => ({
+      value: x.id,
+      label: `${x.orderNo ?? ''} · ${x.customerName ?? ''}`.trim(),
+    }));
+  const r: any = await api.get('/sales/money-order-options', {
+    params: { keyword, pageSize: 50 },
+  });
+  const items = (Array.isArray(r) ? r : r.items ?? []) as B[];
+  mergeIntoOptions('orders', items);
+  return filter(items).map((x: B) => ({
+    value: x.id,
+    label: `${x.orderNo ?? ''} · ${x.customerName ?? ''}`.trim(),
+  }));
+}
+async function searchServiceGoodsOptions(keyword: string) {
+  const ids = (form.orderGoodsIds ?? []) as (string | number)[];
+  const inOrder = (g: B) =>
+    !ids.length || ids.some((id: string | number) => String(id) === String(g.id));
+  const toOptions = (list: B[]) =>
+    list.map((g: B) => ({ value: g.id, label: g.goodsName ?? g.queryCode ?? '' }));
+  if (!String(keyword ?? '').trim())
+    return toOptions((options.goods as B[]).filter(inOrder));
+  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
+  const items = ((r.items ?? []) as B[]).filter(inOrder);
+  mergeIntoOptions('goods', items);
+  return toOptions(items);
+}
+async function searchLineGoodsOptions(keyword: string) {
+  if (isBom.value) {
+    const kw = String(keyword ?? '').trim().toLowerCase();
+    const list = ((options.contextGoods ?? []) as B[]).filter((g: B) =>
+      kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+    );
+    return list.map((g: B) => ({
+      value: g.id,
+      label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
+    }));
+  }
+  return searchGoodsOptions(keyword);
+}
+function lineGoodsChanged(row: B) {
+  goodsChanged(row);
+  if (key.value === 'requisitions/applications') appGoodsChanged(row);
+}
 async function startMoney(row: B, target: 'payments' | 'refunds') {
   await router.push({ path: `/sales/${target}`, query: { create: '1', orderId: String(row.id) } });
 }
@@ -1404,11 +1501,6 @@ async function confirmPendingSupplement(row: B) {
   ElMessage.success('临时补料已确认出库');
   await onDialogDone();
 }
-const inputPlans = computed(() =>
-  (options.plans as B[]).filter(
-    (p: B) => Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty),
-  ),
-);
 function ensureMoneyOrderOption() {
   if (!form.orderId || options.orders.some((item: B) => String(item.id) === String(form.orderId)))
     return;
@@ -2137,14 +2229,13 @@ watch(key, async () => {
             <el-input v-model="form.bomName" />
           </el-form-item>
           <el-form-item v-if="isBom" label="成品">
-            <el-select v-model="form.goodsId" filterable @change="goodsChanged(form)">
-              <el-option
-                v-for="g in options.goods"
-                :key="g.id"
-                :label="g.goodsName"
-                :value="g.id"
-              />
-            </el-select>
+            <RemoteSelect
+              v-model="form.goodsId"
+              :fetch="searchGoodsOptions"
+              :current-label="form.goodsName"
+              placeholder="输入商品名称或编码搜索"
+              @change="goodsChanged(form)"
+            />
           </el-form-item>
           <el-form-item v-if="isBom" label="成品SKU">
             <el-select v-model="form.skuId" :disabled="mode === 'view' || !form.goodsId" clearable>
@@ -2157,9 +2248,13 @@ watch(key, async () => {
             </el-select>
           </el-form-item>
           <el-form-item v-if="isPlan" label="BOM">
-            <el-select v-model="form.bomId" filterable @change="sourceChanged">
-              <el-option v-for="x in options.boms" :key="x.id" :label="x.bomName" :value="x.id" />
-            </el-select>
+            <RemoteSelect
+              v-model="form.bomId"
+              :fetch="searchBomOptions"
+              :current-label="form.bomName || form.bomNo"
+              placeholder="输入BOM名称或编号搜索"
+              @change="sourceChanged"
+            />
           </el-form-item>
           <el-form-item v-if="isPlan && form.bomId" label="成品"
             ><el-input
@@ -2177,14 +2272,13 @@ watch(key, async () => {
             />
           </el-form-item>
           <el-form-item v-if="isInput" label="生产计划">
-            <el-select v-model="form.planId" @change="sourceChanged">
-              <el-option
-                v-for="x in inputPlans"
-                :key="x.id"
-                :label="`${x.planNo} · ${x.goodsName}`"
-                :value="x.id"
-              />
-            </el-select>
+            <RemoteSelect
+              v-model="form.planId"
+              :fetch="searchPlanOptions"
+              :current-label="form.planNo"
+              placeholder="输入计划编号搜索"
+              @change="sourceChanged"
+            />
           </el-form-item>
           <el-form-item v-if="isInput" label="入库成品"
             ><el-input :model-value="goodsOf(form).goodsName || form.goodsId" readonly
@@ -2225,9 +2319,14 @@ watch(key, async () => {
             v-if="isOutput && group === 'production' && form.outType !== 3"
             label="生产计划"
           >
-            <el-select v-model="form.planId" :disabled="mode !== 'create'" @change="sourceChanged">
-              <el-option v-for="x in options.plans" :key="x.id" :label="x.planNo" :value="x.id" />
-            </el-select>
+            <RemoteSelect
+              v-model="form.planId"
+              :fetch="searchPlanOptions"
+              :current-label="form.planNo"
+              :disabled="mode !== 'create'"
+              placeholder="输入计划编号搜索"
+              @change="sourceChanged"
+            />
           </el-form-item>
           <el-form-item
             v-if="isOutput && group === 'production' && form.outType === 3"
@@ -2269,21 +2368,16 @@ watch(key, async () => {
             v-if="(isOutput || isReturn || isMoney || isService) && group === 'sales'"
             label="销售订单"
           >
-            <el-select
+            <RemoteSelect
               v-model="form.orderId"
-              filterable
+              :fetch="searchSalesOrderOptions"
+              :current-label="form.orderNo"
               :disabled="
                 mode === 'view' || (isMoney && moneyOrderLocked) || (isOutput && mode !== 'create')
               "
+              placeholder="输入销售订单号或客户搜索"
               @change="sourceChanged"
-            >
-              <el-option
-                v-for="x in selectableSalesOrders"
-                :key="x.id"
-                :label="`${x.orderNo} · ${x.customerName}`"
-                :value="x.id"
-              />
-            </el-select>
+            />
           </el-form-item>
           <el-form-item v-if="isReturn && group === 'sales'" label="来源已确认销售出库单">
             <el-select v-model="form.sourceOutputId" filterable @change="sourceOutputChanged">
@@ -2497,19 +2591,13 @@ watch(key, async () => {
             ><el-input :model-value="moneyText(form.orderAmount || 0)" readonly
           /></el-form-item>
           <el-form-item v-if="isService" label="售后商品">
-            <el-select v-model="form.goodsId" filterable @change="serviceGoodsChanged">
-              <el-option
-                v-for="g in options.goods.filter(
-                  (x: any) =>
-                    !form.orderGoodsIds ||
-                    !form.orderGoodsIds.length ||
-                    form.orderGoodsIds.includes(x.id),
-                )"
-                :key="g.id"
-                :label="g.goodsName"
-                :value="g.id"
-              />
-            </el-select>
+            <RemoteSelect
+              v-model="form.goodsId"
+              :fetch="searchServiceGoodsOptions"
+              :current-label="form.goodsName"
+              placeholder="输入商品名称或编码搜索"
+              @change="serviceGoodsChanged"
+            />
           </el-form-item>
           <el-form-item v-if="serviceNeedsBatch" label="来源已确认销售出库单" required>
             <el-select
@@ -2928,27 +3016,19 @@ watch(key, async () => {
         <el-table v-else-if="hasLines" :data="form.details" border>
           <el-table-column label="商品" min-width="220">
             <template #default="s">
-              <el-select
+              <RemoteSelect
                 v-if="
                   (!isOutput && !isReturn && !isPlan && !isService) ||
                   (isOutput && group === 'production' && form.outType === 3) ||
                   (isOutput && group === 'requisitions' && form.directOutput)
                 "
                 v-model="s.row.goodsId"
-                filterable
+                :fetch="searchLineGoodsOptions"
+                :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
                 :disabled="mode === 'view' || discountOrderSourceLocked"
-                @change="
-                  goodsChanged(s.row);
-                  key === 'requisitions/applications' && appGoodsChanged(s.row);
-                "
-              >
-                <el-option
-                  v-for="g in lineGoodsOptions"
-                  :key="g.id"
-                  :label="`${g.queryCode || ''} ${g.goodsName}`"
-                  :value="g.id"
-                />
-              </el-select>
+                placeholder="输入商品名称或编码搜索"
+                @change="lineGoodsChanged(s.row)"
+              />
               <span v-else>{{ goodsOf(s.row).goodsName || s.row.goodsName || s.row.goodsId }}</span>
             </template>
           </el-table-column>

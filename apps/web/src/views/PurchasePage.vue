@@ -14,6 +14,7 @@ import SummaryStrip from '@/components/SummaryStrip.vue';
 import PurchaseReceiptDetails from '@/components/PurchaseReceiptDetails.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import PurchaseApplicationOrderPreviewDialog from '@/components/purchase/PurchaseApplicationOrderPreviewDialog.vue';
+import RemoteSelect from '@/components/RemoteSelect.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { purchaseDocumentType } from '@/utils/document-type';
@@ -301,6 +302,31 @@ function remoteSearchGoods(line: any, keyword: string) {
 function searchedGoods(line: any) {
   const keyword = String(line.goodsSearchKeyword ?? '').trim();
   return keyword ? compatibleGoods(line, line.remoteGoods ?? []) : availableGoods(line);
+}
+async function searchVendorOptions(keyword: string) {
+  const kw = String(keyword ?? '').trim();
+  const vendors = options.vendors ?? [];
+  if (!kw) return vendors.map((item: any) => ({ value: item.value, label: item.label }));
+  const items = (await api.get('/base-data/vendors/options', {
+    params: { keyword: kw },
+  })) as any[];
+  for (const item of items)
+    if (!vendors.some((v: any) => String(v.value) === String(item.value))) vendors.push(item);
+  return items.map((item: any) => ({ value: item.value, label: item.label }));
+}
+async function searchPurchaseOrderOptions(keyword: string) {
+  const kw = String(keyword ?? '').trim();
+  const orders = options.orders ?? [];
+  if (!kw) return orders.map((item: any) => ({ value: item.value, label: item.label }));
+  const r: any = await api.get('/purchase/orders', { params: { keyword: kw, pageSize: 50 } });
+  const items = (r.items ?? []).map((item: any) => ({
+    ...item,
+    label: item.orderNo,
+    value: item.id,
+  }));
+  for (const item of items)
+    if (!orders.some((v: any) => String(v.value) === String(item.value))) orders.push(item);
+  return items.map((item: any) => ({ value: item.value, label: item.label }));
 }
 const quickGoodsName = (line: any) => String(line.goodsSearchKeyword ?? '').trim();
 const rules: FormRules = {
@@ -1685,19 +1711,15 @@ onMounted(async () => {
           end-placeholder="申请日期止"
           value-format="YYYY-MM-DD"
         />
-        <el-select
+        <RemoteSelect
           v-if="resource === 'orders'"
           v-model="query.vendorId"
           class="query-field"
+          :fetch="searchVendorOptions"
+          :current-label="lookup('vendors', query.vendorId)"
           clearable
-          filterable
           placeholder="供应商"
-          ><el-option
-            v-for="item in options.vendors"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
+        />
         <el-select
           v-if="resource === 'orders'"
           v-model="query.orderStatus"
@@ -1722,45 +1744,33 @@ onMounted(async () => {
             :label="item.label"
             :value="Number(item.value)"
         /></el-select>
-        <el-select
+        <RemoteSelect
           v-if="resource === 'payments'"
           v-model="query.orderId"
           class="query-field keyword"
+          :fetch="searchPurchaseOrderOptions"
+          :current-label="orderOf(query.orderId)?.orderNo"
           clearable
-          filterable
           placeholder="关联采购订单"
-          ><el-option
-            v-for="item in options.orders"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
-        <el-select
+        />
+        <RemoteSelect
           v-if="resource === 'refunds'"
           v-model="query.orderId"
           class="query-field keyword"
+          :fetch="searchPurchaseOrderOptions"
+          :current-label="orderOf(query.orderId)?.orderNo"
           clearable
-          filterable
           placeholder="关联采购订单"
-          ><el-option
-            v-for="item in options.orders"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
-        <el-select
+        />
+        <RemoteSelect
           v-if="resource === 'refunds'"
           v-model="query.vendorId"
           class="query-field"
+          :fetch="searchVendorOptions"
+          :current-label="lookup('vendors', query.vendorId)"
           clearable
-          filterable
           placeholder="供应商"
-          ><el-option
-            v-for="item in options.vendors"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-        /></el-select>
+        />
         <el-select
           v-if="resource === 'refunds'"
           v-model="query.sourceType"
@@ -2414,16 +2424,13 @@ onMounted(async () => {
                   "
                   disabled /></el-form-item
               ><el-form-item label="供应商"
-                ><el-select
+                ><RemoteSelect
                   v-model="form.vendorId"
+                  :fetch="searchVendorOptions"
+                  :current-label="lookup('vendors', form.vendorId)"
                   clearable
-                  filterable
-                  placeholder="开始采购前必须选择"
-                  ><el-option
-                    v-for="item in options.vendors"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select></el-form-item
+                  placeholder="输入供应商名称搜索"
+                /></el-form-item
               ><el-form-item label="所属组织" prop="orgId"
                 ><el-tree-select
                   v-model="form.orgId"
@@ -2492,17 +2499,14 @@ onMounted(async () => {
                 >
               </el-form-item>
               <el-form-item v-if="!form.directReceipt" label="来源采购订单" prop="orderId"
-                ><el-select
+                ><RemoteSelect
                   v-model="form.orderId"
-                  filterable
+                  :fetch="searchPurchaseOrderOptions"
+                  :current-label="orderOf(form.orderId)?.orderNo || form.orderNo"
                   :disabled="mode === 'edit' || mode === 'view'"
+                  placeholder="输入采购订单号搜索"
                   @change="sourceOrderChanged"
-                  ><el-option
-                    v-for="item in options.orders"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select
-              ></el-form-item>
+                /></el-form-item>
               <el-form-item label="所属组织" :prop="form.directReceipt ? 'orgId' : ''"
                 ><el-tree-select
                   v-if="form.directReceipt"
@@ -2529,13 +2533,14 @@ onMounted(async () => {
                     :value="item.value" /></el-select
               ></el-form-item>
               <el-form-item label="供应商" :prop="form.directReceipt ? 'vendorId' : ''"
-                ><el-select v-if="form.directReceipt" v-model="form.vendorId" filterable
-                  ><el-option
-                    v-for="item in options.vendors"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value" /></el-select
-                ><el-input
+                ><RemoteSelect
+                  v-if="form.directReceipt"
+                  v-model="form.vendorId"
+                  :fetch="searchVendorOptions"
+                  :current-label="lookup('vendors', form.vendorId)"
+                  clearable
+                  placeholder="输入供应商名称搜索"
+                /><el-input
                   v-else
                   :model-value="
                     form.vendorId ? lookup('vendors', form.vendorId) : vendorOfOrder(form.orderId)
@@ -2688,15 +2693,13 @@ onMounted(async () => {
             </template>
             <template v-else
               ><el-form-item label="关联采购订单" prop="orderId"
-                ><el-select
+                ><RemoteSelect
                   v-model="form.orderId"
-                  filterable
+                  :fetch="searchPurchaseOrderOptions"
+                  :current-label="orderOf(form.orderId)?.orderNo || form.orderNo"
                   :disabled="mode === 'edit' || mode === 'view'"
-                  ><el-option
-                    v-for="item in options.orders"
-                    :key="item.value"
-                    :label="`${item.label} · ${lookup('vendors', item.vendorId)}`"
-                    :value="item.value" /></el-select></el-form-item
+                  placeholder="输入采购订单号搜索"
+                /></el-form-item
               ><el-form-item label="所属组织" prop="orgId"
                 ><el-tree-select
                   v-model="form.orgId"

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { api } from '@/api';
+import RemoteSelect from '@/components/RemoteSelect.vue';
 
 type B = Record<string, any>;
 const props = defineProps<{
@@ -13,6 +15,26 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ (e: 'update:rows', v: B[]): void; (e: 'goodsChanged', row: B): void }>();
+
+const goodsPool = ref<B[]>([]);
+watch(
+  () => props.goodsSelect,
+  (value) => {
+    goodsPool.value = value ?? [];
+  },
+  { immediate: true },
+);
+
+async function searchGoods(keyword: string) {
+  const toOptions = (arr: B[]) =>
+    arr.map((g: B) => ({ value: g.id, label: g.goodsName ?? g.queryCode ?? '' }));
+  if (!String(keyword ?? '').trim()) return toOptions(goodsPool.value);
+  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
+  const items = (r.items ?? []) as B[];
+  for (const item of items)
+    if (!goodsPool.value.some((g: B) => String(g.id) === String(item.id))) goodsPool.value.push(item);
+  return toOptions(items);
+}
 
 function stockFor(row: B) {
   return props.stocks.filter(
@@ -231,21 +253,15 @@ const tableWidth = computed(() =>
             <div class="bmt-c muted" :style="{ width: wd('商品编码') }">{{ r.goodsCode }}</div>
             <div class="bmt-c bmt-bold" :style="{ width: wd('商品名称') }">
               <template v-if="editable && goodsEditable">
-                <el-select
+                <RemoteSelect
                   v-model="r._source.goodsId"
+                  :fetch="searchGoods"
+                  :current-label="r._source.goodsName"
                   size="small"
-                  filterable
-                  style="width: 100%"
                   clearable
+                  placeholder="输入商品名称或编码搜索"
                   @change="$emit('goodsChanged', r._source)"
-                >
-                  <el-option
-                    v-for="g in goodsSelect || []"
-                    :key="g.id"
-                    :label="g.goodsName"
-                    :value="g.id"
-                  />
-                </el-select>
+                />
                 <el-button
                   v-if="rows.length > 1"
                   link

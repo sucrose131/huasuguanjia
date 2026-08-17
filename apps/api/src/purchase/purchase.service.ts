@@ -751,7 +751,11 @@ export class PurchaseService {
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (query.approveStatus !== undefined) where.approve_status = Number(query.approveStatus);
-    if (query.keyword) where.pur_reson = { contains: String(query.keyword) };
+    if (query.keyword)
+      where.OR = [
+        { pur_no: { contains: String(query.keyword) } },
+        { pur_reson: { contains: String(query.keyword) } },
+      ];
     const [records, total] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_approve.findMany({
         where,
@@ -1402,6 +1406,7 @@ export class PurchaseService {
     const where: Prisma.hspsi_purchase_orderWhereInput = { deleted_at: null };
     if (query.vendorId) where.vendor_id = BigInt(query.vendorId);
     if (query.orderStatus) where.status = Number(query.orderStatus);
+    if (query.keyword) where.po_no = { contains: String(query.keyword) };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_order.findMany({
         where,
@@ -2202,6 +2207,7 @@ export class PurchaseService {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_purchase_order_inputWhereInput = { deleted_at: null };
     if (query.confirmStatus !== undefined) where.comfirm_status = Number(query.confirmStatus);
+    if (query.keyword) where.po_input_no = { contains: String(query.keyword) };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_order_input.findMany({
         where,
