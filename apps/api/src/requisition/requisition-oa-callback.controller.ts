@@ -1,6 +1,22 @@
-import { Body, Controller, Inject, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Inject,
+  Post,
+  Req,
+  type RawBodyRequest,
+} from '@nestjs/common';
+import type { Request } from 'express';
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalCallbackService } from '../integrations/xinfutong-oa/approval/approval-callback.service';
+import { EVENT_CODE_OA_PROCESS_FINISH } from '../integrations/xinfutong-oa/approval/approval.types';
+import {
+  EVENT_CODE_CONNECTIVITY_TEST,
+  OaEventVerifyError,
+  oaEventAck,
+  readEventId,
+} from '../integrations/xinfutong-oa/approval/event-envelope';
 import { RequisitionService } from './requisition.service';
 import { PurchaseService } from '../purchase/purchase.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -28,26 +44,55 @@ export class RequisitionOaCallbackController {
     return typeof value === 'string' ? value.slice(0, maxLength) : '';
   }
 
-  @Post('events/XFTOAFPS')
-  async processFinished(@Body() body: unknown) {
+  private rawBodyText(req?: RawBodyRequest<Request>) {
+    if (!req?.rawBody) return undefined;
+    return Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : String(req.rawBody);
+  }
+
+  /**
+   * 薪福通事件订阅统一入口。
+   * 旧路径 events/XFTOAFPS 保留兼容，新配置请使用 events。
+   */
+  @Post(['events', 'events/XFTOAFPS'])
+  @HttpCode(200)
+  async receiveEvent(@Body() body: unknown, @Req() req?: RawBodyRequest<Request>) {
     const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+    const eventId = readEventId(body);
+
+    if (eventId === EVENT_CODE_CONNECTIVITY_TEST) {
+      return oaEventAck();
+    }
+
     const log = await this.prisma.hspsi_oa_approval_callback_log.create({
       data: {
         instance_id: 0n,
-        event_code: this.callback.getEventCode(),
+        event_code: this.text(eventId, 30),
         prj_cod: this.text(fields.prjCod, 50),
-        proc_status: this.text(fields.procStatus, 20),
-        bus_key: this.text(fields.busKey, 100),
-        proc_inst_id: this.text(fields.procInstId, 50),
-        proc_key: this.text(fields.procKey, 100),
+        proc_status: '',
+        bus_key: this.text(fields.businessKey, 100),
+        proc_inst_id: '',
+        proc_key: '',
         raw_payload: JSON.stringify(body ?? null),
         processed: 0,
         process_result: '已接收，待处理',
         account_set_id: 0n,
       },
     });
+
     try {
-      const payload = this.callback.handleProcessFinishEvent(body);
+      const inner = this.callback.verifyAndDecryptEvent(body, this.rawBodyText(req));
+      if (eventId !== EVENT_CODE_OA_PROCESS_FINISH) {
+        await this.prisma.hspsi_oa_approval_callback_log.update({
+          where: { id: log.id },
+          data: {
+            processed: 1,
+            process_result: `已接收未处理的事件：${eventId || '未知'}`.slice(0, 500),
+          },
+        });
+        return oaEventAck();
+      }
+
+      const payload = this.callback.handleProcessFinishEvent(inner);
       const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
         where: {
           bus_key: payload.busKey,
@@ -57,25 +102,29 @@ export class RequisitionOaCallbackController {
         orderBy: { id: 'desc' },
         select: { business_type: true },
       });
-      const result =
-        instance?.business_type === 'purchase_application'
-          ? await this.purchase.handleApplicationOaApprovalResult(payload, body, log.id)
-          : instance?.business_type === 'purchase_return'
-            ? await this.purchase.handleReturnOaApprovalResult(payload, body, log.id)
-            : instance?.business_type === 'production_plan'
-              ? await this.production.handleOaApprovalResult(payload, body, log.id)
-              : instance?.business_type === 'sales_order'
-                ? await this.sales.handleOaApprovalResult(payload, body, log.id)
-                : (instance?.business_type ?? '').startsWith('inventory_')
-                  ? await this.handleInventory(payload, body, log.id, instance!.business_type)
-                  : await this.requisition.handleOaApprovalResult(payload, body, log.id);
-      return { eventCode: this.callback.getEventCode(), ...result };
+      if (instance?.business_type === 'purchase_application') {
+        await this.purchase.handleApplicationOaApprovalResult(payload, body, log.id);
+      } else if (instance?.business_type === 'purchase_return') {
+        await this.purchase.handleReturnOaApprovalResult(payload, body, log.id);
+      } else if (instance?.business_type === 'production_plan') {
+        await this.production.handleOaApprovalResult(payload, body, log.id);
+      } else if (instance?.business_type === 'sales_order') {
+        await this.sales.handleOaApprovalResult(payload, body, log.id);
+      } else if ((instance?.business_type ?? '').startsWith('inventory_')) {
+        await this.handleInventory(payload, body, log.id, instance!.business_type);
+      } else {
+        await this.requisition.handleOaApprovalResult(payload, body, log.id);
+      }
+      return oaEventAck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.prisma.hspsi_oa_approval_callback_log.update({
         where: { id: log.id },
         data: { processed: 0, process_result: message.slice(0, 500) },
       });
+      if (error instanceof OaEventVerifyError) {
+        return oaEventAck(error.rtnCod, message.slice(0, 200));
+      }
       throw error;
     }
   }

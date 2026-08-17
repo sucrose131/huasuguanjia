@@ -1,17 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
+import { OaEventVerifyError } from '../integrations/xinfutong-oa/approval/event-envelope';
 import { RequisitionOaCallbackController } from './requisition-oa-callback.controller';
 
 function fixture() {
-  const payload = {
+  const inner = {
     prjCod: 'AAC15400',
     procStatus: 'PASSED',
     busKey: 'NFORM_1',
     procInstId: 'PROC_1',
     procKey: 'KEY_1',
   } as const;
+  const envelope = {
+    eventId: 'XFTOAFPS',
+    eventRcdInf: 'encrypted',
+    prjCod: 'AAC15400',
+    eventTime: '2021-08-27T12:00:00',
+    eventCd: 9999,
+    businessKey: 'NFORM_1',
+    appId: 'APP_1',
+    signature: 'a'.repeat(128),
+  };
   const callback = {
-    handleProcessFinishEvent: vi.fn().mockReturnValue(payload),
+    handleProcessFinishEvent: vi.fn().mockReturnValue(inner),
     getEventCode: vi.fn().mockReturnValue('XFTOAFPS'),
+    verifyAndDecryptEvent: vi.fn().mockReturnValue(inner),
   };
   const requisition = {
     handleOaApprovalResult: vi
@@ -49,7 +61,8 @@ function fixture() {
       sales as never,
       salesOa as never,
     ),
-    payload,
+    inner,
+    envelope,
     callback,
     requisition,
     purchase,
@@ -63,22 +76,32 @@ function fixture() {
 }
 
 describe('RequisitionOaCallbackController', () => {
-  it('accepts and dispatches a process-finish event without authentication', async () => {
-    const { controller, payload, requisition } = fixture();
-    const result = await controller.processFinished(payload);
-    expect(requisition.handleOaApprovalResult).toHaveBeenCalledWith(payload, payload, 9n);
-    expect(result).toMatchObject({ eventCode: 'XFTOAFPS', processed: true });
+  it('returns the documented ack for the connectivity test event without writing logs', async () => {
+    const { controller, prisma } = fixture();
+    await expect(controller.receiveEvent({ eventId: 'XFT00000' })).resolves.toEqual({
+      rtnCod: '200',
+      errMsg: '',
+    });
+    expect(prisma.hspsi_oa_approval_callback_log.create).not.toHaveBeenCalled();
+  });
+
+  it('verifies, decrypts and dispatches a process-finish event', async () => {
+    const { controller, inner, envelope, requisition, callback } = fixture();
+    const result = await controller.receiveEvent(envelope);
+    expect(callback.verifyAndDecryptEvent).toHaveBeenCalledWith(envelope, undefined);
+    expect(requisition.handleOaApprovalResult).toHaveBeenCalledWith(inner, envelope, 9n);
+    expect(result).toEqual({ rtnCod: '200', errMsg: '' });
   });
 
   it('dispatches a purchase application callback by the recorded business type', async () => {
-    const { controller, payload, prisma, purchase, requisition } = fixture();
+    const { controller, inner, envelope, prisma, purchase, requisition } = fixture();
     prisma.hspsi_oa_approval_instance.findFirst.mockResolvedValueOnce({
       business_type: 'purchase_application',
     });
 
-    await controller.processFinished(payload);
+    await controller.receiveEvent(envelope);
 
-    expect(purchase.handleApplicationOaApprovalResult).toHaveBeenCalledWith(payload, payload, 9n);
+    expect(purchase.handleApplicationOaApprovalResult).toHaveBeenCalledWith(inner, envelope, 9n);
     expect(requisition.handleOaApprovalResult).not.toHaveBeenCalled();
   });
 
@@ -93,26 +116,41 @@ describe('RequisitionOaCallbackController', () => {
     const service = target === 'production' ? context.production : context.sales;
     service.handleOaApprovalResult.mockResolvedValueOnce({ processed: true });
 
-    await context.controller.processFinished(context.payload);
+    await context.controller.receiveEvent(context.envelope);
 
     expect(service.handleOaApprovalResult).toHaveBeenCalledWith(
-      context.payload,
-      context.payload,
+      context.inner,
+      context.envelope,
       9n,
     );
   });
 
-  it('keeps the raw callback log when validation fails', async () => {
-    const { controller, callback, prisma } = fixture();
+  it('returns the documented failure ack when signature verification fails', async () => {
+    const { controller, callback, envelope, prisma } = fixture();
+    callback.verifyAndDecryptEvent.mockImplementationOnce(() => {
+      throw new OaEventVerifyError('验签失败');
+    });
+
+    await expect(controller.receiveEvent(envelope)).resolves.toEqual({
+      rtnCod: '001',
+      errMsg: '验签失败',
+    });
+    expect(prisma.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
+      where: { id: 9n },
+      data: expect.objectContaining({ processed: 0, process_result: '验签失败' }),
+    });
+  });
+
+  it('keeps the raw callback log when inner payload validation fails', async () => {
+    const { controller, callback, prisma, envelope } = fixture();
     callback.handleProcessFinishEvent.mockImplementationOnce(() => {
       throw new Error('回调载荷缺少必填字段：procInstId');
     });
-    const raw = { anything: 'OA原始内容' };
 
-    await expect(controller.processFinished(raw)).rejects.toThrow('缺少必填字段');
+    await expect(controller.receiveEvent(envelope)).rejects.toThrow('缺少必填字段');
 
     expect(prisma.hspsi_oa_approval_callback_log.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ raw_payload: JSON.stringify(raw), processed: 0 }),
+      data: expect.objectContaining({ raw_payload: JSON.stringify(envelope), processed: 0 }),
     });
     expect(prisma.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
       where: { id: 9n },

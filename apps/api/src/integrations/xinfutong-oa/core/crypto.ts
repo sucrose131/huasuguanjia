@@ -168,3 +168,27 @@ export function sm2Sign(signStr: string, authoritySecret: string): string {
     userId: SM2_USER_ID,
   });
 }
+
+/**
+ * 使用 SM2 公钥验签（sm3withsm2，R||S 裸拼接）
+ *
+ * 对应薪福通事件订阅 Java 示例 SM2VerifyUtils.verify：
+ * - 公钥为未压缩 hex（04 + X + Y，共 130 字符）
+ * - 签名为 R||S hex（64 字节，128 字符）
+ * - 用户 ID 固定为国密标准 "1234567812345678"
+ */
+export function sm2Verify(signStr: string, signatureHex: string, publicKeyHex: string): boolean {
+  const publicKey = publicKeyHex.trim().toLowerCase();
+  const signature = signatureHex.trim().toLowerCase();
+  if (publicKey.length !== 130 || signature.length !== 128) {
+    return false;
+  }
+  try {
+    return sm2Lib.doVerifySignature(signStr, signature, publicKey, {
+      hash: true,
+      userId: SM2_USER_ID,
+    });
+  } catch {
+    return false;
+  }
+}
