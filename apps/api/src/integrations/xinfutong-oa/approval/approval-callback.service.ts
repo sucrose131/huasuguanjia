@@ -1,7 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../../database/prisma.service';
 import { sm2Verify, sm4Decrypt } from '../core/crypto';
+import { XinfutongOaCredentialService } from '../core/credential.service';
 import {
   EVENT_CODE_OA_PROCESS_FINISH,
   type ApprovalCallbackPayload,
@@ -12,6 +11,11 @@ import {
   OaEventVerifyError,
   parseEventEnvelope,
 } from './event-envelope';
+
+export interface VerifiedOaEvent {
+  inner: unknown;
+  accountSetId: bigint;
+}
 
 /**
  * 薪福通 OA 审批回调入站处理服务
@@ -28,54 +32,50 @@ import {
  * - 触发时机：流程到达终态（PASSED/REJECTED/CANCELED/DELETED）
  *
  * 使用方式（由 Controller 调用）：
- *   const inner = callbackService.verifyAndDecryptEvent(rawPayload, rawBody);
- *   const result = callbackService.handleProcessFinishEvent(inner);
- *   // result.procStatus 终态
- *   // result.busKey 业务编号，用于关联本地单据
- *   // result.procInstId 流程实例 id
+ *   const verified = await callbackService.verifyAndDecryptEvent(rawPayload, rawBody);
+ *   const result = callbackService.handleProcessFinishEvent(verified.inner);
  */
 @Injectable()
 export class XinfutongOaApprovalCallbackService {
   private static readonly logger = new Logger(XinfutongOaApprovalCallbackService.name);
 
   constructor(
-    @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(XinfutongOaCredentialService)
+    private readonly credentials: XinfutongOaCredentialService,
   ) {}
 
   // ==================== 事件订阅验签与解密 ====================
 
   /**
-   * 校验事件签名并解密 eventRcdInf
-   *
-   * @param rawPayload 解析后的 JSON 对象
-   * @param rawBody 原始请求体，用于保留 eventCd 的 Long 数字原文
+   * 按事件 appId 取对应应用公钥，校验签名并解密 eventRcdInf
    */
-  verifyAndDecryptEvent(rawPayload: unknown, rawBody?: string): unknown {
+  async verifyAndDecryptEvent(rawPayload: unknown, rawBody?: string): Promise<VerifiedOaEvent> {
     const envelope = parseEventEnvelope(rawPayload);
-    const publicKey = this.eventPublicKey;
+    const credential = await this.credentials.getByAppId(envelope.appId);
+    if (!credential) {
+      throw new OaEventVerifyError('未找到对应应用');
+    }
+    const publicKey = credential.eventPublicKey.trim();
+    if (!publicKey) {
+      throw new OaEventVerifyError('该应用未配置事件验签公钥', '001', credential.id);
+    }
+    if (publicKey.length !== 130) {
+      throw new OaEventVerifyError('事件验签公钥格式不正确', '001', credential.id);
+    }
     const signText = buildEventCallbackSignText(envelope, rawBody);
     if (!sm2Verify(signText, envelope.signature, publicKey)) {
-      throw new OaEventVerifyError('验签失败');
+      throw new OaEventVerifyError('验签失败', '001', credential.id);
     }
     try {
       const plainText = sm4Decrypt(envelope.eventRcdInf, publicKey);
-      return JSON.parse(plainText) as unknown;
+      return {
+        inner: JSON.parse(plainText) as unknown,
+        accountSetId: credential.id,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new OaEventVerifyError(`事件数据解密失败：${message}`);
+      throw new OaEventVerifyError(`事件数据解密失败：${message}`, '001', credential.id);
     }
-  }
-
-  private get eventPublicKey(): string {
-    const publicKey = this.config.get<string>('XINFUTONG_OA_EVENT_PUBLIC_KEY', '')?.trim() ?? '';
-    if (!publicKey) {
-      throw new OaEventVerifyError('未配置事件验签公钥');
-    }
-    if (publicKey.length !== 130) {
-      throw new OaEventVerifyError('事件验签公钥格式不正确');
-    }
-    return publicKey;
   }
 
   // ==================== 流程结束事件 ====================
@@ -83,7 +83,7 @@ export class XinfutongOaApprovalCallbackService {
   /**
    * 处理 OA 审批流程结束事件回调
    *
-   * @param rawPayload 原始回调报文（Controller 从 HTTP body 中解析的 JSON 对象）
+   * @param rawPayload 解密后的业务报文
    * @returns 解析后的回调载荷（供上层业务使用）
    * @throws 回调载荷校验失败时抛出
    */
@@ -93,9 +93,6 @@ export class XinfutongOaApprovalCallbackService {
     XinfutongOaApprovalCallbackService.logger.log(
       `收到流程结束事件：busKey=${payload.busKey}，procInstId=${payload.procInstId}，procStatus=${payload.procStatus}`,
     );
-
-    // TODO: 业务逻辑由调用方实现（如更新本地审批单状态、触发后续流程）
-    // 此处仅完成协议层的解析与校验，不涉及业务落库
 
     return payload;
   }

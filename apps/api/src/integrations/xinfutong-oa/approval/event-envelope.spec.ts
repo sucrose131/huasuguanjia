@@ -1,5 +1,5 @@
 import { sm2 } from 'sm-crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sm2Sign, sm4Encrypt } from '../core/crypto';
 import { XinfutongOaApprovalCallbackService } from './approval-callback.service';
 import {
@@ -61,7 +61,7 @@ describe('event envelope helpers', () => {
 });
 
 describe('XinfutongOaApprovalCallbackService event verify', () => {
-  it('verifies SM2 signature and decrypts SM4 eventRcdInf', () => {
+  it('verifies SM2 signature and decrypts SM4 eventRcdInf', async () => {
     const pair = sm2.generateKeyPairHex();
     const inner = {
       prjCod: 'XFT00001',
@@ -90,28 +90,60 @@ describe('XinfutongOaApprovalCallbackService event verify', () => {
       pair.privateKey,
     );
     const rawBody = JSON.stringify(envelope);
-    const service = new XinfutongOaApprovalCallbackService(
-      {} as never,
-      { get: () => pair.publicKey } as never,
-    );
+    const credentials = {
+      getByAppId: vi.fn().mockResolvedValue({
+        id: 1n,
+        name: '测试应用',
+        appId: 'APP_1',
+        appSecret: 'secret',
+        eventPublicKey: pair.publicKey,
+      }),
+    };
+    const service = new XinfutongOaApprovalCallbackService(credentials as never);
 
-    expect(service.verifyAndDecryptEvent(envelope, rawBody)).toEqual(inner);
+    await expect(service.verifyAndDecryptEvent(envelope, rawBody)).resolves.toEqual({
+      inner,
+      accountSetId: 1n,
+    });
   });
 
-  it('rejects an invalid signature', () => {
+  it('rejects an invalid signature', async () => {
     const pair = sm2.generateKeyPairHex();
-    const service = new XinfutongOaApprovalCallbackService(
-      {} as never,
-      { get: () => pair.publicKey } as never,
-    );
-    expect(() =>
+    const credentials = {
+      getByAppId: vi.fn().mockResolvedValue({
+        id: 1n,
+        name: '测试应用',
+        appId: 'APP_1',
+        appSecret: 'secret',
+        eventPublicKey: pair.publicKey,
+      }),
+    };
+    const service = new XinfutongOaApprovalCallbackService(credentials as never);
+    await expect(
       service.verifyAndDecryptEvent({
         eventId: 'XFTOAFPS',
         eventRcdInf: 'ab',
         eventTime: '2021-08-27T12:00:00',
         eventCd: 1,
+        appId: 'APP_1',
         signature: 'b'.repeat(128),
       }),
-    ).toThrow('验签失败');
+    ).rejects.toThrow('验签失败');
+  });
+
+  it('rejects events whose appId has no local application', async () => {
+    const service = new XinfutongOaApprovalCallbackService({
+      getByAppId: vi.fn().mockResolvedValue(null),
+    } as never);
+    await expect(
+      service.verifyAndDecryptEvent({
+        eventId: 'XFTOAFPS',
+        eventRcdInf: 'ab',
+        eventTime: '2021-08-27T12:00:00',
+        eventCd: 1,
+        appId: 'UNKNOWN',
+        signature: 'b'.repeat(128),
+      }),
+    ).rejects.toThrow('未找到对应应用');
   });
 });

@@ -80,11 +80,12 @@ export class RequisitionOaCallbackController {
     });
 
     try {
-      const inner = this.callback.verifyAndDecryptEvent(body, this.rawBodyText(req));
+      const verified = await this.callback.verifyAndDecryptEvent(body, this.rawBodyText(req));
       if (eventId !== EVENT_CODE_OA_PROCESS_FINISH) {
         await this.prisma.hspsi_oa_approval_callback_log.update({
           where: { id: log.id },
           data: {
+            account_set_id: verified.accountSetId,
             processed: 1,
             process_result: `已接收未处理的事件：${eventId || '未知'}`.slice(0, 500),
           },
@@ -92,7 +93,7 @@ export class RequisitionOaCallbackController {
         return oaEventAck();
       }
 
-      const payload = this.callback.handleProcessFinishEvent(inner);
+      const payload = this.callback.handleProcessFinishEvent(verified.inner);
       const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
         where: {
           bus_key: payload.busKey,
@@ -118,9 +119,14 @@ export class RequisitionOaCallbackController {
       return oaEventAck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const accountSetId = error instanceof OaEventVerifyError ? error.accountSetId : undefined;
       await this.prisma.hspsi_oa_approval_callback_log.update({
         where: { id: log.id },
-        data: { processed: 0, process_result: message.slice(0, 500) },
+        data: {
+          processed: 0,
+          process_result: message.slice(0, 500),
+          ...(accountSetId ? { account_set_id: accountSetId } : {}),
+        },
       });
       if (error instanceof OaEventVerifyError) {
         return oaEventAck(error.rtnCod, message.slice(0, 200));

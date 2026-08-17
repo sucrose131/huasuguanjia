@@ -23,7 +23,7 @@ function fixture() {
   const callback = {
     handleProcessFinishEvent: vi.fn().mockReturnValue(inner),
     getEventCode: vi.fn().mockReturnValue('XFTOAFPS'),
-    verifyAndDecryptEvent: vi.fn().mockReturnValue(inner),
+    verifyAndDecryptEvent: vi.fn().mockResolvedValue({ inner, accountSetId: 1n }),
   };
   const requisition = {
     handleOaApprovalResult: vi

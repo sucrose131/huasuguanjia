@@ -91,7 +91,7 @@ POST /api/integrations/xinfutong-oa/events
 ### 2.3 接口调用规范
 
 - **认证方式**：SM2签名 + SM4加解密（加密应用），由 `XinfutongOaClient` 统一处理
-- **凭证来源**：`hspsi_sys_account_set` 表，由 `XinfutongOaCredentialService` 提供
+- **凭证来源**：`hspsi_sys_account_set` 表，由 `XinfutongOaCredentialService` 提供；出站用 `app_id` / `app_secret`，入站事件验签用同一行的 `event_public_key`
 - **超时时间**：默认60秒
 - **返回码校验**：`returnCode === 'SUC0000'` 表示成功
 - **环境地址**：生产 `https://api.cmbchina.com`，测试 `https://api.cmburl.cn:8065`
@@ -232,7 +232,7 @@ Content-Type: multipart/form-data
 POST /api/integrations/xinfutong-oa/events
 ```
 
-该入口无需登录鉴权，但正式事件必须通过薪福通事件公钥做 SM2 验签，并解密 `eventRcdInf`。公钥配置在 `XINFUTONG_OA_EVENT_PUBLIC_KEY`。连接测试事件 `XFT00000` 无签名，立即返回 `{ "rtnCod": "200", "errMsg": "" }`。任何到达接口的正式事件原文都会先写入 `hspsi_oa_approval_callback_log`；平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致。验签失败保留 `processed=0` 并以 `rtnCod=001` 回包；业务校验或处理失败时保留失败原因，成功后更新为 `processed=1`；重复通知通过状态机幂等处理。成功处理同样返回 `{ "rtnCod": "200", "errMsg": "" }`，不使用本系统默认的 `{ code, data }` 包装。
+该入口无需登录鉴权，但正式事件必须按报文中的 `appId` 匹配 `hspsi_sys_account_set.app_id`，使用该应用自己的 `event_public_key` 做 SM2 验签，并解密 `eventRcdInf`。公钥由薪福通在该应用配置回调 URL 后生成，按账套写入数据库，不是全局环境变量。连接测试事件 `XFT00000` 无签名，立即返回 `{ "rtnCod": "200", "errMsg": "" }`。任何到达接口的正式事件原文都会先写入 `hspsi_oa_approval_callback_log`；平台仅接受文档规定的终态，并要求 `busKey + procInstId` 与本地已登记的 OA 审批实例完全一致。验签失败保留 `processed=0` 并以 `rtnCod=001` 回包；业务校验或处理失败时保留失败原因，成功后更新为 `processed=1`；重复通知通过状态机幂等处理。成功处理同样返回 `{ "rtnCod": "200", "errMsg": "" }`，不使用本系统默认的 `{ code, data }` 包装。
 
 ## 3. 表单控件数据格式速查表
 

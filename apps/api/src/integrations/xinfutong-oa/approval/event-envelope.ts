@@ -12,11 +12,13 @@ export const OA_EVENT_ACK_SUCCESS = { rtnCod: '200', errMsg: '' } as const;
 
 export class OaEventVerifyError extends Error {
   readonly rtnCod: string;
+  readonly accountSetId?: bigint;
 
-  constructor(message: string, rtnCod = '001') {
+  constructor(message: string, rtnCod = '001', accountSetId?: bigint) {
     super(message);
     this.name = 'OaEventVerifyError';
     this.rtnCod = rtnCod;
+    this.accountSetId = accountSetId;
   }
 }
 
@@ -32,7 +34,7 @@ export interface OaEventEnvelope {
   eventTime: string;
   eventCd: string;
   businessKey?: string;
-  appId?: string;
+  appId: string;
   signature: string;
 }
 
@@ -73,11 +75,12 @@ export function parseEventEnvelope(rawPayload: unknown): OaEventEnvelope {
   if (!eventCd) throw new OaEventVerifyError('事件报文缺少 eventCd');
   if (!eventRcdInf) throw new OaEventVerifyError('事件报文缺少 eventRcdInf');
   if (!signature) throw new OaEventVerifyError('消息签名为空，请确认参数是否经过加签');
+  const appId = typeof obj.appId === 'string' ? obj.appId.trim() : '';
+  if (!appId) throw new OaEventVerifyError('事件报文缺少 appId');
 
   const prjCod = typeof obj.prjCod === 'string' && obj.prjCod ? obj.prjCod : undefined;
   const businessKey =
     typeof obj.businessKey === 'string' && obj.businessKey ? obj.businessKey : undefined;
-  const appId = typeof obj.appId === 'string' && obj.appId ? obj.appId : undefined;
 
   return {
     eventId,
