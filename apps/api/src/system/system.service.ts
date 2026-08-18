@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -182,6 +183,12 @@ export class SystemService {
     if (old.code === 'admin' && (name !== old.name || status !== 1))
       throw new BadRequestException('系统管理员角色不允许改名或停用');
     if (![1, 2].includes(status)) throw new BadRequestException('角色状态无效');
+    if (status === 2) {
+      const assignedUsers = await this.prisma.hspsi_sys_user_role.count({
+        where: { role_id: Number(roleId) },
+      });
+      if (assignedUsers > 0) throw new BadRequestException('该角色仍有关联用户，不能停用');
+    }
     const duplicate = await this.prisma.hspsi_sys_role.findFirst({
       where: { name, id: { not: roleId }, deleted_at: null },
     });
@@ -250,10 +257,10 @@ export class SystemService {
       users.flatMap((user) => [user.created_by, user.updated_by]),
     );
     return users.map((user) => {
-      const assignedRoles = userRoles
+      const assignedRole = userRoles
         .filter((item) => BigInt(item.user_id) === user.id)
         .map((item) => roleMap.get(item.role_id))
-        .filter(Boolean) as typeof roles;
+        .find(Boolean);
       const configuredAmountAccess = amountAccessRows.find((item) => item.user_id === user.id);
       const staff = user.staff_id ? staffMap.get(String(user.staff_id)) : undefined;
       const amountAccess =
@@ -282,8 +289,8 @@ export class SystemService {
         authorizedOrgNames: authorizedOrgs
           .filter((scope) => scope.user_id === user.id)
           .map((scope) => orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`),
-        roleIds: assignedRoles.map((role) => String(role.id)),
-        roleNames: assignedRoles.map((role) => role.name),
+        roleId: assignedRole ? String(assignedRole.id) : '',
+        roleName: assignedRole?.name ?? '',
         amountAccess: amountAccess.level,
         canViewAmount: amountAccess.canViewAmount,
         canEditAmount: amountAccess.canEditAmount,
@@ -392,7 +399,7 @@ export class SystemService {
     };
   }
 
-  private async validateUserRelations(body: Body) {
+  private async validateUserRelations(body: Body, canAssignSuperAdmin = false) {
     const staffId = body.staffId ? BigInt(this.integer(body.staffId, '关联人员', 1)) : null;
     if (staffId) throw new BadRequestException('OA人员账号由组织同步自动创建和授权');
     let orgId = BigInt(this.integer(body.orgId, '所属公司', 1));
@@ -407,18 +414,13 @@ export class SystemService {
       });
       if (!department) throw new BadRequestException('所属部门不存在、已停用或不属于所选公司');
     }
-    const roleIds = [
-      ...new Set(
-        (Array.isArray(body.roleIds) ? body.roleIds : []).map((value: unknown) =>
-          this.integer(value, '所属角色', 1),
-        ),
-      ),
-    ];
-    if (!roleIds.length) throw new BadRequestException('至少选择一个所属角色');
-    const roles = await this.prisma.hspsi_sys_role.findMany({
-      where: { id: { in: roleIds.map(BigInt) }, status: 1, deleted_at: null },
+    const roleId = this.integer(body.roleId, '所属角色', 1);
+    const role = await this.prisma.hspsi_sys_role.findFirst({
+      where: { id: BigInt(roleId), status: 1, deleted_at: null },
     });
-    if (roles.length !== roleIds.length) throw new BadRequestException('包含不存在或已停用的角色');
+    if (!role) throw new BadRequestException('所属角色不存在或已停用');
+    if (!canAssignSuperAdmin && role.code === 'admin')
+      throw new ForbiddenException('只有超级管理员可以授予超级管理员角色');
     const authorizedOrgIds = [
       ...new Set(
         (Array.isArray(body.authorizedOrgIds) ? body.authorizedOrgIds : []).map((value: unknown) =>
@@ -443,12 +445,12 @@ export class SystemService {
       orgId,
       deptId,
       staffId,
-      roleIds,
+      roleId,
       authorizedOrgIds,
     };
   }
 
-  async createUser(body: Body, userId: string) {
+  async createUser(body: Body, userId: string, isSuperAdmin = false) {
     const account = this.text(body.account, '登录账号', 3, 50);
     const name = this.text(body.name, '用户姓名', 1, 50);
     const password = this.text(body.password, '初始密码', 6, 64);
@@ -458,7 +460,7 @@ export class SystemService {
       await this.prisma.hspsi_sys_user.findFirst({ where: { username: account, deleted_at: null } })
     )
       throw new ConflictException('登录账号已存在');
-    const relations = await this.validateUserRelations(body);
+    const relations = await this.validateUserRelations(body, isSuperAdmin);
     const actorId = BigInt(userId);
     const created = await this.prisma.$transaction(async (tx) => {
       const user = await tx.hspsi_sys_user.create({
@@ -476,7 +478,7 @@ export class SystemService {
         },
       });
       await tx.hspsi_sys_user_role.createMany({
-        data: relations.roleIds.map((roleId) => ({ user_id: Number(user.id), role_id: roleId })),
+        data: [{ user_id: Number(user.id), role_id: relations.roleId }],
         skipDuplicates: true,
       });
       if (relations.authorizedOrgIds.length)
@@ -493,7 +495,7 @@ export class SystemService {
     return { id: String(created.id), message: '用户创建成功' };
   }
 
-  async updateUser(id: string, body: Body, userId: string) {
+  async updateUser(id: string, body: Body, userId: string, isSuperAdmin = false) {
     const targetId = BigInt(id);
     const old = await this.prisma.hspsi_sys_user.findFirst({
       where: { id: targetId, deleted_at: null },
@@ -506,7 +508,7 @@ export class SystemService {
     if (old.username === 'admin' && status !== 1)
       throw new BadRequestException('admin账号不允许禁用');
     if (![1, 2].includes(status)) throw new BadRequestException('账号状态无效');
-    const relations = await this.validateUserRelations(body);
+    const relations = await this.validateUserRelations(body, isSuperAdmin);
     const password = String(body.password ?? '');
     if (password && (password.length < 6 || password.length > 64))
       throw new BadRequestException('重置密码长度应为6至64个字符');
@@ -524,11 +526,6 @@ export class SystemService {
           ...(password ? { password: await hash(password, 12) } : {}),
         },
       });
-      await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(targetId) } });
-      await tx.hspsi_sys_user_role.createMany({
-        data: relations.roleIds.map((roleId) => ({ user_id: Number(targetId), role_id: roleId })),
-        skipDuplicates: true,
-      });
       await tx.hspsi_sys_user_authorized_org.deleteMany({ where: { user_id: targetId } });
       if (relations.authorizedOrgIds.length)
         await tx.hspsi_sys_user_authorized_org.createMany({
@@ -541,6 +538,49 @@ export class SystemService {
         });
     });
     return { id, message: '用户保存成功' };
+  }
+
+  async updateUserRoles(id: string, body: Body, userId: string, isSuperAdmin: boolean) {
+    if (!isSuperAdmin) throw new ForbiddenException('只有超级管理员可以变更用户角色');
+    const targetId = BigInt(this.integer(id, '用户ID', 1));
+    const target = await this.prisma.hspsi_sys_user.findFirst({
+      where: { id: targetId, deleted_at: null },
+      select: { id: true, username: true, staff_id: true },
+    });
+    if (!target) throw new NotFoundException('用户不存在');
+    const roleId = this.integer(body.roleId, '所属角色', 1);
+    const role = await this.prisma.hspsi_sys_role.findFirst({
+      where: { id: BigInt(roleId), status: 1, deleted_at: null },
+      select: { id: true, code: true },
+    });
+    if (!role) throw new BadRequestException('所属角色不存在或已停用');
+    if (target.id === BigInt(userId) && role.code !== 'admin')
+      throw new BadRequestException('不能移除当前登录账号自己的超级管理员角色');
+
+    const actorId = BigInt(userId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(targetId) } });
+      await tx.hspsi_sys_user_role.createMany({
+        data: [{ user_id: Number(targetId), role_id: roleId }],
+        skipDuplicates: true,
+      });
+      if (target.staff_id) {
+        await tx.hspsi_sys_user_role_override.upsert({
+          where: { user_id: targetId },
+          create: { user_id: targetId, updated_by: actorId },
+          update: { updated_by: actorId, updated_at: new Date() },
+        });
+      }
+      await tx.hspsi_sys_user.update({
+        where: { id: targetId },
+        data: { updated_by: actorId, updated_at: new Date() },
+      });
+    });
+    return {
+      id,
+      roleId: String(roleId),
+      message: target.staff_id ? '角色授权已保存，后续OA同步不会覆盖' : '角色授权已保存',
+    };
   }
 
   async menus() {

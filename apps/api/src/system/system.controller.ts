@@ -48,7 +48,7 @@ export class SystemController {
   @Post('users')
   @RequirePermissions('system:create')
   createUser(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
-    return this.service.createUser(body, user.id);
+    return this.service.createUser(body, user.id, user.isSuperAdmin === true);
   }
 
   @Put('users/:id')
@@ -58,7 +58,17 @@ export class SystemController {
     @Body() body: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.updateUser(id, body, user.id);
+    return this.service.updateUser(id, body, user.id, user.isSuperAdmin === true);
+  }
+
+  @Put('users/:id/roles')
+  @RequirePermissions('system:update')
+  updateUserRoles(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.updateUserRoles(id, body, user.id, user.isSuperAdmin === true);
   }
 
   @Put('users/:id/amount-access')

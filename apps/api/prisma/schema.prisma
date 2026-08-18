@@ -1869,6 +1869,17 @@ model hspsi_sys_user_role {
   role_id Int @db.UnsignedInt
 
   @@id([user_id, role_id])
+  @@unique([user_id], map: "uk_user_role_user_id")
+}
+
+/// OA 用户的本地角色人工覆盖标记；存在记录时，OA 同步不再覆盖该用户的角色集合。
+model hspsi_sys_user_role_override {
+  user_id    BigInt   @id @db.UnsignedBigInt
+  updated_by BigInt   @default(0)
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @db.DateTime(0)
+
+  @@index([updated_by], map: "idx_user_role_override_updated_by")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

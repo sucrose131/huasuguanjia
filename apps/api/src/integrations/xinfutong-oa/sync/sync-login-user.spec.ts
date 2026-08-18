@@ -27,10 +27,14 @@ function createPrisma() {
     hspsi_basic_dept: { findFirst: vi.fn() },
     hspsi_sys_dictionary_category: { findFirst: vi.fn() },
     hspsi_sys_dictionary: { findMany: vi.fn() },
-    hspsi_sys_role: { findMany: vi.fn() },
+    hspsi_sys_role: { findMany: vi.fn(), findFirst: vi.fn() },
     hspsi_sys_user_role: {
       createMany: vi.fn(),
       deleteMany: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    hspsi_sys_user_role_override: {
+      findUnique: vi.fn().mockResolvedValue(null),
     },
     hspsi_sys_user_authorized_org: {
       createMany: vi.fn(),
@@ -272,14 +276,18 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
       if (where.dict_catg_id === 101) return [{ dict_value: 'PRIMARY_ORG' }];
       return [];
     });
-    prisma.hspsi_sys_role.findMany.mockResolvedValue([{ id: 7n }, { id: 8n }]);
+    prisma.hspsi_sys_role.findFirst.mockImplementation(({ where }) => {
+      if (where.code === 'buyer') return { id: 8n };
+      if (where.code === 'oa-staff-applicant') return { id: 7n };
+      return null;
+    });
     prisma.hspsi_basic_staff_organizations.findMany.mockResolvedValue([
       { org_id: 6n, org_type: 1, type: 1 },
     ]);
     prisma.hspsi_basic_organization.findMany.mockResolvedValue([{ org_id: 6n }]);
   });
 
-  it('从数据字典生成全员基础角色、岗位附加角色和授权组织', async () => {
+  it('岗位映射角色优先于基础角色，并生成授权组织', async () => {
     await expect(
       service.refreshUserAuthorization({
         userId: 9n,
@@ -288,7 +296,7 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
         accountSetId: 1n,
         identityUsable: true,
       }),
-    ).resolves.toEqual({ roleIds: [7, 8], authorizedOrgIds: [6n] });
+    ).resolves.toEqual({ roleId: 8, authorizedOrgIds: [6n] });
 
     expect(prisma.hspsi_sys_dictionary.findMany).toHaveBeenNthCalledWith(
       1,
@@ -299,10 +307,7 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
       expect.objectContaining({ where: expect.objectContaining({ dict_name: 'PB0001' }) }),
     );
     expect(prisma.hspsi_sys_user_role.createMany).toHaveBeenCalledWith({
-      data: [
-        { user_id: 9, role_id: 7 },
-        { user_id: 9, role_id: 8 },
-      ],
+      data: [{ user_id: 9, role_id: 8 }],
       skipDuplicates: true,
     });
     expect(prisma.hspsi_sys_user_authorized_org.createMany).toHaveBeenCalledWith({
@@ -318,7 +323,6 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
 
   it('员工缺少岗位时仍获得全员基础角色和主组织授权', async () => {
     prisma.hspsi_basic_position.findFirst.mockResolvedValue(null);
-    prisma.hspsi_sys_role.findMany.mockResolvedValue([{ id: 7n }]);
 
     await expect(
       service.refreshUserAuthorization({
@@ -328,7 +332,7 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
         accountSetId: 1n,
         identityUsable: true,
       }),
-    ).resolves.toEqual({ roleIds: [7], authorizedOrgIds: [6n] });
+    ).resolves.toEqual({ roleId: 7, authorizedOrgIds: [6n] });
 
     expect(prisma.hspsi_basic_position_belongs.findMany).not.toHaveBeenCalled();
     expect(prisma.hspsi_sys_user.update).toHaveBeenCalledWith({
@@ -346,7 +350,7 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
         accountSetId: 1n,
         identityUsable: false,
       }),
-    ).resolves.toEqual({ roleIds: [], authorizedOrgIds: [] });
+    ).resolves.toEqual({ roleId: null, authorizedOrgIds: [] });
     expect(prisma.hspsi_sys_user_role.deleteMany).toHaveBeenCalled();
     expect(prisma.hspsi_sys_user_authorized_org.deleteMany).toHaveBeenCalled();
     expect(prisma.hspsi_sys_user_role.createMany).not.toHaveBeenCalled();
@@ -354,6 +358,29 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
     expect(prisma.hspsi_sys_user.update).toHaveBeenCalledWith({
       where: { id: 9n },
       data: expect.objectContaining({ status: 2 }),
+    });
+  });
+
+  it('超级管理员人工覆盖角色后，OA同步仅刷新组织且不覆盖本地角色', async () => {
+    prisma.hspsi_sys_user_role_override.findUnique.mockResolvedValue({ user_id: 9n });
+    prisma.hspsi_sys_user_role.count.mockResolvedValue(2);
+
+    await expect(
+      service.refreshUserAuthorization({
+        userId: 9n,
+        staffId: 10n,
+        postId: 11n,
+        accountSetId: 1n,
+        identityUsable: true,
+      }),
+    ).resolves.toEqual({ roleId: 8, authorizedOrgIds: [6n] });
+
+    expect(prisma.hspsi_sys_user_role.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.hspsi_sys_user_role.createMany).not.toHaveBeenCalled();
+    expect(prisma.hspsi_sys_user_authorized_org.deleteMany).toHaveBeenCalled();
+    expect(prisma.hspsi_sys_user.update).toHaveBeenCalledWith({
+      where: { id: 9n },
+      data: expect.objectContaining({ status: 1 }),
     });
   });
 });
