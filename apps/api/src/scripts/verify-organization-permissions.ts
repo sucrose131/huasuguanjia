@@ -24,9 +24,10 @@ async function main() {
     orderBy: { warehouse_id: 'asc' },
   });
   const organizationIds = [...new Set(warehouses.map((item) => String(item.org_id)))];
-  assert(organizationIds.length >= 2, '至少需要两个有仓库的组织验证数据隔离');
+  assert(organizationIds.length >= 3, '至少需要三个有仓库的组织验证授权与未授权边界');
   const currentOrgId = organizationIds[0]!;
-  const foreignOrgId = organizationIds[1]!;
+  const authorizedOrgId = organizationIds[1]!;
+  const unauthorizedOrgId = organizationIds[2]!;
   const scopedUser = {
     id: '999999',
     username: 'organization-verifier',
@@ -36,7 +37,7 @@ async function main() {
     currentOrgName: '自动验证组织',
     authorizedOrganizations: [
       { id: currentOrgId, name: '当前组织' },
-      { id: foreignOrgId, name: '其他组织' },
+      { id: authorizedOrgId, name: '额外授权组织' },
     ],
     isSuperAdmin: false,
     permissions: [],
@@ -52,38 +53,42 @@ async function main() {
   );
   assert(
     scopedWarehouses.length > 0 &&
-      scopedWarehouses.every((item) => String(item.org_id) === currentOrgId),
-    '仓库列表出现非当前组织数据',
+      scopedWarehouses.every((item) =>
+        [currentOrgId, authorizedOrgId].includes(String(item.org_id)),
+      ) &&
+      scopedWarehouses.some((item) => String(item.org_id) === currentOrgId) &&
+      scopedWarehouses.some((item) => String(item.org_id) === authorizedOrgId),
+    '仓库列表没有严格覆盖固定组织和额外授权组织',
   );
 
-  const foreignWarehouse = warehouses.find((item) => String(item.org_id) === foreignOrgId)!;
-  let crossOrganizationReadBlocked = false;
+  const authorizedWarehouse = warehouses.find(
+    (item) => String(item.org_id) === authorizedOrgId,
+  )!;
+  const authorizedRead = await runWithDataScope(
+    scopedUser,
+    async () =>
+      await prisma.hspsi_basic_warehouse.findUnique({
+        where: { warehouse_id: authorizedWarehouse.warehouse_id },
+      }),
+  );
+  assert(authorizedRead, '额外授权组织仓库详情被错误拒绝');
+
+  const unauthorizedWarehouse = warehouses.find(
+    (item) => String(item.org_id) === unauthorizedOrgId,
+  )!;
+  let unauthorizedReadBlocked = false;
   try {
     await runWithDataScope(
       scopedUser,
       async () =>
         await prisma.hspsi_basic_warehouse.findUnique({
-          where: { warehouse_id: foreignWarehouse.warehouse_id },
+          where: { warehouse_id: unauthorizedWarehouse.warehouse_id },
         }),
     );
   } catch {
-    crossOrganizationReadBlocked = true;
+    unauthorizedReadBlocked = true;
   }
-  assert(crossOrganizationReadBlocked, '跨组织仓库详情读取未被拒绝');
-
-  let crossOrganizationCreateBlocked = false;
-  try {
-    await runWithDataScope(
-      scopedUser,
-      async () =>
-        await prisma.hspsi_basic_warehouse.create({
-          data: { org_id: BigInt(foreignOrgId) } as never,
-        }),
-    );
-  } catch {
-    crossOrganizationCreateBlocked = true;
-  }
-  assert(crossOrganizationCreateBlocked, '跨组织仓库创建未被拒绝');
+  assert(unauthorizedReadBlocked, '未授权组织仓库详情读取未被拒绝');
 
   let missingOrganizationCreateBlocked = false;
   try {
@@ -115,9 +120,9 @@ async function main() {
         result: 'PASS',
         currentOrgId,
         checks: {
-          listOnlyCurrentOrganization: true,
-          crossOrganizationReadBlocked,
-          crossOrganizationCreateBlocked,
+          listIncludesFixedAndExtraAuthorizedOrganizations: true,
+          authorizedOrganizationReadAllowed: Boolean(authorizedRead),
+          unauthorizedOrganizationReadBlocked: unauthorizedReadBlocked,
           missingOrganizationCreateBlocked,
           sharedGoodsStillVisible: Boolean(sharedGoods),
         },

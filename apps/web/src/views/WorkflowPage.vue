@@ -24,12 +24,14 @@ import InputDialog from '@/components/production/InputDialog.vue';
 import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { canPageAction } from '@/utils/permission';
 type B = Record<string, any>;
 const route = useRoute(),
   router = useRouter(),
   auth = useAuthStore(),
   group = computed(() => String(route.path.split('/')[1])),
   resource = computed(() => String(route.params.resource));
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const key = computed(() => `${group.value}/${resource.value}`),
   current = computed<B>(() => businessConfigs[key.value] ?? businessConfigs['production/boms']!),
@@ -149,7 +151,7 @@ function reset() {
     deptId: auth.user?.deptId ?? '',
     receiverId: auth.user?.id,
     handlerId: auth.user?.id,
-    applicantId: auth.user?.id,
+    applicantId: auth.user?.staffId,
     customerId: '',
     customerMobile: '',
     customerAddress: '',
@@ -202,7 +204,7 @@ function reset() {
     details: hasLines.value ? [blank()] : [],
   });
   if (group.value === 'requisitions') {
-    form.applicantId = '';
+    form.applicantId = auth.user?.staffId ?? '';
     form.receiverId = '';
     if (key.value === 'requisitions/applications' && form.details[0])
       form.details[0].returnable = false;
@@ -1241,6 +1243,8 @@ const canConfirmSourcedDiscount = (r: B) =>
   Number(r.deliveryStatus ?? r.delivery_status) !== 3;
 const canEdit = (r: B) =>
   !isMoney.value &&
+  (key.value !== 'requisitions/applications' ||
+    String(r.createdBy) === String(auth.user?.id)) &&
   !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(r.oaStatus ?? '')) &&
   !(isService.value && r.sourceSystem) &&
   key.value !== 'production/inputs' &&
@@ -1248,7 +1252,9 @@ const canEdit = (r: B) =>
   Number(r.approveStatus ?? r.approve_status) !== 1 &&
   (key.value !== 'production/plans' || [0, 1].includes(Number(r.planStatus)));
 const canRemove = (r: B) =>
-  isService.value && r.sourceSystem
+  key.value === 'requisitions/applications' && String(r.createdBy) !== String(auth.user?.id)
+    ? false
+    : isService.value && r.sourceSystem
     ? false
     : key.value === 'sales/discount-orders' &&
         Number(r.businessSourceId ?? r.business_source_id) > 0
@@ -1654,6 +1660,7 @@ watch(key, async () => {
       <el-button
         v-if="
           current.creatable !== false &&
+          canAction('create') &&
           key !== 'production/outputs' &&
           key !== 'production/inputs' &&
           key !== 'requisitions/outputs'
@@ -1664,19 +1671,19 @@ watch(key, async () => {
         >{{ current.createText || '新增' + current.title }}</el-button
       >
       <el-button
-        v-if="key === 'production/outputs'"
+        v-if="key === 'production/outputs' && canAction('create')"
         type="primary"
         @click="openTemporaryOutputCreate"
         >新增临时出库</el-button
       >
       <el-button
-        v-if="key === 'requisitions/outputs'"
+        v-if="key === 'requisitions/outputs' && canAction('create')"
         type="primary"
         @click="openDirectRequisitionOutput"
         >直接领用出库</el-button
       >
       <el-button
-        v-if="key === 'production/inputs'"
+        v-if="key === 'production/inputs' && canAction('create')"
         type="primary"
         @click="
           selectedInputRow = undefined;
@@ -1904,14 +1911,19 @@ watch(key, async () => {
             <TableRowActions>
               <el-button link type="primary" @click="openWorkflowView(s.row)">查看</el-button>
               <el-button
-                v-if="canEdit(s.row) && key !== 'production/outputs' && key !== 'production/inputs'"
+                v-if="
+                  canEdit(s.row) &&
+                  canAction('update') &&
+                  key !== 'production/outputs' &&
+                  key !== 'production/inputs'
+                "
                 link
                 type="primary"
                 @click="open(s.row)"
                 >编辑</el-button
               >
               <el-button
-                v-if="canEdit(s.row) && key === 'production/outputs'"
+                v-if="canEdit(s.row) && canAction('update') && key === 'production/outputs'"
                 link
                 type="primary"
                 @click="
@@ -1929,13 +1941,20 @@ watch(key, async () => {
                 >
                 -->
                 <el-dropdown-item
-                  v-if="key === 'requisitions/applications' && s.row.oaStatus === 'PUSH_FAILED'"
+                  v-if="
+                    key === 'requisitions/applications' &&
+                    canAction('submit') &&
+                    s.row.oaStatus === 'PUSH_FAILED'
+                  "
                   class="table-action-warning"
                   @click="retryOa(s.row)"
                   >重新提交OA</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="canApprove(s.row) || canConfirmSourcedDiscount(s.row)"
+                  v-if="
+                    canAction('approve') &&
+                    (canApprove(s.row) || canConfirmSourcedDiscount(s.row))
+                  "
                   class="table-action-success"
                   @click="action(s.row, 'approve')"
                   >{{
@@ -1947,9 +1966,10 @@ watch(key, async () => {
                 >
                 <el-dropdown-item
                   v-if="
-                    canApprove(s.row) ||
-                    canConfirmSourcedDiscount(s.row) ||
-                    canRejectReverseGeneratedApplication(s.row)
+                    canAction('approve') &&
+                    (canApprove(s.row) ||
+                      canConfirmSourcedDiscount(s.row) ||
+                      canRejectReverseGeneratedApplication(s.row))
                   "
                   class="table-action-danger"
                   @click="action(s.row, 'approve', false)"
@@ -1961,18 +1981,26 @@ watch(key, async () => {
                   }}</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="s.row.confirmStatus === 0 && key !== 'production/outputs'"
+                  v-if="
+                    s.row.confirmStatus === 0 &&
+                    key !== 'production/outputs' &&
+                    canAction('confirm')
+                  "
                   class="table-action-success"
                   @click="action(s.row, 'confirm')"
                   >确认</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'sales/orders' && canAnalyzeGap(s.row)"
+                  v-if="key === 'sales/orders' && canAction('analyze') && canAnalyzeGap(s.row)"
                   @click="action(s.row, 'analyze')"
                   >缺口分析</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'sales/orders' && canDirectOutput(s.row)"
+                  v-if="
+                    key === 'sales/orders' &&
+                    canPageAction(auth.user, '/sales/outputs', 'create') &&
+                    canDirectOutput(s.row)
+                  "
                   @click="
                     router.push({ path: '/sales/outputs', query: { orderId: String(s.row.id) } })
                   "
@@ -1981,6 +2009,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'sales/discount-orders' &&
+                    canPageAction(auth.user, '/sales/outputs', 'create') &&
                     approvedOrder(s.row) &&
                     !Number(s.row.businessSourceId ?? s.row.business_source_id) &&
                     Number(s.row.deliveryStatus ?? s.row.delivery_status) !== 3
@@ -1992,30 +2021,48 @@ watch(key, async () => {
                 >
                 <el-dropdown-item
                   v-if="
-                    ['sales/orders', 'sales/discount-orders'].includes(key) && canReceive(s.row)
+                    ['sales/orders', 'sales/discount-orders'].includes(key) &&
+                    canPageAction(auth.user, '/sales/payments', 'create') &&
+                    canReceive(s.row)
                   "
                   class="table-action-success"
                   @click="startMoney(s.row, 'payments')"
                   >登记收款</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="['sales/orders', 'sales/discount-orders'].includes(key) && canRefund(s.row)"
+                  v-if="
+                    ['sales/orders', 'sales/discount-orders'].includes(key) &&
+                    canPageAction(auth.user, '/sales/refunds', 'create') &&
+                    canRefund(s.row)
+                  "
                   class="table-action-warning"
                   @click="startMoney(s.row, 'refunds')"
                   >登记退款</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'sales/orders' && canStartReturn(s.row)"
+                  v-if="
+                    key === 'sales/orders' &&
+                    canPageAction(auth.user, '/sales/returns', 'create') &&
+                    canStartReturn(s.row)
+                  "
                   @click="startSalesRelated(s.row, 'returns')"
                   >发起退货</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'sales/orders' && canStartReturn(s.row)"
+                  v-if="
+                    key === 'sales/orders' &&
+                    canPageAction(auth.user, '/sales/services', 'create') &&
+                    canStartReturn(s.row)
+                  "
                   @click="startSalesRelated(s.row, 'services')"
                   >登记售后</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'sales/outputs' && Number(s.row.confirmStatus) === 1"
+                  v-if="
+                    key === 'sales/outputs' &&
+                    canAction('undo-confirm') &&
+                    Number(s.row.confirmStatus) === 1
+                  "
                   class="table-action-warning"
                   @click="action(s.row, 'undo-confirm')"
                   >撤销确认</el-dropdown-item
@@ -2023,6 +2070,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'sales/returns' &&
+                    canAction('undo-confirm') &&
                     Number(s.row.confirmStatus) === 1 &&
                     Number(s.row.disposalType) === 1
                   "
@@ -2033,6 +2081,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'sales/services' &&
+                    canAction('process') &&
                     Number(s.row.eventStatus) === 1 &&
                     (!s.row.successorId || s.row.successorType === 'sales_return')
                   "
@@ -2065,6 +2114,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/plans' &&
+                    canAction('recheck') &&
                     Number(s.row.approveStatus) === 0 &&
                     Number(s.row.planStatus) === 7 &&
                     Number(s.row.outboundStatus) === 0 &&
@@ -2077,6 +2127,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/plans' &&
+                    canPageAction(auth.user, '/production/outputs', 'create') &&
                     Number(s.row.approveStatus) === 1 &&
                     Number(s.row.planStatus) === 3 &&
                     Number(s.row.stockCheckStatus) === 1 &&
@@ -2094,6 +2145,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/plans' &&
+                    canAction('terminate') &&
                     ![5, 6].includes(Number(s.row.planStatus)) &&
                     Number(s.row.outboundStatus) !== 2
                   "
@@ -2102,7 +2154,7 @@ watch(key, async () => {
                   >终止</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'production/boms'"
+                  v-if="key === 'production/boms' && canAction('status')"
                   @click="action(s.row, 'toggle-bom')"
                   >{{
                     dictionaryLabel('enabled_status', Number(s.row.status) === 1 ? 2 : 1)
@@ -2111,6 +2163,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/outputs' &&
+                    canAction('confirm') &&
                     Number(s.row.outType) === 1 &&
                     Number(s.row.confirmStatus ?? s.row.status) === 0
                   "
@@ -2121,6 +2174,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/outputs' &&
+                    canAction('confirm') &&
                     Number(s.row.outType) !== 1 &&
                     Number(s.row.confirmStatus ?? s.row.status) === 0
                   "
@@ -2131,6 +2185,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/outputs' &&
+                    canAction('create-material-return') &&
                     Number(s.row.outType) === 1 &&
                     Number(s.row.confirmStatus) === 1
                   "
@@ -2140,6 +2195,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'production/outputs' &&
+                    canAction('create-material-return') &&
                     Number(s.row.outType) === 1 &&
                     Number(s.row.confirmStatus) === 1
                   "
@@ -2161,13 +2217,21 @@ watch(key, async () => {
                   >终止生产</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'requisitions/outputs' && Number(s.row.confirmStatus) === 1"
+                  v-if="
+                    key === 'requisitions/outputs' &&
+                    canAction('undo-confirm') &&
+                    Number(s.row.confirmStatus) === 1
+                  "
                   class="table-action-warning"
                   @click="action(s.row, 'undo-confirm')"
                   >撤销确认</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="key === 'requisitions/returns' && Number(s.row.confirmStatus) === 1"
+                  v-if="
+                    key === 'requisitions/returns' &&
+                    canAction('undo-confirm') &&
+                    Number(s.row.confirmStatus) === 1
+                  "
                   class="table-action-warning"
                   @click="action(s.row, 'undo-confirm')"
                   >撤销确认</el-dropdown-item
@@ -2175,6 +2239,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'requisitions/applications' &&
+                    canPageAction(auth.user, '/requisitions/outputs', 'update') &&
                     (Number(s.row.approveStatus) === 1 || Boolean(s.row.reverseGenerated)) &&
                     s.row.autoOutputId
                   "
@@ -2196,6 +2261,7 @@ watch(key, async () => {
                 <el-dropdown-item
                   v-if="
                     key === 'requisitions/outputs' &&
+                    canPageAction(auth.user, '/requisitions/returns', 'create') &&
                     Number(s.row.confirmStatus) === 1 &&
                     s.row.hasReturnableItems
                   "
@@ -2208,7 +2274,7 @@ watch(key, async () => {
                   >生成退回</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="canRemove(s.row)"
+                  v-if="canRemove(s.row) && canAction('delete')"
                   class="table-action-danger"
                   divided
                   @click="remove(s.row)"
@@ -2447,6 +2513,7 @@ watch(key, async () => {
               v-model="form.orgId"
               :disabled="
                 mode === 'view' ||
+                key === 'requisitions/applications' ||
                 group !== 'requisitions' ||
                 (isOutput && !form.directOutput) ||
                 isReturn
@@ -2856,7 +2923,7 @@ watch(key, async () => {
             ><el-select
               v-model="form.applicantId"
               filterable
-              :disabled="mode === 'view'"
+              disabled
               @change="applicantChanged"
               ><el-option
                 v-for="item in options.employees"
@@ -3404,7 +3471,13 @@ watch(key, async () => {
             取消编辑
           </el-button>
         </div>
-        <div v-if="mode !== 'view'" class="service-progress-editor">
+        <div
+          v-if="
+            mode !== 'view' &&
+            canAction(progressForm.id ? 'progress-update' : 'progress-create')
+          "
+          class="service-progress-editor"
+        >
           <el-input
             v-model="progressForm.content"
             type="textarea"
@@ -3475,8 +3548,20 @@ watch(key, async () => {
           >
             <template #default="{ row }">
               <template v-if="Number(row.sourceType) === 1">
-                <el-button link type="primary" @click="editServiceProgress(row)">编辑</el-button>
-                <el-button link type="danger" @click="deleteServiceProgress(row)">删除</el-button>
+                <el-button
+                  v-if="canAction('progress-update')"
+                  link
+                  type="primary"
+                  @click="editServiceProgress(row)"
+                  >编辑</el-button
+                >
+                <el-button
+                  v-if="canAction('progress-delete')"
+                  link
+                  type="danger"
+                  @click="deleteServiceProgress(row)"
+                  >删除</el-button
+                >
               </template>
               <span v-else class="service-progress-readonly">—</span>
             </template>
@@ -3491,13 +3576,21 @@ watch(key, async () => {
       <template #footer>
         <el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button>
         <el-button
-          v-if="mode !== 'view' && key === 'requisitions/applications'"
+          v-if="
+            mode !== 'view' &&
+            key === 'requisitions/applications' &&
+            canAction(mode === 'create' ? 'create' : 'update')
+          "
           :loading="saving"
           @click="save(false)"
           >保存草稿</el-button
         >
         <el-button
-          v-if="mode !== 'view'"
+          v-if="
+            mode !== 'view' &&
+            canAction(mode === 'create' ? 'create' : 'update') &&
+            (key !== 'requisitions/applications' || canAction('submit'))
+          "
           :type="isMoney && resource === 'refunds' ? 'danger' : 'primary'"
           :loading="saving"
           :disabled="saving || (isMoney && moneySaveDisabled)"

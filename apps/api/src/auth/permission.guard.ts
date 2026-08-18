@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthRequest } from './auth.types';
 import { PERMISSIONS_KEY } from './permissions.decorator';
+import { inferRequestPermissions } from './request-permission';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -20,11 +21,13 @@ export class PermissionGuard implements CanActivate {
         context.getClass(),
       ]) ?? [];
     if (!required.length) return true;
-    const permissions = context.switchToHttp().getRequest<AuthRequest>().user?.permissions ?? [];
-    if (
-      permissions.includes('*') ||
-      required.some((permission) => permissions.includes(permission))
-    )
+    const request = context.switchToHttp().getRequest<AuthRequest>();
+    const permissions = request.user?.permissions ?? [];
+    if (permissions.includes('*')) return true;
+    const granular = inferRequestPermissions(request);
+    if (granular.length && granular.every((permission) => permissions.includes(permission)))
+      return true;
+    if (!granular.length && required.some((permission) => permissions.includes(permission)))
       return true;
     throw new ForbiddenException('当前账号没有执行该操作的权限');
   }

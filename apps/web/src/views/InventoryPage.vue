@@ -12,6 +12,7 @@ import TableRowActions from '@/components/business/TableRowActions.vue';
 import InventoryCheckTable from '@/components/inventory/InventoryCheckTable.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { inventoryDocumentType } from '@/utils/document-type';
+import { canPageAction } from '@/utils/permission';
 
 type Row = Record<string, any>;
 type Option = {
@@ -30,6 +31,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const resource = computed(() => String(route.params.resource));
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const meta: Record<
   string,
   { title: string; subtitle: string; endpoint: string; createText?: string }
@@ -1032,7 +1034,7 @@ onMounted(async () => {
         <el-button v-if="resource === 'checks'" @click="historyDialog = true"
           >查看盘点记录</el-button
         >
-        <el-button v-if="current.createText" type="primary" @click="openCreate">{{
+        <el-button v-if="current.createText && canAction('create')" type="primary" @click="openCreate">{{
           current.createText
         }}</el-button>
       </div>
@@ -1309,7 +1311,11 @@ onMounted(async () => {
               ><template #default="s"
                 ><TableRowActions
                   ><el-button link type="primary" @click="showLedger(s.row)">查看</el-button
-                  ><el-button link type="primary" @click="adjustStock(s.row)"
+                  ><el-button
+                    v-if="canPageAction(auth.user, '/inventory/adjustments', 'create')"
+                    link
+                    type="primary"
+                    @click="adjustStock(s.row)"
                     >调整</el-button
                   ></TableRowActions
                 ></template
@@ -1395,23 +1401,23 @@ onMounted(async () => {
               ><template #default="s"
                 ><TableRowActions :show-more="canEdit(s.row) || canApprove(s.row)"
                   ><el-button link type="primary" @click="openRow(s.row, true)">查看</el-button
-                  ><el-button v-if="canEdit(s.row)" link type="primary" @click="openRow(s.row)"
+                  ><el-button v-if="canEdit(s.row) && canAction('update')" link type="primary" @click="openRow(s.row)"
                     >编辑</el-button
                   ><template #more
-                    ><el-dropdown-item v-if="canEdit(s.row)" @click="submit(s.row)"
+                    ><el-dropdown-item v-if="canEdit(s.row) && canAction('submit')" @click="submit(s.row)"
                       >提交</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-success"
                       @click="approve(s.row, true)"
                       >通过</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-danger"
                       @click="approve(s.row, false)"
                       >驳回</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canEdit(s.row)"
+                      v-if="canEdit(s.row) && canAction('delete')"
                       class="table-action-danger"
                       divided
                       @click="removeRow(s.row)"
@@ -1450,23 +1456,23 @@ onMounted(async () => {
               ><template #default="s"
                 ><TableRowActions :show-more="canEdit(s.row) || canApprove(s.row)"
                   ><el-button link type="primary" @click="openRow(s.row, true)">查看</el-button
-                  ><el-button v-if="canEdit(s.row)" link type="primary" @click="openRow(s.row)"
+                  ><el-button v-if="canEdit(s.row) && canAction('update')" link type="primary" @click="openRow(s.row)"
                     >编辑</el-button
                   ><template #more
-                    ><el-dropdown-item v-if="canEdit(s.row)" @click="submit(s.row)"
+                    ><el-dropdown-item v-if="canEdit(s.row) && canAction('submit')" @click="submit(s.row)"
                       >提交</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-success"
                       @click="approve(s.row, true)"
                       >通过</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-danger"
                       @click="approve(s.row, false)"
                       >驳回</el-dropdown-item
                     ><el-dropdown-item
-                      v-if="canEdit(s.row)"
+                      v-if="canEdit(s.row) && canAction('delete')"
                       class="table-action-danger"
                       divided
                       @click="removeRow(s.row)"
@@ -1563,7 +1569,7 @@ onMounted(async () => {
                 <TableRowActions>
                   <el-button link type="primary" @click="openRow(s.row, true)">查看</el-button>
                   <el-button
-                    v-if="canEditDocument(s.row)"
+                    v-if="canEditDocument(s.row) && canAction('update')"
                     link
                     type="primary"
                     @click="openRow(s.row)"
@@ -1573,17 +1579,17 @@ onMounted(async () => {
                     <!-- 暂时隐藏“业务链路”入口，保留底层查询能力以便后续恢复。
                     <el-dropdown-item @click="openTrace(s.row)">业务链路</el-dropdown-item>
                     -->
-                    <el-dropdown-item v-if="canEditDocument(s.row)" @click="submit(s.row)"
+                    <el-dropdown-item v-if="canEditDocument(s.row) && canAction('submit')" @click="submit(s.row)"
                       >提交</el-dropdown-item
                     >
                     <el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-success"
                       @click="approve(s.row, true)"
                       >通过</el-dropdown-item
                     >
                     <el-dropdown-item
-                      v-if="canApprove(s.row)"
+                      v-if="canApprove(s.row) && canAction('approve')"
                       class="table-action-danger"
                       @click="approve(s.row, false)"
                       >驳回</el-dropdown-item
@@ -1600,7 +1606,7 @@ onMounted(async () => {
                       >查看采购退货 {{ purchaseReturn.returnNo }}</el-dropdown-item
                     >
                     <el-dropdown-item
-                      v-if="canDelete(s.row)"
+                      v-if="canDelete(s.row) && canAction('delete')"
                       class="table-action-danger"
                       divided
                       @click="removeRow(s.row)"
@@ -2459,28 +2465,28 @@ onMounted(async () => {
         <el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button>
         <template v-if="mode !== 'view'">
           <el-button
-            v-if="resource === 'checks' && mode === 'create'"
+            v-if="resource === 'checks' && mode === 'create' && canAction('create')"
             type="primary"
             :loading="saving"
             @click="createCheck"
             >载入库存开始盘点</el-button
           >
-          <template v-else-if="resource === 'checks'"
+          <template v-else-if="resource === 'checks' && canAction('update')"
             ><el-button :loading="saving" @click="saveCheck(false)">保存盘点</el-button
             ><el-button type="primary" :loading="saving" @click="saveCheck(true)"
               >完成盘点</el-button
             ></template
           >
           <el-button
-            v-else-if="resource === 'loss-outputs'"
+            v-else-if="resource === 'loss-outputs' && canAction(mode === 'create' ? 'create' : 'update')"
             type="primary"
             :loading="saving"
             @click="save(false)"
             >保存报亏出库单</el-button
           >
-          <template v-else
+          <template v-else-if="canAction(mode === 'create' ? 'create' : 'update')"
             ><el-button :loading="saving" @click="save(false)">保存草稿</el-button
-            ><el-button type="primary" :loading="saving" @click="save(true)"
+            ><el-button v-if="canAction('submit')" type="primary" :loading="saving" @click="save(true)"
               >保存并提交审核</el-button
             ></template
           >

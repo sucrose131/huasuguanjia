@@ -1,0 +1,139 @@
+type PermissionRequest = {
+  method?: string;
+  originalUrl?: string;
+  url?: string;
+  body?: Record<string, unknown>;
+};
+
+const PAGE_RESOURCES: Record<string, Set<string>> = {
+  purchase: new Set(['applications', 'orders', 'receipts', 'returns', 'payments', 'refunds']),
+  inventory: new Set([
+    'stocks',
+    'general-inputs',
+    'general-outputs',
+    'transfers',
+    'adjustments',
+    'losses',
+    'loss-outputs',
+    'overflows',
+    'checks',
+    'quantity-alerts',
+    'expiry-alerts',
+  ]),
+  production: new Set(['plans', 'outputs', 'inputs', 'boms']),
+  sales: new Set([
+    'orders',
+    'outputs',
+    'returns',
+    'payments',
+    'refunds',
+    'discount-orders',
+    'services',
+  ]),
+  requisitions: new Set(['applications', 'outputs', 'returns']),
+};
+
+const MODULES = new Set([...Object.keys(PAGE_RESOURCES), 'base-data', 'goods']);
+const BASE_DATA_RESOURCES: Record<string, string> = {
+  vendors: 'vendors',
+  customers: 'customers',
+  organizations: 'companies',
+  departments: 'departments',
+  positions: 'positions',
+  employees: 'employees',
+  warehouses: 'warehouses',
+  units: 'units',
+};
+const SUBMIT_PAGES = new Set([
+  'purchase:applications',
+  'purchase:returns',
+  'inventory:transfers',
+  'inventory:adjustments',
+  'inventory:losses',
+  'inventory:overflows',
+  'requisitions:applications',
+]);
+
+function normalizedSegments(request: PermissionRequest) {
+  const pathname = String(request.originalUrl ?? request.url ?? '').split('?')[0] ?? '';
+  const segments = pathname.split('/').filter(Boolean);
+  const moduleIndex = segments.findIndex((segment) => MODULES.has(segment));
+  return moduleIndex >= 0 ? segments.slice(moduleIndex) : [];
+}
+
+function pageContext(segments: string[]) {
+  const [moduleName, rawResource] = segments;
+  if (!moduleName) return null;
+  if (moduleName === 'base-data') {
+    const mapped = rawResource ? BASE_DATA_RESOURCES[rawResource] : undefined;
+    return mapped
+      ? { moduleName: 'master-data', resource: mapped, pageCode: `master-data:${mapped}` }
+      : null;
+  }
+  if (moduleName === 'goods') {
+    const resource = rawResource === 'categories' ? 'categories' : rawResource === 'properties' ? 'properties' : 'products';
+    return { moduleName, resource, pageCode: `goods:${resource}` };
+  }
+  if (!rawResource) return null;
+  const resource =
+    moduleName === 'inventory' && rawResource === 'overflow-inputs'
+      ? 'overflows'
+      : moduleName === 'production' && rawResource === 'material-returns'
+        ? 'outputs'
+        : rawResource;
+  if (!PAGE_RESOURCES[moduleName]?.has(resource)) return null;
+  return { moduleName, resource, pageCode: `${moduleName}:${resource}` };
+}
+
+function customAction(segments: string[], method: string) {
+  const [moduleName, resource, third, fourth] = segments;
+  if (moduleName === 'production' && resource === 'material-returns') {
+    if (fourth === 'confirm') return 'confirm-material-return';
+    if (fourth === 'void') return 'void-material-return';
+    if (fourth === 'reverse') return 'reverse-material-return';
+    if (method !== 'GET') return 'create-material-return';
+  }
+  if (moduleName === 'purchase' && resource === 'refunds') {
+    if (method === 'DELETE' && third === 'flows') return 'void-record';
+    if (method === 'POST' && fourth === 'flows') return 'record';
+  }
+  if (moduleName === 'sales' && resource === 'services' && fourth === 'progress') {
+    if (method === 'POST') return 'progress-create';
+    if (method === 'PATCH' || method === 'PUT') return 'progress-update';
+    if (method === 'DELETE') return 'progress-delete';
+  }
+  if (moduleName === 'inventory' && resource === 'quantity-alerts' && method === 'POST')
+    return 'update';
+  const last = segments.at(-1) ?? '';
+  if (!/^\d+$/.test(last) && segments.length >= 4) {
+    if (last === 'submit-oa') return 'submit';
+    return last;
+  }
+  return '';
+}
+
+/**
+ * 将业务请求映射为“菜单查看 + 页面操作”权限。
+ * 只处理已纳入角色权限表的业务页面；选项、健康检查等辅助接口继续使用显式装饰器权限。
+ */
+export function inferRequestPermissions(request: PermissionRequest): string[] {
+  const segments = normalizedSegments(request);
+  const context = pageContext(segments);
+  if (!context) return [];
+  const method = String(request.method ?? 'GET').toUpperCase();
+  const required = new Set<string>([context.pageCode]);
+  if (method === 'GET') {
+    if (segments.includes('export')) required.add(`${context.pageCode}:export`);
+    return [...required];
+  }
+
+  const action = customAction(segments, method);
+  if (action) required.add(`${context.pageCode}:${action}`);
+  else if (method === 'POST') required.add(`${context.pageCode}:create`);
+  else if (method === 'PATCH' || method === 'PUT') required.add(`${context.pageCode}:update`);
+  else if (method === 'DELETE') required.add(`${context.pageCode}:delete`);
+
+  if (Boolean(request.body?.submit) && SUBMIT_PAGES.has(context.pageCode))
+    required.add(`${context.pageCode}:submit`);
+  return [...required];
+}

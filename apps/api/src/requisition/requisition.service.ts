@@ -1,4 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BusinessReferenceService } from '../database/business-reference.service';
 import { PrismaService } from '../database/prisma.service';
@@ -580,7 +586,13 @@ export class RequisitionService {
     return enriched!;
   }
 
-  async saveApplication(id: string | null, body: Body, userId: string, submit: boolean) {
+  async saveApplication(
+    id: string | null,
+    body: Body,
+    userId: string,
+    submit: boolean,
+    applicantIdentity?: { orgId?: string | null; staffId?: string | null },
+  ) {
     const lines = this.detailLines(body.details).map((line) => ({
       goodsId: this.bigint(line.goodsId, '商品'),
       skuId: this.bigint(line.skuId, 'SKU'),
@@ -615,6 +627,8 @@ export class RequisitionService {
             : null;
         if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
         if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+        if (current && current.created_by !== BigInt(userId))
+          throw new ForbiddenException('个人无权修改他人发起的领用申请');
         if (requestedId !== null) {
           const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
             where: {
@@ -650,7 +664,12 @@ export class RequisitionService {
           }
         }
 
-        const applicantId = this.bigint(body.applicantId ?? current?.applicant_id, '领用人');
+        if (applicantIdentity && !applicantIdentity.staffId)
+          throw new BadRequestException('当前账号未关联OA员工，不能发起领用申请');
+        const applicantId = this.bigint(
+          applicantIdentity?.staffId ?? body.applicantId ?? current?.applicant_id,
+          '领用人',
+        );
         const currentAttachments = this.attachmentItems(current?.attachments);
         const signatureWasExplicitlyCleared =
           body.signatureContent !== undefined &&
@@ -694,7 +713,12 @@ export class RequisitionService {
         if (signedAt && Number.isNaN(signedAt.getTime()))
           throw new BadRequestException('签署时间无效');
 
-        const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
+        const orgId = this.bigint(
+          applicantIdentity?.orgId ?? body.orgId ?? current?.org_id,
+          '所属组织',
+        );
+        if (current && current.org_id !== orgId)
+          throw new ForbiddenException('领用申请的所属组织必须与发起人的OA所属组织一致');
         const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
         const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
         const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
@@ -887,7 +911,6 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
-
       const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
         where: {
           business_type: 'requisition_application',
@@ -1206,6 +1229,8 @@ export class RequisitionService {
       }
       if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可删除');
       if (application.approve_status === 1) throw new BadRequestException('已审批申请不可删除');
+      if (application.created_by !== BigInt(userId))
+        throw new ForbiddenException('个人无权删除他人发起的领用申请');
       await tx.hspsi_draw_approve.update({
         where: { draw_id: drawId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },

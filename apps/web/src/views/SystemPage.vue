@@ -12,6 +12,13 @@ import ScheduledTaskPanel from '@/views/ScheduledTaskPanel.vue';
 
 type Resource = 'roles' | 'users' | 'config' | 'tasks';
 type Mode = 'create' | 'edit' | 'view';
+type RolePermissionRow = {
+  id: string;
+  moduleName: string;
+  menuName: string;
+  menuCode: string;
+  actions: any[];
+};
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -27,6 +34,7 @@ const title = computed(() =>
 );
 const can = (permission: string) =>
   !!auth.user?.permissions?.some((item) => item === '*' || item === permission);
+const resourceAction = (action: string) => can(`system:${resource.value}:${action}`);
 const isSuperAdmin = computed(() => auth.user?.permissions?.includes('*') === true);
 
 const rows = ref<any[]>([]);
@@ -61,7 +69,21 @@ const roleSaving = ref(false);
 const amountCurrent = ref<any>(null);
 const roleCurrent = ref<any>(null);
 const amountForm = reactive({ level: 'none', grantReason: '' });
-const roleForm = reactive<{ roleId: string }>({ roleId: '' });
+const roleForm = reactive<{ roleId: string; additionalOrgIds: string[] }>({
+  roleId: '',
+  additionalOrgIds: [],
+});
+const roleOrganizationTree = computed(() =>
+  buildOrganizationTree(
+    orgOptions.value.map((item) => ({
+      ...item,
+      value: item.id,
+      label: item.name,
+      disabled:
+        String(item.id) === String(roleCurrent.value?.fixedOrgId ?? roleCurrent.value?.orgId),
+    })) as OrganizationTreeNode[],
+  ),
+);
 
 const filteredRows = computed(() =>
   rows.value.filter((row) => {
@@ -124,20 +146,91 @@ const actionMenus = computed(() =>
 const directoryMenus = computed(() =>
   menus.value.filter((menu) => menu.typeValue === 1 && menu.statusValue === 1),
 );
+const rolePermissionRows = computed<RolePermissionRow[]>(() =>
+  pageMenus.value.map((menu) => ({
+    id: String(menu.id),
+    moduleName: menu.parentName || '未分组',
+    menuName: menu.name,
+    menuCode: menu.permission,
+    actions: actionMenus.value.filter((action) => String(action.parentId) === String(menu.id)),
+  })),
+);
+const visibleActionCodes = computed(
+  () =>
+    new Set(
+      rolePermissionRows.value.flatMap((row) => row.actions.map((action) => action.permission)),
+    ),
+);
 const filteredDepartments = computed(() =>
   deptOptions.value.filter((item) => !form.orgId || String(item.orgId) === String(form.orgId)),
 );
 const selectedStaff = computed(() =>
   staffOptions.value.find((item) => String(item.id) === String(form.staffId)),
 );
-const allMenusSelected = computed({
+const allRolePermissionsSelected = computed({
   get: () =>
-    pageMenus.value.length > 0 &&
-    pageMenus.value.every((menu) => form.menuIds?.includes(String(menu.id))),
+    rolePermissionRows.value.length > 0 &&
+    rolePermissionRows.value.every(
+      (row) =>
+        form.menuIds?.includes(row.id) &&
+        row.actions.every((action) => form.actionPermissionCodes?.includes(action.permission)),
+    ),
   set: (selected: boolean) => {
-    form.menuIds = selected ? pageMenus.value.map((menu) => String(menu.id)) : [];
+    const hiddenActionCodes = (form.actionPermissionCodes ?? []).filter(
+      (code: string) => !visibleActionCodes.value.has(code),
+    );
+    form.menuIds = selected ? rolePermissionRows.value.map((row) => row.id) : [];
+    form.actionPermissionCodes = selected
+      ? [
+          ...hiddenActionCodes,
+          ...rolePermissionRows.value.flatMap((row) =>
+            row.actions.map((action) => action.permission),
+          ),
+        ]
+      : hiddenActionCodes;
   },
 });
+
+function actionByKey(row: RolePermissionRow, key: 'create' | 'update' | 'delete') {
+  return row.actions.find((action) => action.permission.endsWith(`:${key}`));
+}
+
+function otherActions(row: RolePermissionRow) {
+  return row.actions.filter(
+    (action) =>
+      !['create', 'update', 'delete'].some((key) => action.permission.endsWith(`:${key}`)),
+  );
+}
+
+function menuViewSelected(row: RolePermissionRow) {
+  return form.menuIds?.includes(row.id) === true;
+}
+
+function setMenuView(row: RolePermissionRow, selected: boolean) {
+  const menuIds = new Set<string>((form.menuIds ?? []).map(String));
+  if (selected) menuIds.add(row.id);
+  else {
+    menuIds.delete(row.id);
+    const rowActionCodes = new Set(row.actions.map((action) => action.permission));
+    form.actionPermissionCodes = (form.actionPermissionCodes ?? []).filter(
+      (code: string) => !rowActionCodes.has(code),
+    );
+  }
+  form.menuIds = [...menuIds];
+}
+
+function actionSelected(action: any) {
+  return form.actionPermissionCodes?.includes(action.permission) === true;
+}
+
+function setAction(row: RolePermissionRow, action: any, selected: boolean) {
+  const codes = new Set<string>(form.actionPermissionCodes ?? []);
+  if (selected) {
+    codes.add(action.permission);
+    setMenuView(row, true);
+  } else codes.delete(action.permission);
+  form.actionPermissionCodes = [...codes];
+}
 
 function dictionary(code: string) {
   return dicts[code] ?? [];
@@ -207,7 +300,7 @@ function resetForm() {
       name: '',
       status: 1,
       menuIds: [],
-      actionPermissionCodes: ['system:view'],
+      actionPermissionCodes: [],
     });
   else if (resource.value === 'users')
     Object.assign(form, {
@@ -341,6 +434,13 @@ async function saveAmountAccess() {
 function openRoleAccess(row: any) {
   roleCurrent.value = row;
   roleForm.roleId = String(row.roleId ?? '');
+  const fixedOrgId = String(row.fixedOrgId ?? row.orgId ?? '');
+  const authorizedOrgIds: string[] = Array.isArray(row.authorizedOrgIds)
+    ? row.authorizedOrgIds.map((orgId: unknown) => String(orgId))
+    : [];
+  roleForm.additionalOrgIds = [
+    ...new Set(authorizedOrgIds.filter((orgId) => orgId !== fixedOrgId)),
+  ];
   roleDialog.value = true;
 }
 
@@ -349,12 +449,21 @@ async function saveRoleAccess() {
     ElMessage.warning('请选择一个角色');
     return;
   }
+  const fixedOrgId = String(roleCurrent.value?.fixedOrgId ?? roleCurrent.value?.orgId ?? '');
+  if (!fixedOrgId) {
+    ElMessage.warning('该用户尚未配置固定所属组织');
+    return;
+  }
+  const authorizedOrgIds = [
+    ...new Set([fixedOrgId, ...roleForm.additionalOrgIds.map(String)].filter(Boolean)),
+  ];
   roleSaving.value = true;
   try {
     await api.put(`/system/users/${roleCurrent.value.id}/roles`, {
       roleId: roleForm.roleId,
+      authorizedOrgIds,
     });
-    ElMessage.success('角色授权已保存');
+    ElMessage.success('角色和数据访问组织已保存');
     roleDialog.value = false;
     await load();
   } finally {
@@ -396,6 +505,11 @@ watch(
       !filteredDepartments.value.some((item) => String(item.id) === String(form.deptId))
     )
       form.deptId = '';
+    if (resource.value === 'users' && mode.value === 'create' && form.orgId) {
+      const authorizedOrgIds = new Set<string>((form.authorizedOrgIds ?? []).map(String));
+      authorizedOrgIds.add(String(form.orgId));
+      form.authorizedOrgIds = [...authorizedOrgIds];
+    }
   },
 );
 onMounted(async () => {
@@ -452,7 +566,7 @@ onMounted(async () => {
               @click="load"
             />
             <el-button
-              v-if="can('system:create')"
+              v-if="resourceAction('create')"
               type="primary"
               :icon="Plus"
               @click="open('create')"
@@ -477,15 +591,19 @@ onMounted(async () => {
                 ><strong class="business-no">{{ row.name }}</strong></template
               ></el-table-column
             >
-            <el-table-column label="菜单权限" min-width="180" show-overflow-tooltip
-              ><template #default="{ row }">{{
-                row.menuPermissions?.length ? row.menuPermissions.join('、') : '未配置'
-              }}</template></el-table-column
+            <el-table-column label="页面查看" width="110" align="center"
+              ><template #default="{ row }"
+                ><span>{{
+                  row.code === 'admin' ? '全部页面' : `${row.menuPermissionCount} 个页面`
+                }}</span></template
+              ></el-table-column
             >
-            <el-table-column label="操作权限" min-width="150" show-overflow-tooltip
-              ><template #default="{ row }">{{
-                row.actionPermissions?.length ? row.actionPermissions.join('、') : '未配置'
-              }}</template></el-table-column
+            <el-table-column label="业务操作" width="110" align="center"
+              ><template #default="{ row }"
+                ><span>{{
+                  row.code === 'admin' ? '全部操作' : `${row.actionPermissionCount} 项操作`
+                }}</span></template
+              ></el-table-column
             >
             <el-table-column label="关联用户" width="90"
               ><template #default="{ row }">{{ row.userCount }} 人</template></el-table-column
@@ -512,7 +630,7 @@ onMounted(async () => {
                 ><TableRowActions
                   ><el-button link type="primary" @click="open('view', row)">查看</el-button
                   ><el-button
-                    v-if="can('system:update')"
+                    v-if="resourceAction('update')"
                     link
                     type="primary"
                     @click="open('edit', row)"
@@ -539,9 +657,9 @@ onMounted(async () => {
                 ></template
               ></el-table-column
             >
-            <el-table-column prop="orgName" label="所属公司" min-width="160"
+            <el-table-column prop="fixedOrgName" label="固定所属组织" min-width="160"
               ><template #default="{ row }"
-                ><span v-if="row.orgName">{{ row.orgName }}</span
+                ><span v-if="row.fixedOrgName">{{ row.fixedOrgName }}</span
                 ><el-tag v-else type="warning">未配置</el-tag></template
               ></el-table-column
             >
@@ -554,9 +672,7 @@ onMounted(async () => {
               }}</template></el-table-column
             >
             <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
-              ><template #default="{ row }">{{
-                row.roleName || '—'
-              }}</template></el-table-column
+              ><template #default="{ row }">{{ row.roleName || '—' }}</template></el-table-column
             >
             <el-table-column label="金额权限" width="104" align="center"
               ><template #default="{ row }"
@@ -565,7 +681,7 @@ onMounted(async () => {
                 }}</el-tag></template
               ></el-table-column
             >
-            <el-table-column label="授权组织" min-width="160" show-overflow-tooltip
+            <el-table-column label="数据访问组织" min-width="180" show-overflow-tooltip
               ><template #default="{ row }">{{
                 row.authorizedOrgNames?.join('、') || '未授权'
               }}</template></el-table-column
@@ -582,22 +698,24 @@ onMounted(async () => {
             >
             <el-table-column label="操作" width="214" fixed="right" align="center"
               ><template #default="{ row }"
-                ><TableRowActions :show-more="can('system:update')"
+                ><TableRowActions :show-more="can('system:users:configure-amount')"
                   ><el-button link type="primary" @click="open('view', row)">查看</el-button
                   ><el-button
-                    v-if="isSuperAdmin"
+                    v-if="isSuperAdmin && can('system:users:authorize-role')"
                     link
                     type="primary"
                     @click="openRoleAccess(row)"
                     >角色授权</el-button
                   ><el-button
-                    v-if="can('system:update') && !row.staffId"
+                    v-if="can('system:users:update') && !row.staffId"
                     link
                     type="primary"
                     @click="open('edit', row)"
                     >编辑</el-button
                   ><template #more
-                    ><el-dropdown-item @click="openAmountAccess(row)"
+                    ><el-dropdown-item
+                      v-if="can('system:users:configure-amount')"
+                      @click="openAmountAccess(row)"
                       >金额权限</el-dropdown-item
                     ></template
                   ></TableRowActions
@@ -644,16 +762,19 @@ onMounted(async () => {
             >
             <el-table-column label="操作" width="176" fixed="right" align="center"
               ><template #default="{ row }"
-                ><TableRowActions :show-more="can('system:delete')"
+                ><TableRowActions :show-more="can('system:config:delete')"
                   ><el-button link type="primary" @click="open('view', row)">查看</el-button
                   ><el-button
-                    v-if="can('system:update')"
+                    v-if="can('system:config:update')"
                     link
                     type="primary"
                     @click="open('edit', row)"
                     >编辑</el-button
                   ><template #more
-                    ><el-dropdown-item class="table-action-danger" @click="removeMenu(row)"
+                    ><el-dropdown-item
+                      v-if="can('system:config:delete')"
+                      class="table-action-danger"
+                      @click="removeMenu(row)"
                       >删除菜单</el-dropdown-item
                     ></template
                   ></TableRowActions
@@ -683,7 +804,7 @@ onMounted(async () => {
 
       <el-dialog
         v-model="dialog"
-        :width="resource === 'roles' ? 860 : resource === 'users' ? 760 : 680"
+        :width="resource === 'roles' ? 1120 : resource === 'users' ? 760 : 680"
         :close-on-click-modal="mode === 'view'"
       >
         <template #header
@@ -750,8 +871,7 @@ onMounted(async () => {
               ><span>{{ current.positionName || '—' }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">所属角色</span
-              ><span>{{ current.roleName || '—' }}</span>
+              <span class="detail-label">所属角色</span><span>{{ current.roleName || '—' }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">联系电话</span><span>{{ current.phone || '—' }}</span>
@@ -810,32 +930,86 @@ onMounted(async () => {
                     :value="Number(item.value)" /></el-select
               ></el-form-item>
             </div>
-            <div class="permission-section">
-              <div class="permission-title">菜单权限 *</div>
-              <el-checkbox v-model="allMenusSelected" border>全部菜单</el-checkbox
-              ><el-checkbox-group v-model="form.menuIds" class="permission-grid menu-grid"
-                ><el-checkbox
-                  v-for="item in pageMenus"
-                  :key="item.id"
-                  :value="String(item.id)"
-                  border
-                  >{{ item.parentName }} · {{ item.name }}</el-checkbox
-                ></el-checkbox-group
+            <div class="permission-section role-permission-section">
+              <div class="permission-heading">
+                <div>
+                  <div class="permission-title">菜单与操作权限 *</div>
+                  <small>每个页面分别配置查看、新增、编辑、删除和实际业务操作。</small>
+                </div>
+                <el-checkbox v-model="allRolePermissionsSelected" border>全部权限</el-checkbox>
+              </div>
+              <el-table
+                :data="rolePermissionRows"
+                border
+                stripe
+                max-height="500"
+                row-key="id"
+                class="role-permission-table"
               >
-            </div>
-            <div class="permission-section">
-              <div class="permission-title">操作权限 *</div>
-              <el-checkbox-group
-                v-model="form.actionPermissionCodes"
-                class="permission-grid action-grid"
-                ><el-checkbox
-                  v-for="item in actionMenus"
-                  :key="item.id"
-                  :value="item.permission"
-                  border
-                  >{{ item.name }}</el-checkbox
-                ></el-checkbox-group
-              >
+                <el-table-column prop="moduleName" label="业务模块" width="130" />
+                <el-table-column prop="menuName" label="页面菜单" min-width="150">
+                  <template #default="{ row }">
+                    <div class="permission-menu-name">
+                      <strong>{{ row.menuName }}</strong>
+                      <small>{{ row.menuCode }}</small>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="查看" width="72" align="center">
+                  <template #default="{ row }">
+                    <el-checkbox
+                      :model-value="menuViewSelected(row)"
+                      aria-label="查看"
+                      @change="setMenuView(row, Boolean($event))"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column
+                  v-for="column in [
+                    { key: 'create', label: '新增' },
+                    { key: 'update', label: '编辑' },
+                    { key: 'delete', label: '删除' },
+                  ]"
+                  :key="column.key"
+                  :label="column.label"
+                  width="72"
+                  align="center"
+                >
+                  <template #default="{ row }">
+                    <el-checkbox
+                      v-if="actionByKey(row, column.key as 'create' | 'update' | 'delete')"
+                      :model-value="
+                        actionSelected(
+                          actionByKey(row, column.key as 'create' | 'update' | 'delete'),
+                        )
+                      "
+                      :aria-label="column.label"
+                      @change="
+                        setAction(
+                          row,
+                          actionByKey(row, column.key as 'create' | 'update' | 'delete'),
+                          Boolean($event),
+                        )
+                      "
+                    />
+                    <span v-else class="permission-empty">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="其他业务操作" min-width="320">
+                  <template #default="{ row }">
+                    <div v-if="otherActions(row).length" class="business-action-list">
+                      <el-checkbox
+                        v-for="action in otherActions(row)"
+                        :key="action.id"
+                        :model-value="actionSelected(action)"
+                        @change="setAction(row, action, Boolean($event))"
+                        >{{ action.name.replace(`${row.menuName}-`, '') }}</el-checkbox
+                      >
+                    </div>
+                    <span v-else class="permission-empty">无其他操作</span>
+                  </template>
+                </el-table-column>
+              </el-table>
             </div>
           </template>
 
@@ -863,7 +1037,7 @@ onMounted(async () => {
               <el-form-item label="联系电话"
                 ><el-input v-model="form.phone" maxlength="20"
               /></el-form-item>
-              <el-form-item label="所属公司 *"
+              <el-form-item label="固定所属组织 *"
                 ><el-tree-select
                   v-model="form.orgId"
                   :data="organizationTree"
@@ -889,8 +1063,8 @@ onMounted(async () => {
                     :label="item.name"
                     :value="item.id" /></el-select
               ></el-form-item>
-              <el-form-item label="授权方式"
-                ><el-input model-value="角色权限 + 授权组织（独立叠加金额白名单）" disabled
+              <el-form-item label="权限组成"
+                ><el-input model-value="单一角色 + 数据访问组织 + 独立金额白名单" disabled
               /></el-form-item>
               <el-form-item label="账号状态 *"
                 ><el-select
@@ -904,9 +1078,9 @@ onMounted(async () => {
                     :value="Number(item.value)" /></el-select
               ></el-form-item>
             </div>
-            <div class="permission-section">
+            <div v-if="mode === 'create'" class="permission-section">
               <div class="permission-title">
-                所属角色 *<small v-if="mode === 'edit'">（请通过“角色授权”变更）</small>
+                所属角色 *<small>（一个用户只能选择一个角色）</small>
               </div>
               <el-radio-group v-model="form.roleId" class="role-grid"
                 ><el-radio
@@ -915,8 +1089,6 @@ onMounted(async () => {
                   :value="String(item.id)"
                   border
                   :disabled="
-                    mode === 'view' ||
-                    mode === 'edit' ||
                     (!isSuperAdmin && item.code === 'admin') ||
                     (form.account === 'admin' && item.code === 'admin')
                   "
@@ -924,8 +1096,8 @@ onMounted(async () => {
                 ></el-radio-group
               >
             </div>
-            <div class="permission-section">
-              <div class="permission-title">授权组织 *</div>
+            <div v-if="mode === 'create'" class="permission-section">
+              <div class="permission-title">数据访问组织 *</div>
               <el-tree-select
                 v-model="form.authorizedOrgIds"
                 :data="organizationTree"
@@ -935,9 +1107,28 @@ onMounted(async () => {
                 show-checkbox
                 node-key="value"
                 :props="{ label: 'label', children: 'children' }"
-                :disabled="mode === 'view'"
                 style="width: 100%"
               />
+              <small class="permission-help"
+                >固定所属组织会自动加入且不可缺少；其他组织属于本地人工授权。</small
+              >
+            </div>
+            <div v-else class="permission-section authorization-preview">
+              <div class="permission-title">当前业务授权</div>
+              <div class="dialog-grid">
+                <el-form-item label="单一角色">
+                  <el-input :model-value="current?.roleName || '未配置'" disabled />
+                </el-form-item>
+                <el-form-item label="数据访问组织">
+                  <el-input
+                    :model-value="current?.authorizedOrgNames?.join('、') || '未配置'"
+                    disabled
+                  />
+                </el-form-item>
+              </div>
+              <small class="permission-help"
+                >角色和数据访问组织统一通过列表中的“角色授权”维护。</small
+              >
             </div>
           </template>
 
@@ -992,13 +1183,8 @@ onMounted(async () => {
         >
       </el-dialog>
 
-      <el-dialog
-        v-model="roleDialog"
-        width="620"
-        title="角色授权"
-        :close-on-click-modal="false"
-      >
-        <div class="amount-access-user">
+      <el-dialog v-model="roleDialog" width="760" title="角色授权" :close-on-click-modal="false">
+        <div class="amount-access-user role-access-user">
           <div>
             <span>用户姓名</span><strong>{{ roleCurrent?.name || '—' }}</strong>
           </div>
@@ -1008,15 +1194,19 @@ onMounted(async () => {
           <div>
             <span>账号来源</span><strong>{{ roleCurrent?.identitySource || '—' }}</strong>
           </div>
+          <div>
+            <span>固定所属组织</span
+            ><strong>{{ roleCurrent?.fixedOrgName || roleCurrent?.orgName || '—' }}</strong>
+          </div>
         </div>
         <el-alert
-          title="这里只变更进销存角色，不修改 OA 组织、部门、岗位和人员身份，也不影响金额白名单。"
+          title="固定所属组织来自 OA 且不可变更；这里只配置单一角色和额外数据访问组织，不影响金额白名单。"
           type="info"
           :closable="false"
           show-icon
         />
         <div class="permission-section">
-          <div class="permission-title">所属角色 *</div>
+          <div class="permission-title">所属角色 * <small>（单选）</small></div>
           <el-radio-group v-model="roleForm.roleId" class="role-grid">
             <el-radio
               v-for="item in roleOptions"
@@ -1029,10 +1219,39 @@ onMounted(async () => {
             </el-radio>
           </el-radio-group>
         </div>
+        <div class="permission-section">
+          <div class="permission-title">数据访问组织 *</div>
+          <div class="fixed-org-row">
+            <span>固定所属组织</span>
+            <strong>{{ roleCurrent?.fixedOrgName || roleCurrent?.orgName || '未配置' }}</strong>
+            <el-tag type="success" effect="plain">必选 · 不可取消</el-tag>
+          </div>
+          <el-form label-position="top" class="authorized-org-form">
+            <el-form-item label="额外授权组织（可多选）">
+              <el-tree-select
+                v-model="roleForm.additionalOrgIds"
+                :data="roleOrganizationTree"
+                multiple
+                filterable
+                check-strictly
+                show-checkbox
+                collapse-tags
+                :max-collapse-tags="3"
+                node-key="value"
+                :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
+                placeholder="如无需跨组织访问，只保留固定所属组织即可"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-form>
+          <small class="permission-help">
+            最终数据范围是“固定所属组织 + 这里人工增加的组织”；页面顶部仍只显示固定所属组织。
+          </small>
+        </div>
         <template #footer>
           <el-button @click="roleDialog = false">取消</el-button>
           <el-button type="primary" :loading="roleSaving" @click="saveRoleAccess"
-            >保存角色</el-button
+            >保存授权</el-button
           >
         </template>
       </el-dialog>
@@ -1159,6 +1378,48 @@ onMounted(async () => {
   font-size: 12px;
   font-weight: 650;
 }
+.permission-title small,
+.permission-help,
+.permission-heading small {
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.permission-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.permission-heading .permission-title {
+  margin-bottom: 3px;
+}
+.role-permission-table {
+  width: 100%;
+}
+.permission-menu-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.permission-menu-name small {
+  color: var(--el-text-color-secondary);
+  font-size: 10px;
+}
+.permission-empty {
+  color: var(--el-text-color-placeholder);
+  font-size: 11px;
+}
+.business-action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.business-action-list :deep(.el-checkbox) {
+  height: 24px;
+  margin-right: 0;
+}
 .permission-grid {
   display: grid;
   gap: 8px;
@@ -1199,6 +1460,29 @@ onMounted(async () => {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+}
+.role-access-user {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.fixed-org-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+.fixed-org-row span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.authorized-org-form {
+  margin-top: 14px;
+}
+.authorization-preview :deep(.el-form-item) {
+  margin-bottom: 4px;
 }
 .amount-access-user > div {
   padding: 12px;
@@ -1248,6 +1532,13 @@ onMounted(async () => {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .amount-access-user {
+    grid-template-columns: 1fr;
+  }
+  .permission-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .fixed-org-row {
     grid-template-columns: 1fr;
   }
 }

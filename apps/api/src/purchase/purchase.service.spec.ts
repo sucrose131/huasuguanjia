@@ -261,6 +261,37 @@ describe('PurchaseService receipt confirmation', () => {
 });
 
 describe('PurchaseService production-shortage guards', () => {
+  it('采购申请忽略客户端伪造组织并固定使用发起人OA所属组织', async () => {
+    const create = vi.fn().mockResolvedValue({ pur_id: 7n });
+    const tx = {
+      hspsi_purchase_approve: { create },
+      hspsi_purchase_approve_detail: { deleteMany: vi.fn(), createMany: vi.fn() },
+    };
+    const service = serviceWith({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    vi.spyOn(service as any, 'materializeQuickCatalog').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+
+    await service.saveApplication(
+      null,
+      {
+        orgId: 999,
+        deptId: 2,
+        warehouseId: 3,
+        details: [{ goodsId: 10, skuId: 11, quantity: 1, unitType: 1 }],
+      },
+      '9',
+      false,
+      '1',
+    );
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ org_id: 1n, created_by: 9n }),
+    });
+  });
+
   it('creates one pending purchase-refund task for an effective paid return', async () => {
     const refundCreate = vi.fn().mockResolvedValue({
       refund_id: 77n,

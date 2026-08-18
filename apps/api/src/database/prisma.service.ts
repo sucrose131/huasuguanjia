@@ -5,6 +5,7 @@ import { activeDataScope } from './data-scope.context';
 type ScopedModel = {
   table: string;
   orgField: string;
+  orgScalar: 'BigInt' | 'Int';
   primaryField?: string;
   uniqueColumns: Map<string, string>;
   hasCreatedBy: boolean;
@@ -27,9 +28,12 @@ function scopedModels() {
         ? 'organization_id'
         : '';
     if (!orgField) continue;
+    const orgScalar = model.fields.find((field) => field.name === orgField)?.type;
+    if (orgScalar !== 'BigInt' && orgScalar !== 'Int') continue;
     result.set(model.name, {
       table: model.dbName ?? model.name,
       orgField,
+      orgScalar,
       primaryField: model.fields.find((field) => field.isId)?.name,
       uniqueColumns: new Map(
         model.fields
@@ -46,6 +50,16 @@ function scopedModels() {
 
 const SCOPED_MODELS = scopedModels();
 
+function organizationValue(meta: ScopedModel, value: string | number | bigint) {
+  return meta.orgScalar === 'BigInt' ? BigInt(value) : Number(value);
+}
+
+export function scopedOrganizationValue(modelName: string, value: string | number | bigint) {
+  const meta = SCOPED_MODELS.get(modelName);
+  if (!meta) throw new Error(`模型 ${modelName} 没有组织字段`);
+  return organizationValue(meta, value);
+}
+
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
@@ -54,11 +68,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       const scope = activeDataScope();
       const meta = params.model ? SCOPED_MODELS.get(params.model) : undefined;
       if (!scope || scope.isSuperAdmin || !meta) return next(params);
-      if (!scope.currentOrgId) throw new ForbiddenException('当前会话没有选择组织');
+      if (!scope.authorizedOrgIds.length) throw new ForbiddenException('当前账号没有已授权组织');
 
-      const allowedIds = [BigInt(scope.currentOrgId)];
+      const allowedIds = scope.authorizedOrgIds.map((orgId) => organizationValue(meta, orgId));
       const modelAllowedIds = meta.includesSharedOrganization
-        ? [...new Set([0n, ...allowedIds])]
+        ? [...new Set([organizationValue(meta, 0), ...allowedIds])]
         : allowedIds;
       const orgCondition: Record<string, unknown> = { [meta.orgField]: { in: modelAllowedIds } };
 
@@ -97,7 +111,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           if (
             rawValue === undefined ||
             rawValue === null ||
-            !modelAllowedIds.includes(BigInt(rawValue as any))
+            !modelAllowedIds.includes(organizationValue(meta, rawValue as any))
           )
             throw new ForbiddenException(`不能${operation}其他组织的数据`);
           return;
@@ -112,7 +126,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           where[lookupField],
         );
         const record = rows[0];
-        if (record && !modelAllowedIds.includes(BigInt(record.org_id as any)))
+        if (record && !modelAllowedIds.includes(organizationValue(meta, record.org_id as any)))
           throw new ForbiddenException(`不能${operation}其他组织的数据`);
       };
 
@@ -135,7 +149,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         if (
           value !== undefined &&
           value !== null &&
-          !modelAllowedIds.includes(BigInt(value as any))
+          !modelAllowedIds.includes(organizationValue(meta, value as any))
         )
           throw new ForbiddenException('不能向其他组织写入数据');
       };

@@ -19,6 +19,7 @@ import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { purchaseDocumentType } from '@/utils/document-type';
 import { buildCategoryTree } from '@/utils/category-tree';
+import { canPageAction } from '@/utils/permission';
 
 type Mode = 'create' | 'edit' | 'view' | 'cancel' | 'refund' | 'payment';
 type Option = { label: string; value: string | number };
@@ -35,6 +36,7 @@ const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const protectedMoneyText = (value: unknown) =>
   canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
 const resource = computed(() => String(route.params.resource));
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const configs: Record<string, DocConfig> = {
   applications: {
     title: '采购申请单',
@@ -622,8 +624,8 @@ function resetForm() {
   organizationOptions.warehouses = [];
   if (resource.value === 'applications')
     Object.assign(form, {
-      orgId: '',
-      deptId: '',
+      orgId: auth.user?.orgId ?? '',
+      deptId: auth.user?.deptId ?? '',
       warehouseId: '',
       reason: '',
       remark: '',
@@ -997,6 +999,7 @@ async function openCreate() {
   mode.value = 'create';
   detail.value = null;
   resetForm();
+  if (resource.value === 'applications') await loadOrganizationOptions(form.orgId);
   dialog.value = true;
   await nextTick();
   formRef.value?.clearValidate();
@@ -1554,7 +1557,10 @@ async function closeRefund(row: any) {
 }
 function editable(row: any) {
   if (resource.value === 'applications')
-    return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
+    return (
+      String(row.createdBy) === String(auth.user?.id) &&
+      ((!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2)
+    );
   if (resource.value === 'returns')
     return (!Number(row.status) && [0, 2].includes(approval(row))) || approval(row) === 2;
   if (resource.value === 'refunds' || resource.value === 'payments') return false;
@@ -1669,7 +1675,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle }}</p>
       </div>
       <el-button
-        v-if="!['returns', 'refunds', 'payments'].includes(resource)"
+        v-if="!['returns', 'refunds', 'payments'].includes(resource) && canAction('create')"
         type="primary"
         :disabled="resource === 'orders' && !canEditAmount"
         :title="
@@ -1846,7 +1852,9 @@ onMounted(async () => {
               :empty="!rows.length"
               :loading="loading"
               :title="config.title"
-              :can-create="!['returns', 'refunds', 'payments'].includes(resource)"
+              :can-create="
+                !['returns', 'refunds', 'payments'].includes(resource) && canAction('create')
+              "
               :empty-description="
                 resource === 'refunds'
                   ? '暂无需要处理的采购退款任务'
@@ -2138,28 +2146,37 @@ onMounted(async () => {
               <TableRowActions>
                 <el-button link type="primary" @click="open('view', s.row)">查看</el-button>
                 <el-button
-                  v-if="editable(s.row)"
+                  v-if="editable(s.row) && canAction('update')"
                   link
                   type="primary"
                   @click="open('edit', s.row)"
                   >{{ editLabel }}</el-button
                 >
                 <el-button
-                  v-if="isOrd && Number(s.row.vendorId) > 0 && Number(s.row.remainingPayable) > 0"
+                  v-if="
+                    isOrd &&
+                    canPageAction(auth.user, '/purchase/payments', 'create') &&
+                    Number(s.row.vendorId) > 0 &&
+                    Number(s.row.remainingPayable) > 0
+                  "
                   link
                   type="primary"
                   @click="openOrderPayment(s.row)"
                   >付款</el-button
                 >
                 <el-button
-                  v-if="isRefund && [0, 1].includes(Number(s.row.refundStatus))"
+                  v-if="
+                    isRefund &&
+                    canAction('record') &&
+                    [0, 1].includes(Number(s.row.refundStatus))
+                  "
                   link
                   type="primary"
                   @click="openRefund(s.row)"
                   >确认退款</el-button
                 >
                 <template #more>
-                  <template v-if="isApp && approval(s.row) === 1">
+                  <template v-if="isApp && canAction('generate-order') && approval(s.row) === 1">
                     <el-dropdown-item @click="openOrderGeneration(s.row, 'all')"
                       >整单生成</el-dropdown-item
                     >
@@ -2175,7 +2192,9 @@ onMounted(async () => {
                     @click="openOperationHistory(s.row)"
                     >操作记录</el-dropdown-item
                   >
-                  <el-dropdown-item v-if="canSubmit(s.row)" @click="submit(s.row)"
+                  <el-dropdown-item
+                    v-if="canSubmit(s.row) && canAction('submit')"
+                    @click="submit(s.row)"
                     >提交</el-dropdown-item
                   >
                   <el-dropdown-item
@@ -2193,53 +2212,65 @@ onMounted(async () => {
                     >查看来源报损单</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="canApprove(s.row)"
+                    v-if="canApprove(s.row) && canAction('approve')"
                     class="table-action-success"
                     @click="approve(s.row, true)"
                     >通过</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="canApprove(s.row)"
+                    v-if="canApprove(s.row) && canAction('approve')"
                     class="table-action-danger"
                     @click="approve(s.row, false)"
                     >驳回</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isOrd && Number(s.row.orderStatus) === 1"
+                    v-if="isOrd && canAction('start') && Number(s.row.orderStatus) === 1"
                     class="table-action-success"
                     @click="startPurchase(s.row)"
                     >开始采购</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isOrd && [2, 3].includes(Number(s.row.orderStatus))"
+                    v-if="
+                      isOrd &&
+                      canAction('generate-receipt') &&
+                      [2, 3].includes(Number(s.row.orderStatus))
+                    "
                     @click="generateReceipt(s.row)"
                     >生成入库</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isOrd && [2, 3].includes(Number(s.row.orderStatus))"
+                    v-if="
+                      isOrd &&
+                      canAction('cancel-pending') &&
+                      [2, 3].includes(Number(s.row.orderStatus))
+                    "
                     class="table-action-warning"
                     @click="openCancel(s.row)"
                     >退回未到货</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isRct && Number(s.row.confirmStatus) === 0"
+                    v-if="isRct && canAction('cancel') && Number(s.row.confirmStatus) === 0"
                     class="table-action-warning"
                     @click="cancelPendingReceipt(s.row)"
                     >撤销待入库</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isRct && Number(s.row.confirmStatus) === 1"
+                    v-if="isRct && canAction('return') && Number(s.row.confirmStatus) === 1"
                     @click="startReturn(s.row)"
                     >退货</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="isRefund && [0, 1].includes(Number(s.row.refundStatus))"
+                    v-if="
+                      isRefund &&
+                      canAction('close') &&
+                      [0, 1].includes(Number(s.row.refundStatus))
+                    "
                     class="table-action-warning"
                     @click="closeRefund(s.row)"
                     >关闭退款任务</el-dropdown-item
                   >
                   <el-dropdown-item
-                    v-if="removable(s.row)"
+                    v-if="removable(s.row) && canAction('delete')"
                     class="table-action-danger"
                     divided
                     @click="remove(s.row)"
@@ -2435,6 +2466,7 @@ onMounted(async () => {
                   check-strictly
                   node-key="value"
                   :props="{ label: 'label', children: 'children' }"
+                  disabled
                   @change="organizationChanged" /></el-form-item
               ><el-form-item label="申请部门" prop="deptId"
                 ><el-select v-model="form.deptId" filterable :disabled="!form.orgId"
@@ -3317,42 +3349,61 @@ onMounted(async () => {
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><template v-if="mode !== 'view'"
           ><el-button
-            v-if="resource === 'refunds' && mode === 'refund'"
+            v-if="resource === 'refunds' && mode === 'refund' && canAction('record')"
             type="primary"
             :loading="saving"
             @click="confirmRefund"
             >确认本次退款</el-button
           ><el-button
-            v-if="resource === 'orders' && mode === 'cancel'"
+            v-if="resource === 'orders' && mode === 'cancel' && canAction('cancel-pending')"
             type="primary"
             :loading="saving"
             @click="confirmCancel"
             >确认退回</el-button
           ><el-button
-            v-if="resource === 'orders' && mode === 'payment'"
+            v-if="
+              resource === 'orders' &&
+              mode === 'payment' &&
+              canPageAction(auth.user, '/purchase/payments', 'create')
+            "
             type="primary"
             :loading="saving"
             @click="confirmOrderPayment"
             >确认本次付款</el-button
           ><el-button
-            v-if="['applications', 'returns'].includes(resource)"
+            v-if="
+              ['applications', 'returns'].includes(resource) &&
+              canAction(mode === 'create' ? 'create' : 'update')
+            "
             :loading="saving"
             @click="save(false)"
             >保存草稿</el-button
           ><el-button
-            v-if="resource === 'orders' && !['cancel', 'payment'].includes(mode)"
+            v-if="
+              resource === 'orders' &&
+              !['cancel', 'payment'].includes(mode) &&
+              canAction(mode === 'create' ? 'create' : 'update')
+            "
             type="primary"
             :loading="saving"
             @click="save(false)"
             >保存采购订单</el-button
           ><el-button
-            v-if="['applications', 'returns'].includes(resource)"
+            v-if="
+              ['applications', 'returns'].includes(resource) &&
+              canAction(mode === 'create' ? 'create' : 'update') &&
+              canAction('submit')
+            "
             type="primary"
             :loading="saving"
             @click="save(true)"
             >提交审批</el-button
           ><el-button
-            v-if="resource === 'receipts'"
+            v-if="
+              resource === 'receipts' &&
+              canAction(mode === 'create' ? 'create' : 'update') &&
+              canAction('confirm')
+            "
             type="primary"
             :loading="saving"
             @click="save(true)"
