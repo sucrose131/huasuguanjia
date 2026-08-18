@@ -27,6 +27,7 @@ const title = computed(() =>
 );
 const can = (permission: string) =>
   !!auth.user?.permissions?.some((item) => item === '*' || item === permission);
+const isSuperAdmin = computed(() => auth.user?.permissions?.includes('*') === true);
 
 const rows = ref<any[]>([]);
 const menus = ref<any[]>([]);
@@ -51,12 +52,16 @@ const keyword = ref('');
 const statusFilter = ref<string | number>('');
 const dialog = ref(false);
 const amountDialog = ref(false);
+const roleDialog = ref(false);
 const mode = ref<Mode>('create');
 const current = ref<any>(null);
 const form = reactive<any>({});
 const amountSaving = ref(false);
+const roleSaving = ref(false);
 const amountCurrent = ref<any>(null);
+const roleCurrent = ref<any>(null);
 const amountForm = reactive({ level: 'none', grantReason: '' });
+const roleForm = reactive<{ roleId: string }>({ roleId: '' });
 
 const filteredRows = computed(() =>
   rows.value.filter((row) => {
@@ -74,7 +79,7 @@ const filteredRows = computed(() =>
               row.department,
               row.phone,
               amountAccessLabel(row.amountAccess),
-              ...(row.roleNames ?? []),
+              row.roleName,
             ]
           : [row.name, row.path, row.permission, row.type];
     return values.join(' ').includes(word);
@@ -101,7 +106,7 @@ const summaryItems = computed(() => {
         label: '启用账号',
         value: rows.value.filter((row) => Number(row.statusValue) === 1).length,
       },
-      { label: '已分配角色', value: rows.value.filter((row) => row.roleIds?.length).length },
+      { label: '已分配角色', value: rows.value.filter((row) => row.roleId).length },
     ];
   return [
     { label: '菜单总数', value: rows.value.length },
@@ -214,7 +219,7 @@ function resetForm() {
       deptId: '',
       staffId: '',
       authorizedOrgIds: [],
-      roleIds: [],
+      roleId: '',
       status: 1,
     });
   else
@@ -254,7 +259,7 @@ function open(nextMode: Mode, row?: any) {
         deptId: row.deptId,
         staffId: row.staffId,
         authorizedOrgIds: (row.authorizedOrgIds ?? []).map(String),
-        roleIds: (row.roleIds ?? []).map(String),
+        roleId: String(row.roleId ?? ''),
         status: row.statusValue,
       });
     else
@@ -280,7 +285,7 @@ function validate() {
     if (mode.value === 'create' && String(form.password ?? '').length < 6)
       return '初始密码至少6个字符';
     if (!form.orgId) return '请选择所属公司';
-    if (!form.roleIds?.length) return '请至少选择一个角色';
+    if (!form.roleId) return '请选择一个角色';
     if (!form.authorizedOrgIds?.length) return '请至少选择一个授权组织';
   }
   return '';
@@ -330,6 +335,30 @@ async function saveAmountAccess() {
     await load();
   } finally {
     amountSaving.value = false;
+  }
+}
+
+function openRoleAccess(row: any) {
+  roleCurrent.value = row;
+  roleForm.roleId = String(row.roleId ?? '');
+  roleDialog.value = true;
+}
+
+async function saveRoleAccess() {
+  if (!roleForm.roleId) {
+    ElMessage.warning('请选择一个角色');
+    return;
+  }
+  roleSaving.value = true;
+  try {
+    await api.put(`/system/users/${roleCurrent.value.id}/roles`, {
+      roleId: roleForm.roleId,
+    });
+    ElMessage.success('角色授权已保存');
+    roleDialog.value = false;
+    await load();
+  } finally {
+    roleSaving.value = false;
   }
 }
 
@@ -526,7 +555,7 @@ onMounted(async () => {
             >
             <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
               ><template #default="{ row }">{{
-                row.roleNames?.join('、') || '—'
+                row.roleName || '—'
               }}</template></el-table-column
             >
             <el-table-column label="金额权限" width="104" align="center"
@@ -551,10 +580,16 @@ onMounted(async () => {
                 }}</el-tag></template
               ></el-table-column
             >
-            <el-table-column label="操作" width="176" fixed="right" align="center"
+            <el-table-column label="操作" width="214" fixed="right" align="center"
               ><template #default="{ row }"
                 ><TableRowActions :show-more="can('system:update')"
                   ><el-button link type="primary" @click="open('view', row)">查看</el-button
+                  ><el-button
+                    v-if="isSuperAdmin"
+                    link
+                    type="primary"
+                    @click="openRoleAccess(row)"
+                    >角色授权</el-button
                   ><el-button
                     v-if="can('system:update') && !row.staffId"
                     link
@@ -716,7 +751,7 @@ onMounted(async () => {
             </div>
             <div class="detail-item">
               <span class="detail-label">所属角色</span
-              ><span>{{ current.roleNames?.join('、') || '—' }}</span>
+              ><span>{{ current.roleName || '—' }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">联系电话</span><span>{{ current.phone || '—' }}</span>
@@ -870,16 +905,23 @@ onMounted(async () => {
               ></el-form-item>
             </div>
             <div class="permission-section">
-              <div class="permission-title">所属角色 *</div>
-              <el-checkbox-group v-model="form.roleIds" class="role-grid"
-                ><el-checkbox
+              <div class="permission-title">
+                所属角色 *<small v-if="mode === 'edit'">（请通过“角色授权”变更）</small>
+              </div>
+              <el-radio-group v-model="form.roleId" class="role-grid"
+                ><el-radio
                   v-for="item in roleOptions"
                   :key="item.id"
                   :value="String(item.id)"
                   border
-                  :disabled="mode === 'view' || (form.account === 'admin' && item.code === 'admin')"
-                  ><strong>{{ item.name }}</strong></el-checkbox
-                ></el-checkbox-group
+                  :disabled="
+                    mode === 'view' ||
+                    mode === 'edit' ||
+                    (!isSuperAdmin && item.code === 'admin') ||
+                    (form.account === 'admin' && item.code === 'admin')
+                  "
+                  ><strong>{{ item.name }}</strong></el-radio
+                ></el-radio-group
               >
             </div>
             <div class="permission-section">
@@ -948,6 +990,51 @@ onMounted(async () => {
             resource === 'config' ? '保存配置' : '保存'
           }}</el-button></template
         >
+      </el-dialog>
+
+      <el-dialog
+        v-model="roleDialog"
+        width="620"
+        title="角色授权"
+        :close-on-click-modal="false"
+      >
+        <div class="amount-access-user">
+          <div>
+            <span>用户姓名</span><strong>{{ roleCurrent?.name || '—' }}</strong>
+          </div>
+          <div>
+            <span>登录账号</span><strong>{{ roleCurrent?.account || '—' }}</strong>
+          </div>
+          <div>
+            <span>账号来源</span><strong>{{ roleCurrent?.identitySource || '—' }}</strong>
+          </div>
+        </div>
+        <el-alert
+          title="这里只变更进销存角色，不修改 OA 组织、部门、岗位和人员身份，也不影响金额白名单。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <div class="permission-section">
+          <div class="permission-title">所属角色 *</div>
+          <el-radio-group v-model="roleForm.roleId" class="role-grid">
+            <el-radio
+              v-for="item in roleOptions"
+              :key="item.id"
+              :value="String(item.id)"
+              border
+              :disabled="roleCurrent?.id === auth.user?.id"
+            >
+              <strong>{{ item.name }}</strong>
+            </el-radio>
+          </el-radio-group>
+        </div>
+        <template #footer>
+          <el-button @click="roleDialog = false">取消</el-button>
+          <el-button type="primary" :loading="roleSaving" @click="saveRoleAccess"
+            >保存角色</el-button
+          >
+        </template>
       </el-dialog>
 
       <el-dialog
@@ -1089,14 +1176,16 @@ onMounted(async () => {
   gap: 9px;
 }
 .permission-grid :deep(.el-checkbox),
-.role-grid :deep(.el-checkbox) {
+.role-grid :deep(.el-checkbox),
+.role-grid :deep(.el-radio) {
   width: 100%;
   height: auto;
   min-height: 38px;
   margin: 0;
   padding: 8px 10px;
 }
-.role-grid :deep(.el-checkbox__label) {
+.role-grid :deep(.el-checkbox__label),
+.role-grid :deep(.el-radio__label) {
   display: flex;
   flex-direction: column;
 }

@@ -571,7 +571,7 @@ export class XinfutongOaSyncService {
       }
 
       // OA 同步负责登录身份、本地角色和授权组织；金额白名单保持本地独立维护。
-      // 岗位只用于叠加业务角色，不是员工获得基础申请账号的前置条件。
+      // 岗位映射到唯一业务角色；未映射时回退基础申请人角色。
       const identityUsable = status === 1 && !deletedAt && primaryOrgId !== null;
       const userResult = await this.upsertLoginUserByMobile({
         mobile: data.mobile,
@@ -719,7 +719,8 @@ export class XinfutongOaSyncService {
 
   /**
    * 根据数据字典全量刷新 OA 人员的本地角色和授权组织。
-   * 安全规则：全员基础角色和岗位附加角色均来自字典；本方法不访问金额白名单表。
+   * 安全规则：每个用户只有一个角色；岗位映射优先，无映射时使用基础角色。
+   * 本方法不访问金额白名单表。
    */
   async refreshUserAuthorization(input: {
     userId: bigint;
@@ -728,7 +729,7 @@ export class XinfutongOaSyncService {
     accountSetId: bigint;
     identityUsable: boolean;
   }) {
-    let roleIds: number[] = [];
+    let roleId: number | null = null;
     let authorizedOrgIds: bigint[] = [];
 
     const identityLinks = await this.prisma.hspsi_sys_user_oa_staff.findMany({
@@ -771,16 +772,16 @@ export class XinfutongOaSyncService {
         }),
       ]);
 
-      const roleCodes = new Set<string>();
+      let defaultRoleCode = '';
       if (defaultRoleCategory) {
         const defaults = await this.prisma.hspsi_sys_dictionary.findMany({
           where: { dict_catg_id: defaultRoleCategory.dict_catg_id, deleted_at: null },
           select: { dict_value: true },
+          orderBy: [{ sort: 'asc' }, { dict_id: 'asc' }],
         });
-        defaults.forEach((item) => {
-          if (item.dict_value?.trim()) roleCodes.add(item.dict_value.trim());
-        });
+        defaultRoleCode = defaults.map((item) => item.dict_value?.trim()).find(Boolean) ?? '';
       }
+      const positionRoleCodes = new Set<string>();
       for (const identity of identities) {
         if (identity.postId <= 0n || !positionRoleCategory) continue;
         const position = await this.prisma.hspsi_basic_position.findFirst({
@@ -802,15 +803,22 @@ export class XinfutongOaSyncService {
           select: { dict_value: true },
         });
         mappings.forEach((item) => {
-          if (item.dict_value?.trim()) roleCodes.add(item.dict_value.trim());
+          if (item.dict_value?.trim()) positionRoleCodes.add(item.dict_value.trim());
         });
       }
-      if (roleCodes.size) {
-        const roles = await this.prisma.hspsi_sys_role.findMany({
-          where: { code: { in: [...roleCodes] }, status: 1, deleted_at: null },
+      if (positionRoleCodes.size > 1) {
+        XinfutongOaSyncService.logger.warn(
+          `用户 ${input.userId} 的多个OA身份映射到不同角色，自动降级为基础角色，需由超级管理员确认唯一角色`,
+        );
+      }
+      const selectedRoleCode =
+        positionRoleCodes.size === 1 ? [...positionRoleCodes][0]! : defaultRoleCode;
+      if (selectedRoleCode) {
+        const role = await this.prisma.hspsi_sys_role.findFirst({
+          where: { code: selectedRoleCode, status: 1, deleted_at: null },
           select: { id: true },
         });
-        roleIds = roles.map((role) => Number(role.id));
+        roleId = role ? Number(role.id) : null;
       }
 
       const enabledOrgRules = new Set<string>();
@@ -899,11 +907,22 @@ export class XinfutongOaSyncService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(input.userId) } });
-      if (roleIds.length) {
-        await tx.hspsi_sys_user_role.createMany({
-          data: roleIds.map((roleId) => ({ user_id: Number(input.userId), role_id: roleId })),
-          skipDuplicates: true,
+      const manualRoleOverride = await tx.hspsi_sys_user_role_override.findUnique({
+        where: { user_id: input.userId },
+        select: { user_id: true },
+      });
+      let effectiveRoleCount = roleId ? 1 : 0;
+      if (!manualRoleOverride) {
+        await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(input.userId) } });
+        if (roleId) {
+          await tx.hspsi_sys_user_role.createMany({
+            data: [{ user_id: Number(input.userId), role_id: roleId }],
+            skipDuplicates: true,
+          });
+        }
+      } else {
+        effectiveRoleCount = await tx.hspsi_sys_user_role.count({
+          where: { user_id: Number(input.userId) },
         });
       }
       await tx.hspsi_sys_user_authorized_org.deleteMany({ where: { user_id: input.userId } });
@@ -918,13 +937,13 @@ export class XinfutongOaSyncService {
         });
       }
       const authorizationUsable =
-        identities.length > 0 && roleIds.length > 0 && authorizedOrgIds.length > 0;
+        identities.length > 0 && effectiveRoleCount > 0 && authorizedOrgIds.length > 0;
       await tx.hspsi_sys_user.update({
         where: { id: input.userId },
         data: { status: authorizationUsable ? 1 : 2, updated_by: 0n, updated_at: new Date() },
       });
     });
 
-    return { roleIds, authorizedOrgIds };
+    return { roleId, authorizedOrgIds };
   }
 }
