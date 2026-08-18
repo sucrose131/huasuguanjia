@@ -125,13 +125,6 @@ const filteredDepartments = computed(() =>
 const selectedStaff = computed(() =>
   staffOptions.value.find((item) => String(item.id) === String(form.staffId)),
 );
-const needsAuthorizedOrganizations = computed(() =>
-  (form.roleIds ?? []).some((id: string) =>
-    roleOptions.value.some(
-      (role) => String(role.id) === String(id) && Number(role.dataScope) === 4,
-    ),
-  ),
-);
 const allMenusSelected = computed({
   get: () =>
     pageMenus.value.length > 0 &&
@@ -160,7 +153,7 @@ function amountAccessTag(level: string) {
 }
 
 async function loadDictionaries() {
-  const codes = ['enabled_status', 'system_account_status', 'role_scope_type', 'system_menu_type'];
+  const codes = ['enabled_status', 'system_account_status', 'system_menu_type'];
   const values = (await Promise.all(
     codes.map((code) => api.get(`/dictionaries/${code}`)),
   )) as any[];
@@ -208,7 +201,6 @@ function resetForm() {
     Object.assign(form, {
       name: '',
       status: 1,
-      dataScope: 3,
       menuIds: [],
       actionPermissionCodes: ['system:view'],
     });
@@ -247,7 +239,6 @@ function open(nextMode: Mode, row?: any) {
       Object.assign(form, {
         name: row.name,
         status: row.statusValue,
-        dataScope: row.dataScopeValue,
         menuIds: (row.menuIds ?? [])
           .map(String)
           .filter((id: string) => pageMenus.value.some((menu) => String(menu.id) === id)),
@@ -290,8 +281,7 @@ function validate() {
       return '初始密码至少6个字符';
     if (!form.orgId) return '请选择所属公司';
     if (!form.roleIds?.length) return '请至少选择一个角色';
-    if (needsAuthorizedOrganizations.value && !form.authorizedOrgIds?.length)
-      return '指定组织数据范围至少选择一个组织';
+    if (!form.authorizedOrgIds?.length) return '请至少选择一个授权组织';
   }
   return '';
 }
@@ -364,7 +354,8 @@ watch(
     if (!form.staffId || !selectedStaff.value) return;
     form.orgId = selectedStaff.value.orgId;
     form.deptId = selectedStaff.value.deptId || '';
-    if (mode.value === 'create' || !String(form.name ?? '').trim()) form.name = selectedStaff.value.name;
+    if (mode.value === 'create' || !String(form.name ?? '').trim())
+      form.name = selectedStaff.value.name;
     if (!String(form.phone ?? '').trim()) form.phone = selectedStaff.value.mobile || '';
   },
 );
@@ -390,653 +381,626 @@ onMounted(async () => {
     <header class="page-head">
       <div>
         <h2>{{ title }}</h2>
-        <p class="page-subtitle">{{
-          resource === 'tasks'
-            ? '配置同步任务开关和 Linux Cron 执行时间，保存后无需重启。'
-            : '配置组织权限、用户和系统级业务规则。'
-        }}</p>
+        <p class="page-subtitle">
+          {{
+            resource === 'tasks'
+              ? '配置同步任务开关和 Linux Cron 执行时间，保存后无需重启。'
+              : '配置组织权限、用户和系统级业务规则。'
+          }}
+        </p>
       </div>
     </header>
 
     <ScheduledTaskPanel v-if="resource === 'tasks'" />
     <template v-else>
-    <div class="panel">
-      <SummaryStrip :items="summaryItems" />
-      <div class="system-toolbar">
-        <div class="status-filter">
-          <span>启用状态</span>
-          <el-select v-model="statusFilter" style="width: 130px">
-            <el-option label="全部" value="" />
-            <el-option
-              v-for="item in dictionary(
-                resource === 'users' ? 'system_account_status' : 'enabled_status',
-              )"
-              :key="item.value"
-              :label="item.label"
-              :value="Number(item.value)"
+      <div class="panel">
+        <SummaryStrip :items="summaryItems" />
+        <div class="system-toolbar">
+          <div class="status-filter">
+            <span>启用状态</span>
+            <el-select v-model="statusFilter" style="width: 130px">
+              <el-option label="全部" value="" />
+              <el-option
+                v-for="item in dictionary(
+                  resource === 'users' ? 'system_account_status' : 'enabled_status',
+                )"
+                :key="item.value"
+                :label="item.label"
+                :value="Number(item.value)"
+              />
+            </el-select>
+          </div>
+          <div class="toolbar-actions">
+            <el-input v-model="keyword" clearable :placeholder="`搜索${title}`" style="width: 230px"
+              ><template #prefix
+                ><el-icon><Search /></el-icon></template
+            ></el-input>
+            <el-button
+              v-if="resource !== 'config'"
+              :icon="Refresh"
+              aria-label="刷新列表"
+              title="刷新列表"
+              @click="load"
             />
-          </el-select>
+            <el-button
+              v-if="can('system:create')"
+              type="primary"
+              :icon="Plus"
+              @click="open('create')"
+              >{{
+                resource === 'roles' ? '新增角色' : resource === 'users' ? '新增用户' : '新增菜单'
+              }}</el-button
+            >
+          </div>
         </div>
-        <div class="toolbar-actions">
-          <el-input v-model="keyword" clearable :placeholder="`搜索${title}`" style="width: 230px"
-            ><template #prefix
-              ><el-icon><Search /></el-icon></template
-          ></el-input>
-          <el-button
-            v-if="resource !== 'config'"
-            :icon="Refresh"
-            aria-label="刷新列表"
-            title="刷新列表"
-            @click="load"
+
+        <div v-if="error" class="system-state">
+          <strong>无法读取{{ title }}</strong>
+          <p>{{ error }}</p>
+          <el-button @click="load">重新加载</el-button>
+        </div>
+        <div v-else class="table-wrap" v-loading="loading">
+          <el-table v-if="resource === 'roles'" :data="filteredRows" min-width="1180">
+            <el-table-column type="index" label="序号" width="65" />
+            <el-table-column prop="id" label="ID" width="100" />
+            <el-table-column prop="name" label="角色名称" min-width="130"
+              ><template #default="{ row }"
+                ><strong class="business-no">{{ row.name }}</strong></template
+              ></el-table-column
+            >
+            <el-table-column label="菜单权限" min-width="180" show-overflow-tooltip
+              ><template #default="{ row }">{{
+                row.menuPermissions?.length ? row.menuPermissions.join('、') : '未配置'
+              }}</template></el-table-column
+            >
+            <el-table-column label="操作权限" min-width="150" show-overflow-tooltip
+              ><template #default="{ row }">{{
+                row.actionPermissions?.length ? row.actionPermissions.join('、') : '未配置'
+              }}</template></el-table-column
+            >
+            <el-table-column label="关联用户" width="90"
+              ><template #default="{ row }">{{ row.userCount }} 人</template></el-table-column
+            >
+            <el-table-column label="最后操作人" width="110"
+              ><template #default="{ row }">{{
+                row.updatedBy || row.createdBy || '—'
+              }}</template></el-table-column
+            >
+            <el-table-column label="操作时间" width="150"
+              ><template #default="{ row }">{{
+                timeText(row.updatedAt || row.createdAt)
+              }}</template></el-table-column
+            >
+            <el-table-column prop="status" label="状态" width="90"
+              ><template #default="{ row }"
+                ><el-tag :type="Number(row.statusValue) === 1 ? 'success' : 'info'">{{
+                  row.status
+                }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column label="操作" width="132" fixed="right" align="center"
+              ><template #default="{ row }"
+                ><TableRowActions
+                  ><el-button link type="primary" @click="open('view', row)">查看</el-button
+                  ><el-button
+                    v-if="can('system:update')"
+                    link
+                    type="primary"
+                    @click="open('edit', row)"
+                    >编辑</el-button
+                  ></TableRowActions
+                ></template
+              ></el-table-column
+            >
+          </el-table>
+
+          <el-table v-else-if="resource === 'users'" :data="filteredRows" min-width="1180">
+            <el-table-column type="index" label="序号" width="65" />
+            <el-table-column prop="id" label="ID" width="100" />
+            <el-table-column prop="account" label="登录账号" min-width="120"
+              ><template #default="{ row }"
+                ><strong class="business-no">{{ row.account }}</strong></template
+              ></el-table-column
+            >
+            <el-table-column prop="name" label="用户姓名" min-width="130"
+              ><template #default="{ row }"
+                ><span class="user-name"
+                  ><i>{{ row.name?.slice(0, 1) }}</i
+                  >{{ row.name }}</span
+                ></template
+              ></el-table-column
+            >
+            <el-table-column prop="orgName" label="所属公司" min-width="160"
+              ><template #default="{ row }"
+                ><span v-if="row.orgName">{{ row.orgName }}</span
+                ><el-tag v-else type="warning">未配置</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column prop="department" label="所属部门" min-width="130"
+              ><template #default="{ row }">{{ row.department || '—' }}</template></el-table-column
+            >
+            <el-table-column label="岗位" min-width="130" show-overflow-tooltip
+              ><template #default="{ row }">{{
+                row.positionName || '—'
+              }}</template></el-table-column
+            >
+            <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
+              ><template #default="{ row }">{{
+                row.roleNames?.join('、') || '—'
+              }}</template></el-table-column
+            >
+            <el-table-column label="金额权限" width="104" align="center"
+              ><template #default="{ row }"
+                ><el-tag :type="amountAccessTag(row.amountAccess)">{{
+                  amountAccessLabel(row.amountAccess)
+                }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column label="授权组织" min-width="160" show-overflow-tooltip
+              ><template #default="{ row }">{{
+                row.authorizedOrgNames?.join('、') || '未授权'
+              }}</template></el-table-column
+            >
+            <el-table-column prop="phone" label="联系电话" width="130"
+              ><template #default="{ row }">{{ row.phone || '—' }}</template></el-table-column
+            >
+            <el-table-column prop="status" label="状态" width="90"
+              ><template #default="{ row }"
+                ><el-tag :type="Number(row.statusValue) === 1 ? 'success' : 'info'">{{
+                  row.status
+                }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column label="操作" width="176" fixed="right" align="center"
+              ><template #default="{ row }"
+                ><TableRowActions :show-more="can('system:update')"
+                  ><el-button link type="primary" @click="open('view', row)">查看</el-button
+                  ><el-button
+                    v-if="can('system:update') && !row.staffId"
+                    link
+                    type="primary"
+                    @click="open('edit', row)"
+                    >编辑</el-button
+                  ><template #more
+                    ><el-dropdown-item @click="openAmountAccess(row)"
+                      >金额权限</el-dropdown-item
+                    ></template
+                  ></TableRowActions
+                ></template
+              ></el-table-column
+            >
+          </el-table>
+
+          <el-table v-else :data="filteredRows" min-width="1180">
+            <el-table-column type="index" label="序号" width="65" />
+            <el-table-column prop="id" label="ID" width="100" />
+            <el-table-column prop="parentName" label="上级菜单" min-width="120" />
+            <el-table-column prop="name" label="菜单名称" min-width="140"
+              ><template #default="{ row }"
+                ><strong>{{ row.name }}</strong></template
+              ></el-table-column
+            >
+            <el-table-column prop="type" label="菜单类型" width="90"
+              ><template #default="{ row }"
+                ><el-tag>{{ row.type }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column prop="path" label="访问路径" min-width="180"
+              ><template #default="{ row }">{{ row.path || '—' }}</template></el-table-column
+            >
+            <el-table-column prop="permission" label="权限编码" min-width="160"
+              ><template #default="{ row }">{{ row.permission || '—' }}</template></el-table-column
+            >
+            <el-table-column label="权限类别" width="90"
+              ><template #default="{ row }"
+                ><el-tag :type="row.typeValue === 3 ? 'warning' : undefined">{{
+                  row.typeValue === 3 ? '操作' : '页面'
+                }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column prop="sortOrder" label="显示顺序" width="90" />
+            <el-table-column label="数据来源" width="90">MySQL</el-table-column>
+            <el-table-column prop="statusName" label="状态" width="90"
+              ><template #default="{ row }"
+                ><el-tag :type="row.visible ? 'success' : 'info'">{{
+                  row.statusName
+                }}</el-tag></template
+              ></el-table-column
+            >
+            <el-table-column label="操作" width="176" fixed="right" align="center"
+              ><template #default="{ row }"
+                ><TableRowActions :show-more="can('system:delete')"
+                  ><el-button link type="primary" @click="open('view', row)">查看</el-button
+                  ><el-button
+                    v-if="can('system:update')"
+                    link
+                    type="primary"
+                    @click="open('edit', row)"
+                    >编辑</el-button
+                  ><template #more
+                    ><el-dropdown-item class="table-action-danger" @click="removeMenu(row)"
+                      >删除菜单</el-dropdown-item
+                    ></template
+                  ></TableRowActions
+                ></template
+              ></el-table-column
+            >
+          </el-table>
+          <div v-if="!loading && !filteredRows.length" class="system-state">
+            <strong>暂无符合条件的{{ title.replace('管理', '').replace('配置', '菜单') }}</strong>
+            <p>请调整状态或搜索条件。</p>
+          </div>
+        </div>
+        <footer class="table-footer">
+          <span class="result-total"
+            >共 {{ filteredRows.length }}
+            {{
+              resource === 'users' ? '名用户' : resource === 'config' ? '个菜单' : '条记录'
+            }}</span
+          ><el-pagination
+            :total="filteredRows.length"
+            :page-size="Math.max(filteredRows.length, 1)"
+            layout="prev, pager, next"
+            disabled
           />
-          <el-button
-            v-if="can('system:create')"
-            type="primary"
-            :icon="Plus"
-            @click="open('create')"
-            >{{
-              resource === 'roles' ? '新增角色' : resource === 'users' ? '新增用户' : '新增菜单'
-            }}</el-button
-          >
-        </div>
+        </footer>
       </div>
 
-      <div v-if="error" class="system-state">
-        <strong>无法读取{{ title }}</strong>
-        <p>{{ error }}</p>
-        <el-button @click="load">重新加载</el-button>
-      </div>
-      <div v-else class="table-wrap" v-loading="loading">
-        <el-table v-if="resource === 'roles'" :data="filteredRows" min-width="1180">
-          <el-table-column type="index" label="序号" width="65" />
-          <el-table-column prop="id" label="ID" width="100" />
-          <el-table-column prop="name" label="角色名称" min-width="130"
-            ><template #default="{ row }"
-              ><strong class="business-no">{{ row.name }}</strong></template
-            ></el-table-column
-          >
-          <el-table-column label="菜单权限" min-width="180" show-overflow-tooltip
-            ><template #default="{ row }">{{
-              row.menuPermissions?.length ? row.menuPermissions.join('、') : '未配置'
-            }}</template></el-table-column
-          >
-          <el-table-column label="操作权限" min-width="150" show-overflow-tooltip
-            ><template #default="{ row }">{{
-              row.actionPermissions?.length ? row.actionPermissions.join('、') : '未配置'
-            }}</template></el-table-column
-          >
-          <el-table-column prop="dataScope" label="默认数据范围" width="130" />
-          <el-table-column label="关联用户" width="90"
-            ><template #default="{ row }">{{ row.userCount }} 人</template></el-table-column
-          >
-          <el-table-column label="最后操作人" width="110"
-            ><template #default="{ row }">{{
-              row.updatedBy || row.createdBy || '—'
-            }}</template></el-table-column
-          >
-          <el-table-column label="操作时间" width="150"
-            ><template #default="{ row }">{{
-              timeText(row.updatedAt || row.createdAt)
-            }}</template></el-table-column
-          >
-          <el-table-column prop="status" label="状态" width="90"
-            ><template #default="{ row }"
-              ><el-tag :type="Number(row.statusValue) === 1 ? 'success' : 'info'">{{
-                row.status
-              }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column label="操作" width="132" fixed="right" align="center"
-            ><template #default="{ row }"
-              ><TableRowActions
-                ><el-button link type="primary" @click="open('view', row)">查看</el-button
-                ><el-button
-                  v-if="can('system:update')"
-                  link
-                  type="primary"
-                  @click="open('edit', row)"
-                  >编辑</el-button
-                ></TableRowActions
-              ></template
-            ></el-table-column
-          >
-        </el-table>
-
-        <el-table v-else-if="resource === 'users'" :data="filteredRows" min-width="1180">
-          <el-table-column type="index" label="序号" width="65" />
-          <el-table-column prop="id" label="ID" width="100" />
-          <el-table-column prop="account" label="登录账号" min-width="120"
-            ><template #default="{ row }"
-              ><strong class="business-no">{{ row.account }}</strong></template
-            ></el-table-column
-          >
-          <el-table-column prop="name" label="用户姓名" min-width="130"
-            ><template #default="{ row }"
-              ><span class="user-name"
-                ><i>{{ row.name?.slice(0, 1) }}</i
-                >{{ row.name }}</span
-              ></template
-            ></el-table-column
-          >
-          <el-table-column prop="orgName" label="所属公司" min-width="160"
-            ><template #default="{ row }"
-              ><span v-if="row.orgName">{{ row.orgName }}</span
-              ><el-tag v-else type="warning">未配置</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column prop="department" label="所属部门" min-width="130"
-            ><template #default="{ row }">{{ row.department || '—' }}</template></el-table-column
-          >
-          <el-table-column label="岗位" min-width="130" show-overflow-tooltip
-            ><template #default="{ row }">{{ row.positionName || '—' }}</template></el-table-column
-          >
-          <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
-            ><template #default="{ row }">{{
-              row.roleNames?.join('、') || '—'
-            }}</template></el-table-column
-          >
-          <el-table-column label="金额权限" width="104" align="center"
-            ><template #default="{ row }"
-              ><el-tag :type="amountAccessTag(row.amountAccess)">{{
-                amountAccessLabel(row.amountAccess)
-              }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column label="数据范围" width="130"
-            ><template #default="{ row }">{{
-              row.dataScope?.scopeType || '未配置'
-            }}</template></el-table-column
-          >
-          <el-table-column prop="phone" label="联系电话" width="130"
-            ><template #default="{ row }">{{ row.phone || '—' }}</template></el-table-column
-          >
-          <el-table-column prop="status" label="状态" width="90"
-            ><template #default="{ row }"
-              ><el-tag :type="Number(row.statusValue) === 1 ? 'success' : 'info'">{{
-                row.status
-              }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column label="操作" width="176" fixed="right" align="center"
-            ><template #default="{ row }"
-              ><TableRowActions :show-more="can('system:update')"
-                ><el-button link type="primary" @click="open('view', row)">查看</el-button
-                ><el-button
-                  v-if="can('system:update')"
-                  link
-                  type="primary"
-                  @click="open('edit', row)"
-                  >编辑</el-button
-                ><template #more
-                  ><el-dropdown-item @click="openAmountAccess(row)"
-                    >金额权限</el-dropdown-item
-                  ></template
-                ></TableRowActions
-              ></template
-            ></el-table-column
-          >
-        </el-table>
-
-        <el-table v-else :data="filteredRows" min-width="1180">
-          <el-table-column type="index" label="序号" width="65" />
-          <el-table-column prop="id" label="ID" width="100" />
-          <el-table-column prop="parentName" label="上级菜单" min-width="120" />
-          <el-table-column prop="name" label="菜单名称" min-width="140"
-            ><template #default="{ row }"
-              ><strong>{{ row.name }}</strong></template
-            ></el-table-column
-          >
-          <el-table-column prop="type" label="菜单类型" width="90"
-            ><template #default="{ row }"
-              ><el-tag>{{ row.type }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column prop="path" label="访问路径" min-width="180"
-            ><template #default="{ row }">{{ row.path || '—' }}</template></el-table-column
-          >
-          <el-table-column prop="permission" label="权限编码" min-width="160"
-            ><template #default="{ row }">{{ row.permission || '—' }}</template></el-table-column
-          >
-          <el-table-column label="权限类别" width="90"
-            ><template #default="{ row }"
-              ><el-tag :type="row.typeValue === 3 ? 'warning' : undefined">{{
-                row.typeValue === 3 ? '操作' : '页面'
-              }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column prop="sortOrder" label="显示顺序" width="90" />
-          <el-table-column label="数据来源" width="90">MySQL</el-table-column>
-          <el-table-column prop="statusName" label="状态" width="90"
-            ><template #default="{ row }"
-              ><el-tag :type="row.visible ? 'success' : 'info'">{{
-                row.statusName
-              }}</el-tag></template
-            ></el-table-column
-          >
-          <el-table-column label="操作" width="176" fixed="right" align="center"
-            ><template #default="{ row }"
-              ><TableRowActions :show-more="can('system:delete')"
-                ><el-button link type="primary" @click="open('view', row)">查看</el-button
-                ><el-button
-                  v-if="can('system:update')"
-                  link
-                  type="primary"
-                  @click="open('edit', row)"
-                  >编辑</el-button
-                ><template #more
-                  ><el-dropdown-item class="table-action-danger" @click="removeMenu(row)"
-                    >删除菜单</el-dropdown-item
-                  ></template
-                ></TableRowActions
-              ></template
-            ></el-table-column
-          >
-        </el-table>
-        <div v-if="!loading && !filteredRows.length" class="system-state">
-          <strong>暂无符合条件的{{ title.replace('管理', '').replace('配置', '菜单') }}</strong>
-          <p>请调整状态或搜索条件。</p>
-        </div>
-      </div>
-      <footer class="table-footer">
-        <span class="result-total"
-          >共 {{ filteredRows.length }}
-          {{ resource === 'users' ? '名用户' : resource === 'config' ? '个菜单' : '条记录' }}</span
-        ><el-pagination
-          :total="filteredRows.length"
-          :page-size="Math.max(filteredRows.length, 1)"
-          layout="prev, pager, next"
-          disabled
-        />
-      </footer>
-    </div>
-
-    <el-dialog
-      v-model="dialog"
-      :width="resource === 'roles' ? 860 : resource === 'users' ? 760 : 680"
-      :close-on-click-modal="mode === 'view'"
-    >
-      <template #header
-        ><div>
-          <strong>{{
-            mode === 'create'
-              ? `新增${resource === 'config' ? '系统菜单' : resource === 'roles' ? '角色' : '用户'}`
-              : mode === 'edit'
-                ? `编辑${resource === 'config' ? '系统菜单' : resource === 'roles' ? '角色' : '用户'}`
-                : current?.name
-          }}</strong
-          ><small class="dialog-subtitle">{{
-            resource === 'roles'
-              ? '配置菜单、操作权限和默认数据范围'
-              : resource === 'users'
-                ? `登录账号：${current?.account ?? form.account}`
-                : mode === 'view'
-                  ? '菜单详情'
-                  : form.parentId === '0'
-                    ? '一级菜单'
-                    : `上级菜单 #${form.parentId}`
-          }}</small>
-        </div></template
+      <el-dialog
+        v-model="dialog"
+        :width="resource === 'roles' ? 860 : resource === 'users' ? 760 : 680"
+        :close-on-click-modal="mode === 'view'"
       >
+        <template #header
+          ><div>
+            <strong>{{
+              mode === 'create'
+                ? `新增${resource === 'config' ? '系统菜单' : resource === 'roles' ? '角色' : '用户'}`
+                : mode === 'edit'
+                  ? `编辑${resource === 'config' ? '系统菜单' : resource === 'roles' ? '角色' : '用户'}`
+                  : current?.name
+            }}</strong
+            ><small class="dialog-subtitle">{{
+              resource === 'roles'
+                ? '配置菜单和操作权限'
+                : resource === 'users'
+                  ? `登录账号：${current?.account ?? form.account}`
+                  : mode === 'view'
+                    ? '菜单详情'
+                    : form.parentId === '0'
+                      ? '一级菜单'
+                      : `上级菜单 #${form.parentId}`
+            }}</small>
+          </div></template
+        >
 
-      <div v-if="false" class="detail-grid">
-        <template v-if="resource === 'roles'">
-          <div class="detail-item">
-            <span class="detail-label">默认数据范围</span
-            ><span>{{ current.dataScope || '—' }}</span>
-          </div>
-          <div class="detail-item full">
-            <span class="detail-label">菜单权限</span
-            ><span>{{ current.menuPermissions?.join('、') || '—' }}</span>
-          </div>
-          <div class="detail-item full">
-            <span class="detail-label">操作权限</span
-            ><span>{{ current.actionPermissions?.join('、') || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">关联用户</span><span>{{ current.userCount }} 人</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">启用状态</span><span>{{ current.status }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">最后操作人</span
-            ><span>{{ current.updatedBy || current.createdBy || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">操作时间</span
-            ><span>{{ timeText(current.updatedAt || current.createdAt) }}</span>
-          </div>
-        </template>
-        <template v-else-if="resource === 'users'">
-          <div class="detail-item">
-            <span class="detail-label">所属公司</span><span>{{ current.orgName || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">所属部门</span><span>{{ current.department || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">关联人员</span
-            ><span>{{ current.staffName || '本地账号（未关联 OA 人员）' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">所属岗位</span><span>{{ current.positionName || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">所属角色</span
-            ><span>{{ current.roleNames?.join('、') || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">数据范围</span
-            ><span>{{ current.dataScope?.scopeType || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">联系电话</span><span>{{ current.phone || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">账号状态</span><span>{{ current.status }}</span>
-          </div>
-          <div class="detail-item full">
-            <span class="detail-label">最后操作人</span
-            ><span>{{ current.updatedBy || current.createdBy || '—' }}</span>
-          </div>
-        </template>
-        <template v-else>
-          <div class="detail-item">
-            <span class="detail-label">上级菜单</span><span>{{ current.parentName }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">菜单类型</span><span>{{ current.type }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">访问路径</span><span>{{ current.path || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">权限编码</span><span>{{ current.permission || '—' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">显示顺序</span><span>{{ current.sortOrder }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">数据来源</span><span>MySQL</span>
-          </div>
-          <div class="detail-item full">
-            <span class="detail-label">启用状态</span><span>{{ current.statusName }}</span>
-          </div>
-        </template>
-      </div>
+        <div v-if="false" class="detail-grid">
+          <template v-if="resource === 'roles'">
+            <div class="detail-item full">
+              <span class="detail-label">菜单权限</span
+              ><span>{{ current.menuPermissions?.join('、') || '—' }}</span>
+            </div>
+            <div class="detail-item full">
+              <span class="detail-label">操作权限</span
+              ><span>{{ current.actionPermissions?.join('、') || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">关联用户</span><span>{{ current.userCount }} 人</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">启用状态</span><span>{{ current.status }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">最后操作人</span
+              ><span>{{ current.updatedBy || current.createdBy || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">操作时间</span
+              ><span>{{ timeText(current.updatedAt || current.createdAt) }}</span>
+            </div>
+          </template>
+          <template v-else-if="resource === 'users'">
+            <div class="detail-item">
+              <span class="detail-label">所属公司</span><span>{{ current.orgName || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">所属部门</span><span>{{ current.department || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">关联人员</span
+              ><span>{{ current.staffName || '本地账号（未关联 OA 人员）' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">所属岗位</span
+              ><span>{{ current.positionName || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">所属角色</span
+              ><span>{{ current.roleNames?.join('、') || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">联系电话</span><span>{{ current.phone || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">账号状态</span><span>{{ current.status }}</span>
+            </div>
+            <div class="detail-item full">
+              <span class="detail-label">最后操作人</span
+              ><span>{{ current.updatedBy || current.createdBy || '—' }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="detail-item">
+              <span class="detail-label">上级菜单</span><span>{{ current.parentName }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">菜单类型</span><span>{{ current.type }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">访问路径</span><span>{{ current.path || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">权限编码</span><span>{{ current.permission || '—' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">显示顺序</span><span>{{ current.sortOrder }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">数据来源</span><span>MySQL</span>
+            </div>
+            <div class="detail-item full">
+              <span class="detail-label">启用状态</span><span>{{ current.statusName }}</span>
+            </div>
+          </template>
+        </div>
 
-      <el-form v-else label-position="top" :disabled="mode === 'view'">
-        <template v-if="resource === 'roles'">
-          <div class="dialog-grid">
-            <el-form-item label="角色名称 *"
-              ><el-input
-                v-model="form.name"
-                :disabled="mode === 'view' || (mode === 'edit' && current?.userCount > 0)"
-                maxlength="50"
-            /></el-form-item>
-            <el-form-item label="启用状态 *"
-              ><el-select
-                v-model="form.status"
-                :disabled="mode === 'view' || current?.code === 'admin'"
-                style="width: 100%"
-                ><el-option
-                  v-for="item in dictionary('enabled_status')"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="Number(item.value)" /></el-select
-            ></el-form-item>
-            <el-form-item label="默认数据范围 *"
-              ><el-select v-model="form.dataScope" style="width: 100%"
-                ><el-option
-                  v-for="item in dictionary('role_scope_type')"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="Number(item.value)" /></el-select
-            ></el-form-item>
-          </div>
-          <div class="permission-section">
-            <div class="permission-title">菜单权限 *</div>
-            <el-checkbox v-model="allMenusSelected" border>全部菜单</el-checkbox
-            ><el-checkbox-group v-model="form.menuIds" class="permission-grid menu-grid"
-              ><el-checkbox v-for="item in pageMenus" :key="item.id" :value="String(item.id)" border
-                >{{ item.parentName }} · {{ item.name }}</el-checkbox
-              ></el-checkbox-group
-            >
-          </div>
-          <div class="permission-section">
-            <div class="permission-title">操作权限 *</div>
-            <el-checkbox-group
-              v-model="form.actionPermissionCodes"
-              class="permission-grid action-grid"
-              ><el-checkbox
-                v-for="item in actionMenus"
-                :key="item.id"
-                :value="item.permission"
-                border
-                >{{ item.name }}</el-checkbox
-              ></el-checkbox-group
-            >
-          </div>
-        </template>
-
-        <template v-else-if="resource === 'users'">
-          <div class="dialog-grid">
-            <el-form-item label="登录账号 *"
-              ><el-input
-                v-model="form.account"
-                :disabled="mode === 'view' || mode === 'edit'"
-                maxlength="50"
-            /></el-form-item>
-            <el-form-item :label="mode === 'create' ? '初始密码 *' : '重置密码'"
-              ><el-input
-                v-model="form.password"
-                type="password"
-                show-password
-                :placeholder="mode === 'edit' ? '留空不修改' : '至少6位'"
-            /></el-form-item>
-            <el-form-item label="用户姓名 *"
-              ><el-input v-model="form.name" maxlength="50"
-            /></el-form-item>
-            <el-form-item label="关联 OA 人员"
-              ><el-select
-                v-model="form.staffId"
-                clearable
-                filterable
-                :disabled="mode === 'view'"
-                placeholder="本地测试账号可不关联"
-                style="width: 100%"
-                ><el-option
-                  v-for="item in staffOptions"
+        <el-form v-else label-position="top" :disabled="mode === 'view'">
+          <template v-if="resource === 'roles'">
+            <div class="dialog-grid">
+              <el-form-item label="角色名称 *"
+                ><el-input
+                  v-model="form.name"
+                  :disabled="mode === 'view' || (mode === 'edit' && current?.userCount > 0)"
+                  maxlength="50"
+              /></el-form-item>
+              <el-form-item label="启用状态 *"
+                ><el-select
+                  v-model="form.status"
+                  :disabled="mode === 'view' || current?.code === 'admin'"
+                  style="width: 100%"
+                  ><el-option
+                    v-for="item in dictionary('enabled_status')"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="Number(item.value)" /></el-select
+              ></el-form-item>
+            </div>
+            <div class="permission-section">
+              <div class="permission-title">菜单权限 *</div>
+              <el-checkbox v-model="allMenusSelected" border>全部菜单</el-checkbox
+              ><el-checkbox-group v-model="form.menuIds" class="permission-grid menu-grid"
+                ><el-checkbox
+                  v-for="item in pageMenus"
                   :key="item.id"
-                  :label="`${item.name} · ${item.positionName} · ${item.orgName}`"
-                  :value="item.id" /></el-select
-            ></el-form-item>
-            <el-form-item label="联系电话"
-              ><el-input v-model="form.phone" maxlength="20"
-            /></el-form-item>
-            <el-form-item label="所属公司 *"
-              ><el-tree-select
-                v-model="form.orgId"
+                  :value="String(item.id)"
+                  border
+                  >{{ item.parentName }} · {{ item.name }}</el-checkbox
+                ></el-checkbox-group
+              >
+            </div>
+            <div class="permission-section">
+              <div class="permission-title">操作权限 *</div>
+              <el-checkbox-group
+                v-model="form.actionPermissionCodes"
+                class="permission-grid action-grid"
+                ><el-checkbox
+                  v-for="item in actionMenus"
+                  :key="item.id"
+                  :value="item.permission"
+                  border
+                  >{{ item.name }}</el-checkbox
+                ></el-checkbox-group
+              >
+            </div>
+          </template>
+
+          <template v-else-if="resource === 'users'">
+            <div class="dialog-grid">
+              <el-form-item label="登录账号 *"
+                ><el-input
+                  v-model="form.account"
+                  :disabled="mode === 'view' || mode === 'edit'"
+                  maxlength="50"
+              /></el-form-item>
+              <el-form-item :label="mode === 'create' ? '初始密码 *' : '重置密码'"
+                ><el-input
+                  v-model="form.password"
+                  type="password"
+                  show-password
+                  :placeholder="mode === 'edit' ? '留空不修改' : '至少6位'"
+              /></el-form-item>
+              <el-form-item label="用户姓名 *"
+                ><el-input v-model="form.name" maxlength="50"
+              /></el-form-item>
+              <el-form-item label="账号来源"
+                ><el-input model-value="本地系统账号（OA 人员由同步自动建号）" disabled
+              /></el-form-item>
+              <el-form-item label="联系电话"
+                ><el-input v-model="form.phone" maxlength="20"
+              /></el-form-item>
+              <el-form-item label="所属公司 *"
+                ><el-tree-select
+                  v-model="form.orgId"
+                  :data="organizationTree"
+                  filterable
+                  check-strictly
+                  node-key="value"
+                  :props="{ label: 'label', children: 'children' }"
+                  :disabled="mode === 'view' || !!form.staffId"
+                  style="width: 100%"
+                />
+                ></el-form-item
+              >
+              <el-form-item label="所属部门"
+                ><el-select
+                  v-model="form.deptId"
+                  clearable
+                  filterable
+                  :disabled="mode === 'view' || !!form.staffId"
+                  style="width: 100%"
+                  ><el-option
+                    v-for="item in filteredDepartments"
+                    :key="item.id"
+                    :label="item.name"
+                    :value="item.id" /></el-select
+              ></el-form-item>
+              <el-form-item label="授权方式"
+                ><el-input model-value="角色权限 + 授权组织（独立叠加金额白名单）" disabled
+              /></el-form-item>
+              <el-form-item label="账号状态 *"
+                ><el-select
+                  v-model="form.status"
+                  :disabled="mode === 'view' || form.account === 'admin'"
+                  style="width: 100%"
+                  ><el-option
+                    v-for="item in dictionary('system_account_status')"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="Number(item.value)" /></el-select
+              ></el-form-item>
+            </div>
+            <div class="permission-section">
+              <div class="permission-title">所属角色 *</div>
+              <el-checkbox-group v-model="form.roleIds" class="role-grid"
+                ><el-checkbox
+                  v-for="item in roleOptions"
+                  :key="item.id"
+                  :value="String(item.id)"
+                  border
+                  :disabled="mode === 'view' || (form.account === 'admin' && item.code === 'admin')"
+                  ><strong>{{ item.name }}</strong></el-checkbox
+                ></el-checkbox-group
+              >
+            </div>
+            <div class="permission-section">
+              <div class="permission-title">授权组织 *</div>
+              <el-tree-select
+                v-model="form.authorizedOrgIds"
                 :data="organizationTree"
+                multiple
                 filterable
                 check-strictly
+                show-checkbox
                 node-key="value"
                 :props="{ label: 'label', children: 'children' }"
-                :disabled="mode === 'view' || !!form.staffId"
+                :disabled="mode === 'view'"
                 style="width: 100%"
               />
-              ></el-form-item
-            >
-            <el-form-item label="所属部门"
-              ><el-select
-                v-model="form.deptId"
-                clearable
-                filterable
-                :disabled="mode === 'view' || !!form.staffId"
-                style="width: 100%"
-                ><el-option
-                  v-for="item in filteredDepartments"
-                  :key="item.id"
-                  :label="item.name"
-                  :value="item.id" /></el-select
-            ></el-form-item>
-            <el-form-item label="所属岗位"
-              ><el-input :model-value="selectedStaff?.positionName || current?.positionName || '—'" disabled
-            /></el-form-item>
-            <el-form-item label="数据范围 *"
-              ><el-input
-                :model-value="
-                  mode === 'edit' ? current?.dataScope?.scopeType : '由所选角色合并计算'
-                "
-                disabled
-            /></el-form-item>
-            <el-form-item label="账号状态 *"
-              ><el-select
-                v-model="form.status"
-                :disabled="mode === 'view' || form.account === 'admin'"
-                style="width: 100%"
-                ><el-option
-                  v-for="item in dictionary('system_account_status')"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="Number(item.value)" /></el-select
-            ></el-form-item>
-          </div>
-          <div class="permission-section">
-            <div class="permission-title">所属角色 *</div>
-            <el-checkbox-group v-model="form.roleIds" class="role-grid"
-              ><el-checkbox
-                v-for="item in roleOptions"
-                :key="item.id"
-                :value="String(item.id)"
-                border
-                :disabled="mode === 'view' || (form.account === 'admin' && item.code === 'admin')"
-                ><strong>{{ item.name }}</strong
-                ><small>{{
-                  dictionaryLabel('role_scope_type', item.dataScope)
-                }}</small></el-checkbox
-              ></el-checkbox-group
-            >
-          </div>
-          <div v-if="needsAuthorizedOrganizations" class="permission-section">
-            <div class="permission-title">指定组织范围 *</div>
-            <el-tree-select
-              v-model="form.authorizedOrgIds"
-              :data="organizationTree"
-              multiple
-              filterable
-              check-strictly
-              show-checkbox
-              node-key="value"
-              :props="{ label: 'label', children: 'children' }"
-              :disabled="mode === 'view'"
-              style="width: 100%"
-            />
-          </div>
-        </template>
+            </div>
+          </template>
 
-        <template v-else>
-          <div class="dialog-grid">
-            <el-form-item label="上级菜单"
-              ><el-select v-model="form.parentId" style="width: 100%"
-                ><el-option label="一级菜单" value="0" /><el-option
-                  v-for="item in directoryMenus.filter(
-                    (item) => String(item.id) !== String(current?.id),
-                  )"
-                  :key="item.id"
-                  :label="item.name"
-                  :value="String(item.id)" /></el-select
-            ></el-form-item>
-            <el-form-item label="菜单名称 *"
-              ><el-input v-model="form.name" maxlength="50"
-            /></el-form-item>
-            <el-form-item label="菜单类型"
-              ><el-select v-model="form.type" style="width: 100%"
-                ><el-option
-                  v-for="item in dictionary('system_menu_type')"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="Number(item.value)" /></el-select
-            ></el-form-item>
-            <el-form-item label="访问路径"><el-input v-model="form.route" /></el-form-item>
-            <el-form-item label="权限编码"><el-input v-model="form.permission" /></el-form-item>
-            <el-form-item label="显示顺序"
-              ><el-input-number v-model="form.sortOrder" :min="0" style="width: 100%"
-            /></el-form-item>
-            <el-form-item label="显示状态"
-              ><el-select v-model="form.status" style="width: 100%"
-                ><el-option
-                  v-for="item in dictionary('enabled_status')"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="Number(item.value)" /></el-select
-            ></el-form-item>
-            <el-form-item label="菜单图标"
-              ><el-input v-model="form.icon" placeholder="Element Plus 图标名"
-            /></el-form-item>
-          </div>
-        </template>
-      </el-form>
+          <template v-else>
+            <div class="dialog-grid">
+              <el-form-item label="上级菜单"
+                ><el-select v-model="form.parentId" style="width: 100%"
+                  ><el-option label="一级菜单" value="0" /><el-option
+                    v-for="item in directoryMenus.filter(
+                      (item) => String(item.id) !== String(current?.id),
+                    )"
+                    :key="item.id"
+                    :label="item.name"
+                    :value="String(item.id)" /></el-select
+              ></el-form-item>
+              <el-form-item label="菜单名称 *"
+                ><el-input v-model="form.name" maxlength="50"
+              /></el-form-item>
+              <el-form-item label="菜单类型"
+                ><el-select v-model="form.type" style="width: 100%"
+                  ><el-option
+                    v-for="item in dictionary('system_menu_type')"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="Number(item.value)" /></el-select
+              ></el-form-item>
+              <el-form-item label="访问路径"><el-input v-model="form.route" /></el-form-item>
+              <el-form-item label="权限编码"><el-input v-model="form.permission" /></el-form-item>
+              <el-form-item label="显示顺序"
+                ><el-input-number v-model="form.sortOrder" :min="0" style="width: 100%"
+              /></el-form-item>
+              <el-form-item label="显示状态"
+                ><el-select v-model="form.status" style="width: 100%"
+                  ><el-option
+                    v-for="item in dictionary('enabled_status')"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="Number(item.value)" /></el-select
+              ></el-form-item>
+              <el-form-item label="菜单图标"
+                ><el-input v-model="form.icon" placeholder="Element Plus 图标名"
+              /></el-form-item>
+            </div>
+          </template>
+        </el-form>
 
-      <template #footer
-        ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
-        ><el-button v-if="mode !== 'view'" type="primary" :loading="saving" @click="save">{{
-          resource === 'config' ? '保存配置' : '保存'
-        }}</el-button></template
-      >
-    </el-dialog>
-
-    <el-dialog
-      v-model="amountDialog"
-      width="560"
-      title="配置金额权限"
-      :close-on-click-modal="false"
-    >
-      <div class="amount-access-user">
-        <div>
-          <span>用户姓名</span><strong>{{ amountCurrent?.name || '—' }}</strong>
-        </div>
-        <div>
-          <span>登录账号</span><strong>{{ amountCurrent?.account || '—' }}</strong>
-        </div>
-        <div>
-          <span>所属公司</span><strong>{{ amountCurrent?.orgName || '—' }}</strong>
-        </div>
-      </div>
-      <el-alert
-        title="金额权限独立于角色、岗位和 OA；未进入白名单时默认不能查看或编辑金额。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
-      <el-form label-position="top" class="amount-access-form">
-        <el-form-item label="金额权限 *">
-          <el-radio-group v-model="amountForm.level" class="amount-access-levels">
-            <el-radio-button value="none">无权限</el-radio-button>
-            <el-radio-button value="view">仅查看</el-radio-button>
-            <el-radio-button value="edit" :disabled="Number(amountCurrent?.statusValue) !== 1"
-              >可编辑</el-radio-button
-            >
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="授权或变更原因 *">
-          <el-input
-            v-model="amountForm.grantReason"
-            type="textarea"
-            :rows="3"
-            maxlength="255"
-            show-word-limit
-            placeholder="请填写业务负责人确认、取消授权或其他变更原因"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="amountDialog = false">取消</el-button>
-        <el-button type="primary" :loading="amountSaving" @click="saveAmountAccess"
-          >保存</el-button
+        <template #footer
+          ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
+          ><el-button v-if="mode !== 'view'" type="primary" :loading="saving" @click="save">{{
+            resource === 'config' ? '保存配置' : '保存'
+          }}</el-button></template
         >
-      </template>
-    </el-dialog>
+      </el-dialog>
+
+      <el-dialog
+        v-model="amountDialog"
+        width="560"
+        title="配置金额权限"
+        :close-on-click-modal="false"
+      >
+        <div class="amount-access-user">
+          <div>
+            <span>用户姓名</span><strong>{{ amountCurrent?.name || '—' }}</strong>
+          </div>
+          <div>
+            <span>登录账号</span><strong>{{ amountCurrent?.account || '—' }}</strong>
+          </div>
+          <div>
+            <span>所属公司</span><strong>{{ amountCurrent?.orgName || '—' }}</strong>
+          </div>
+        </div>
+        <el-alert
+          title="金额权限独立于角色、岗位和 OA；未进入白名单时默认不能查看或编辑金额。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <el-form label-position="top" class="amount-access-form">
+          <el-form-item label="金额权限 *">
+            <el-radio-group v-model="amountForm.level" class="amount-access-levels">
+              <el-radio-button value="none">无权限</el-radio-button>
+              <el-radio-button value="view">仅查看</el-radio-button>
+              <el-radio-button value="edit" :disabled="Number(amountCurrent?.statusValue) !== 1"
+                >可编辑</el-radio-button
+              >
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="授权或变更原因 *">
+            <el-input
+              v-model="amountForm.grantReason"
+              type="textarea"
+              :rows="3"
+              maxlength="255"
+              show-word-limit
+              placeholder="请填写业务负责人确认、取消授权或其他变更原因"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="amountDialog = false">取消</el-button>
+          <el-button type="primary" :loading="amountSaving" @click="saveAmountAccess"
+            >保存</el-button
+          >
+        </template>
+      </el-dialog>
     </template>
   </section>
 </template>

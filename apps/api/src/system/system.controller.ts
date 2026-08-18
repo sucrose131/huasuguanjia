@@ -42,7 +42,7 @@ export class SystemController {
   @Get('user-options')
   @RequirePermissions('system:view', 'system:2:view')
   userOptions(@CurrentUser() user: AuthUser) {
-    return this.service.userOptions(user.organizationIds);
+    return this.service.userOptions(user.authorizedOrganizations?.map((item) => item.id));
   }
 
   @Post('users')

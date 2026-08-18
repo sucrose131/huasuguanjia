@@ -57,7 +57,7 @@ export class SystemService {
   }
 
   async roles() {
-    const [roles, roleMenus, userRoles, menus, statusMap, scopeMap] = await Promise.all([
+    const [roles, roleMenus, userRoles, menus, statusMap] = await Promise.all([
       this.prisma.hspsi_sys_role.findMany({ where: { deleted_at: null }, orderBy: { id: 'asc' } }),
       this.prisma.hspsi_sys_role_menu.findMany(),
       this.prisma.hspsi_sys_user_role.findMany(),
@@ -66,7 +66,6 @@ export class SystemService {
         orderBy: [{ parent_id: 'asc' }, { sort: 'asc' }, { id: 'asc' }],
       }),
       this.dictionary('enabled_status'),
-      this.dictionary('role_scope_type'),
     ]);
     const actorMap = await this.userNames(
       roles.flatMap((role) => [role.created_by, role.updated_by]),
@@ -100,8 +99,6 @@ export class SystemService {
         code: role.code,
         statusValue: role.status ?? 1,
         status: statusMap.get(String(role.status ?? 1)) ?? String(role.status ?? 1),
-        dataScopeValue: role.data_scope_type,
-        dataScope: scopeMap.get(String(role.data_scope_type)) ?? String(role.data_scope_type),
         menuIds: assignedIds.filter((id) => menuMap.get(id)?.type !== 3),
         menuPermissions,
         actionPermissions,
@@ -150,9 +147,7 @@ export class SystemService {
   async createRole(body: Body, userId: string) {
     const name = this.text(body.name, '角色名称', 1, 50);
     const status = this.integer(body.status, '启用状态', 1);
-    const dataScope = this.integer(body.dataScope, '默认数据范围', 1);
-    if (![1, 2].includes(status) || ![1, 2, 3, 4, 5].includes(dataScope))
-      throw new BadRequestException('角色状态或数据范围无效');
+    if (![1, 2].includes(status)) throw new BadRequestException('角色状态无效');
     if (await this.prisma.hspsi_sys_role.findFirst({ where: { name, deleted_at: null } }))
       throw new ConflictException('角色名称已存在');
     const menuIds = await this.roleMenuIds(body);
@@ -163,7 +158,6 @@ export class SystemService {
           name,
           code: `role-${Date.now()}`,
           status,
-          data_scope_type: dataScope,
           created_by: actorId,
           updated_by: actorId,
         },
@@ -185,11 +179,9 @@ export class SystemService {
     if (!old) throw new NotFoundException('角色不存在');
     const name = this.text(body.name ?? old.name, '角色名称', 1, 50);
     const status = this.integer(body.status ?? old.status ?? 1, '启用状态', 1);
-    const dataScope = this.integer(body.dataScope ?? old.data_scope_type, '默认数据范围', 1);
     if (old.code === 'admin' && (name !== old.name || status !== 1))
       throw new BadRequestException('系统管理员角色不允许改名或停用');
-    if (![1, 2].includes(status) || ![1, 2, 3, 4, 5].includes(dataScope))
-      throw new BadRequestException('角色状态或数据范围无效');
+    if (![1, 2].includes(status)) throw new BadRequestException('角色状态无效');
     const duplicate = await this.prisma.hspsi_sys_role.findFirst({
       where: { name, id: { not: roleId }, deleted_at: null },
     });
@@ -201,7 +193,7 @@ export class SystemService {
     await this.prisma.$transaction(async (tx) => {
       await tx.hspsi_sys_role.update({
         where: { id: roleId },
-        data: { name, status, data_scope_type: dataScope, updated_by: BigInt(userId) },
+        data: { name, status, updated_by: BigInt(userId) },
       });
       if (menuIds) {
         await tx.hspsi_sys_role_menu.deleteMany({ where: { role_id: roleId } });
@@ -215,21 +207,28 @@ export class SystemService {
   }
 
   async users() {
-    const [users, userRoles, roles, organizations, departments, amountAccessRows, orgScopes, statusMap, scopeMap] =
-      await Promise.all([
-        this.prisma.hspsi_sys_user.findMany({
-          where: { deleted_at: null },
-          orderBy: { id: 'asc' },
-        }),
-        this.prisma.hspsi_sys_user_role.findMany(),
-        this.prisma.hspsi_sys_role.findMany({ where: { deleted_at: null } }),
-        this.prisma.hspsi_basic_organization.findMany({ where: { deleted_at: null } }),
-        this.prisma.hspsi_basic_dept.findMany({ where: { deleted_at: null } }),
-        this.prisma.hspsi_sys_user_amount_access.findMany(),
-        this.prisma.hspsi_sys_user_org_scope.findMany(),
-        this.dictionary('system_account_status'),
-        this.dictionary('role_scope_type'),
-      ]);
+    const [
+      users,
+      userRoles,
+      roles,
+      organizations,
+      departments,
+      amountAccessRows,
+      authorizedOrgs,
+      statusMap,
+    ] = await Promise.all([
+      this.prisma.hspsi_sys_user.findMany({
+        where: { deleted_at: null },
+        orderBy: { id: 'asc' },
+      }),
+      this.prisma.hspsi_sys_user_role.findMany(),
+      this.prisma.hspsi_sys_role.findMany({ where: { deleted_at: null } }),
+      this.prisma.hspsi_basic_organization.findMany({ where: { deleted_at: null } }),
+      this.prisma.hspsi_basic_dept.findMany({ where: { deleted_at: null } }),
+      this.prisma.hspsi_sys_user_amount_access.findMany(),
+      this.prisma.hspsi_sys_user_authorized_org.findMany(),
+      this.dictionary('system_account_status'),
+    ]);
     const staffIds = users.flatMap((user) => (user.staff_id ? [user.staff_id] : []));
     const staffs = staffIds.length
       ? await this.prisma.hspsi_basic_staff.findMany({
@@ -255,7 +254,6 @@ export class SystemService {
         .filter((item) => BigInt(item.user_id) === user.id)
         .map((item) => roleMap.get(item.role_id))
         .filter(Boolean) as typeof roles;
-      const scopeValues = assignedRoles.map((role) => role.data_scope_type);
       const configuredAmountAccess = amountAccessRows.find((item) => item.user_id === user.id);
       const staff = user.staff_id ? staffMap.get(String(user.staff_id)) : undefined;
       const amountAccess =
@@ -265,15 +263,6 @@ export class SystemService {
               configuredAmountAccess.can_edit_amount,
             )
           : this.amountAccess.fromFlags(0, 0);
-      const effectiveScope = scopeValues.includes(1)
-        ? 1
-        : scopeValues.includes(2)
-          ? 2
-          : scopeValues.includes(3)
-            ? 3
-            : scopeValues.includes(4)
-              ? 4
-              : 5;
       return {
         id: String(user.id),
         account: user.username,
@@ -287,19 +276,19 @@ export class SystemService {
         positionId: staff?.post_id ? String(staff.post_id) : '',
         positionName: staff?.post_id ? (positionMap.get(String(staff.post_id)) ?? '') : '',
         identitySource: user.staff_id ? 'OA同步人员' : '本地账号',
-        authorizedOrgIds: orgScopes
+        authorizedOrgIds: authorizedOrgs
           .filter((scope) => scope.user_id === user.id)
           .map((scope) => String(scope.org_id)),
+        authorizedOrgNames: authorizedOrgs
+          .filter((scope) => scope.user_id === user.id)
+          .map((scope) => orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`),
         roleIds: assignedRoles.map((role) => String(role.id)),
         roleNames: assignedRoles.map((role) => role.name),
         amountAccess: amountAccess.level,
         canViewAmount: amountAccess.canViewAmount,
         canEditAmount: amountAccess.canEditAmount,
         amountGrantReason: configuredAmountAccess?.grant_reason ?? '',
-        dataScope: {
-          scopeTypeValue: effectiveScope,
-          scopeType: scopeMap.get(String(effectiveScope)) ?? '',
-        },
+        authorizationSource: user.staff_id ? 'OA字典映射' : '本地系统账号',
         phone: user.phone ?? '',
         statusValue: user.status ?? 1,
         status: statusMap.get(String(user.status ?? 1)) ?? String(user.status ?? 1),
@@ -320,39 +309,43 @@ export class SystemService {
   }
 
   async userOptions(organizationIds?: string[]) {
-    const [roles, organizations, departments, staff, memberships, positions, positionBelongs] = await Promise.all([
-      this.prisma.hspsi_sys_role.findMany({
-        where: { status: 1, deleted_at: null },
-        orderBy: { id: 'asc' },
-      }),
-      this.prisma.hspsi_basic_organization.findMany({
-        where: { operation_status: 1, deleted_at: null },
-        orderBy: [{ sort: 'asc' }, { org_id: 'asc' }],
-      }),
-      this.prisma.hspsi_basic_dept.findMany({
-        where: { status: 1, deleted_at: null },
-        orderBy: [{ sort: 'asc' }, { dept_id: 'asc' }],
-      }),
-      this.prisma.hspsi_basic_staff.findMany({
-        where: { status: 1, deleted_at: null, post_id: { gt: 0 } },
-        orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      }),
-      this.prisma.hspsi_basic_staff_organizations.findMany({
-        where: { type: 1, deleted_at: null },
-      }),
-      this.prisma.hspsi_basic_position.findMany({
-        where: { status: 1, deleted_at: null },
-      }),
-      this.prisma.hspsi_basic_position_belongs.findMany(),
-    ]);
+    const [roles, organizations, departments, staff, memberships, positions, positionBelongs] =
+      await Promise.all([
+        this.prisma.hspsi_sys_role.findMany({
+          where: { status: 1, deleted_at: null },
+          orderBy: { id: 'asc' },
+        }),
+        this.prisma.hspsi_basic_organization.findMany({
+          where: { operation_status: 1, deleted_at: null },
+          orderBy: [{ sort: 'asc' }, { org_id: 'asc' }],
+        }),
+        this.prisma.hspsi_basic_dept.findMany({
+          where: { status: 1, deleted_at: null },
+          orderBy: [{ sort: 'asc' }, { dept_id: 'asc' }],
+        }),
+        this.prisma.hspsi_basic_staff.findMany({
+          where: { status: 1, deleted_at: null, post_id: { gt: 0 } },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        }),
+        this.prisma.hspsi_basic_staff_organizations.findMany({
+          where: { type: 1, deleted_at: null },
+        }),
+        this.prisma.hspsi_basic_position.findMany({
+          where: { status: 1, deleted_at: null },
+        }),
+        this.prisma.hspsi_basic_position_belongs.findMany(),
+      ]);
     const allowed = new Set(organizationIds ?? organizations.map((org) => String(org.org_id)));
     const orgMap = new Map(organizations.map((org) => [String(org.org_id), org.name]));
     const deptMap = new Map(departments.map((dept) => [String(dept.dept_id), dept]));
     const membershipMap = new Map(memberships.map((item) => [String(item.staff_id), item]));
     const positionMap = new Map(positions.map((item) => [String(item.id), item]));
-    const positionBelongsKeys = new Set(positionBelongs.map((item) =>
-      `${item.position_id}:${item.account_set_id}:${item.org_type}:${item.outer_ref_id}`,
-    ));
+    const positionBelongsKeys = new Set(
+      positionBelongs.map(
+        (item) =>
+          `${item.position_id}:${item.account_set_id}:${item.org_type}:${item.outer_ref_id}`,
+      ),
+    );
     const staffOptions = staff.flatMap((item) => {
       const membership = membershipMap.get(String(item.id));
       const position = positionMap.get(String(item.post_id));
@@ -361,29 +354,33 @@ export class SystemService {
       const orgId = membership.org_type === 1 ? membership.org_id : dept?.org_id;
       if (!orgId || !allowed.has(String(orgId))) return [];
       const organization = organizations.find((org) => org.org_id === orgId);
-      const targetOuterRefId = membership.org_type === 1
-        ? organization?.outer_ref_id
-        : dept?.outer_ref_id;
-      if (!targetOuterRefId || !positionBelongsKeys.has(
-        `${position.id}:${item.account_set_id}:${membership.org_type}:${targetOuterRefId}`,
-      )) return [];
-      return [{
-        id: String(item.id),
-        name: item.name,
-        mobile: item.mobile,
-        orgId: String(orgId),
-        orgName: orgMap.get(String(orgId)) ?? '',
-        deptId: dept ? String(dept.dept_id) : '',
-        positionId: String(position.id),
-        positionName: position.name,
-      }];
+      const targetOuterRefId =
+        membership.org_type === 1 ? organization?.outer_ref_id : dept?.outer_ref_id;
+      if (
+        !targetOuterRefId ||
+        !positionBelongsKeys.has(
+          `${position.id}:${item.account_set_id}:${membership.org_type}:${targetOuterRefId}`,
+        )
+      )
+        return [];
+      return [
+        {
+          id: String(item.id),
+          name: item.name,
+          mobile: item.mobile,
+          orgId: String(orgId),
+          orgName: orgMap.get(String(orgId)) ?? '',
+          deptId: dept ? String(dept.dept_id) : '',
+          positionId: String(position.id),
+          positionName: position.name,
+        },
+      ];
     });
     return {
       roles: roles.map((role) => ({
         id: String(role.id),
         name: role.name,
         code: role.code,
-        dataScope: role.data_scope_type,
       })),
       organizations: organizations.map((org) => ({ id: String(org.org_id), name: org.name })),
       departments: departments.map((dept) => ({
@@ -395,56 +392,11 @@ export class SystemService {
     };
   }
 
-  private async validateUserRelations(body: Body, editingId?: bigint) {
+  private async validateUserRelations(body: Body) {
     const staffId = body.staffId ? BigInt(this.integer(body.staffId, '关联人员', 1)) : null;
+    if (staffId) throw new BadRequestException('OA人员账号由组织同步自动创建和授权');
     let orgId = BigInt(this.integer(body.orgId, '所属公司', 1));
     let deptId = body.deptId ? BigInt(this.integer(body.deptId, '所属部门', 1)) : null;
-    if (staffId) {
-      const duplicate = await this.prisma.hspsi_sys_user.findFirst({
-        where: { staff_id: staffId, ...(editingId ? { id: { not: editingId } } : {}), deleted_at: null },
-      });
-      if (duplicate) throw new ConflictException('该 OA 人员已经关联其他登录账号');
-      const [staff, membership] = await Promise.all([
-        this.prisma.hspsi_basic_staff.findFirst({
-          where: { id: staffId, status: 1, deleted_at: null, post_id: { gt: 0 } },
-        }),
-        this.prisma.hspsi_basic_staff_organizations.findFirst({
-          where: { staff_id: staffId, type: 1, deleted_at: null },
-        }),
-      ]);
-      if (!staff || !membership) throw new BadRequestException('关联人员的主组织或岗位不完整');
-      const position = await this.prisma.hspsi_basic_position.findFirst({
-        where: { id: staff.post_id, status: 1, deleted_at: null },
-      });
-      if (!position) throw new BadRequestException('关联人员的岗位不存在或已停用');
-      let targetOuterRefId = '';
-      if (membership.org_type === 1) {
-        const targetOrganization = await this.prisma.hspsi_basic_organization.findFirst({
-          where: { org_id: membership.org_id, operation_status: 1, deleted_at: null },
-        });
-        if (!targetOrganization) throw new BadRequestException('关联人员所属组织不存在或已停用');
-        orgId = targetOrganization.org_id;
-        deptId = null;
-        targetOuterRefId = targetOrganization.outer_ref_id;
-      } else if (membership.org_type === 2) {
-        const department = await this.prisma.hspsi_basic_dept.findFirst({
-          where: { dept_id: membership.org_id, status: 1, deleted_at: null },
-        });
-        if (!department) throw new BadRequestException('关联人员的所属部门不存在或已停用');
-        orgId = department.org_id;
-        deptId = department.dept_id;
-        targetOuterRefId = department.outer_ref_id;
-      } else throw new BadRequestException('关联人员的主组织类型无效');
-      const positionBelongs = await this.prisma.hspsi_basic_position_belongs.findFirst({
-        where: {
-          position_id: position.id,
-          account_set_id: staff.account_set_id,
-          org_type: membership.org_type,
-          outer_ref_id: targetOuterRefId,
-        },
-      });
-      if (!positionBelongs) throw new BadRequestException('关联人员的岗位不属于其主组织或部门');
-    }
     const organization = await this.prisma.hspsi_basic_organization.findFirst({
       where: { org_id: orgId, operation_status: 1, deleted_at: null },
     });
@@ -474,8 +426,8 @@ export class SystemService {
         ),
       ),
     ];
-    if (roles.some((role) => role.data_scope_type === 4)) {
-      if (!authorizedOrgIds.length) throw new BadRequestException('指定组织数据范围至少选择一个组织');
+    if (!authorizedOrgIds.length) throw new BadRequestException('本地系统账号至少选择一个授权组织');
+    {
       const authorized = await this.prisma.hspsi_basic_organization.findMany({
         where: {
           org_id: { in: authorizedOrgIds.map(BigInt) },
@@ -484,16 +436,15 @@ export class SystemService {
         },
       });
       if (authorized.length !== authorizedOrgIds.length)
-        throw new BadRequestException('指定组织中包含不存在、停用或无权授权的组织');
+        throw new BadRequestException('授权组织中包含不存在或已停用的组织');
     }
+    if (!authorizedOrgIds.includes(Number(orgId))) authorizedOrgIds.push(Number(orgId));
     return {
       orgId,
       deptId,
       staffId,
       roleIds,
-      authorizedOrgIds: roles.some((role) => role.data_scope_type === 4)
-        ? authorizedOrgIds
-        : [],
+      authorizedOrgIds,
     };
   }
 
@@ -529,7 +480,7 @@ export class SystemService {
         skipDuplicates: true,
       });
       if (relations.authorizedOrgIds.length)
-        await tx.hspsi_sys_user_org_scope.createMany({
+        await tx.hspsi_sys_user_authorized_org.createMany({
           data: relations.authorizedOrgIds.map((orgId) => ({
             user_id: user.id,
             org_id: BigInt(orgId),
@@ -548,12 +499,14 @@ export class SystemService {
       where: { id: targetId, deleted_at: null },
     });
     if (!old) throw new NotFoundException('用户不存在');
+    if (old.staff_id)
+      throw new BadRequestException('OA同步人员的身份、角色和组织授权不能在本地手工修改');
     const name = this.text(body.name ?? old.nickname ?? old.username, '用户姓名', 1, 50);
     const status = this.integer(body.status ?? old.status ?? 1, '账号状态', 1);
     if (old.username === 'admin' && status !== 1)
       throw new BadRequestException('admin账号不允许禁用');
     if (![1, 2].includes(status)) throw new BadRequestException('账号状态无效');
-    const relations = await this.validateUserRelations(body, targetId);
+    const relations = await this.validateUserRelations(body);
     const password = String(body.password ?? '');
     if (password && (password.length < 6 || password.length > 64))
       throw new BadRequestException('重置密码长度应为6至64个字符');
@@ -576,9 +529,9 @@ export class SystemService {
         data: relations.roleIds.map((roleId) => ({ user_id: Number(targetId), role_id: roleId })),
         skipDuplicates: true,
       });
-      await tx.hspsi_sys_user_org_scope.deleteMany({ where: { user_id: targetId } });
+      await tx.hspsi_sys_user_authorized_org.deleteMany({ where: { user_id: targetId } });
       if (relations.authorizedOrgIds.length)
-        await tx.hspsi_sys_user_org_scope.createMany({
+        await tx.hspsi_sys_user_authorized_org.createMany({
           data: relations.authorizedOrgIds.map((orgId) => ({
             user_id: targetId,
             org_id: BigInt(orgId),
