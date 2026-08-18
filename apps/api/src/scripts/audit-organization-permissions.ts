@@ -5,7 +5,8 @@ import { PrismaClient } from '@prisma/client';
 if (!process.env.DATABASE_URL) {
   const env = readFileSync(resolve(process.cwd(), '.env'), 'utf8');
   const line = env.split(/\r?\n/).find((item) => item.startsWith('DATABASE_URL='));
-  if (line) process.env.DATABASE_URL = line.slice('DATABASE_URL='.length).replace(/^['"]|['"]$/g, '');
+  if (line)
+    process.env.DATABASE_URL = line.slice('DATABASE_URL='.length).replace(/^['"]|['"]$/g, '');
 }
 
 const prisma = new PrismaClient();
@@ -97,7 +98,7 @@ async function main() {
     `),
     invalidAuthorizedOrganizations: await query(`
       SELECT scope.user_id, scope.org_id
-      FROM hspsi_sys_user_org_scope scope
+      FROM hspsi_sys_user_authorized_org scope
       LEFT JOIN hspsi_sys_user user
         ON user.id = scope.user_id AND user.deleted_at IS NULL AND user.status = 1
       LEFT JOIN hspsi_basic_organization org
@@ -120,11 +121,13 @@ async function main() {
     Object.entries(checks).map(([name, rows]) => [name, { count: rows.length, rows }]),
   );
   const issueCount = Object.values(checks).reduce((sum, rows) => sum + rows.length, 0);
-  console.log(JSON.stringify(
-    { generatedAt: new Date().toISOString(), issueCount, checks: output },
-    (_, value) => (typeof value === 'bigint' ? value.toString() : value),
-    2,
-  ));
+  console.log(
+    JSON.stringify(
+      { generatedAt: new Date().toISOString(), issueCount, checks: output },
+      (_, value) => (typeof value === 'bigint' ? value.toString() : value),
+      2,
+    ),
+  );
   if (issueCount > 0) process.exitCode = 2;
 }
 

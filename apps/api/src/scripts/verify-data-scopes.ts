@@ -6,7 +6,8 @@ import { PrismaClient } from '@prisma/client';
 if (!process.env.DATABASE_URL) {
   const env = readFileSync(resolve(process.cwd(), '.env'), 'utf8');
   const line = env.split(/\r?\n/).find((item) => item.startsWith('DATABASE_URL='));
-  if (line) process.env.DATABASE_URL = line.slice('DATABASE_URL='.length).replace(/^['"]|['"]$/g, '');
+  if (line)
+    process.env.DATABASE_URL = line.slice('DATABASE_URL='.length).replace(/^['"]|['"]$/g, '');
 }
 
 const prisma = new PrismaClient();
@@ -27,7 +28,7 @@ async function login(username: string) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  const body = await response.json() as any;
+  const body = (await response.json()) as any;
   assert(response.ok, `${username} 登录失败：${body.message ?? response.status}`);
   tokens.push(body.data.token);
   return body.data.token as string;
@@ -37,7 +38,18 @@ async function get(token: string, path: string) {
   const response = await fetch(`${apiBase}${path}`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  const body = await response.json() as any;
+  const body = (await response.json()) as any;
+  assert(response.ok, `${path} 请求失败：${body.message ?? response.status}`);
+  return body.data;
+}
+
+async function post(token: string, path: string, data: Record<string, unknown>) {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const body = (await response.json()) as any;
   assert(response.ok, `${path} 请求失败：${body.message ?? response.status}`);
   return body.data;
 }
@@ -45,8 +57,11 @@ async function get(token: string, path: string) {
 async function main() {
   const organizations = await prisma.hspsi_basic_organization.findMany({
     where: { operation_status: 1, deleted_at: null },
-    select: { org_id: true, parent_id: true },
+    select: { org_id: true },
+    orderBy: { org_id: 'asc' },
+    take: 3,
   });
+  assert(organizations.length >= 3, '至少需要三个启用组织验证切换和拒绝');
   const purchaseMenu = await prisma.hspsi_sys_menu.findFirst({
     where: { code: 'purchase:applications', status: 1, deleted_at: null },
   });
@@ -57,21 +72,21 @@ async function main() {
   assert(purchaseDirectory, '缺少采购管理目录权限测试夹具');
   const passwordHash = await hash(password, 12);
   const fixtures = [
-    { scope: 1, orgId: 6n, specified: [] as bigint[] },
-    { scope: 2, orgId: 1n, specified: [] as bigint[] },
-    { scope: 3, orgId: 6n, specified: [] as bigint[] },
-    { scope: 4, orgId: 6n, specified: [7n] },
-    { scope: 5, orgId: 6n, specified: [] as bigint[] },
+    { name: 'single', orgId: organizations[0]!.org_id, authorized: [organizations[0]!.org_id] },
+    {
+      name: 'multiple',
+      orgId: organizations[0]!.org_id,
+      authorized: organizations.slice(0, 2).map((item) => item.org_id),
+    },
   ];
   const results: Record<string, unknown> = {};
 
   for (const fixture of fixtures) {
     const role = await prisma.hspsi_sys_role.create({
       data: {
-        name: `权限范围验证${fixture.scope}-${stamp}`,
-        code: `verify-scope-${fixture.scope}-${stamp}`,
+        name: `授权组织验证${fixture.name}-${stamp}`,
+        code: `verify-authorized-org-${fixture.name}-${stamp}`,
         status: 1,
-        data_scope_type: fixture.scope,
       },
     });
     createdRoleIds.push(role.id);
@@ -84,9 +99,9 @@ async function main() {
     const user = await prisma.hspsi_sys_user.create({
       data: {
         org_id: fixture.orgId,
-        username: `verify_scope_${fixture.scope}_${stamp}`,
+        username: `verify_org_${fixture.name}_${stamp}`,
         password: passwordHash,
-        nickname: `数据范围${fixture.scope}验证`,
+        nickname: `授权组织${fixture.name}验证`,
         status: 1,
       },
     });
@@ -94,40 +109,35 @@ async function main() {
     await prisma.hspsi_sys_user_role.create({
       data: { user_id: Number(user.id), role_id: Number(role.id) },
     });
-    if (fixture.specified.length)
-      await prisma.hspsi_sys_user_org_scope.createMany({
-        data: fixture.specified.map((orgId) => ({ user_id: user.id, org_id: orgId })),
-      });
+    await prisma.hspsi_sys_user_authorized_org.createMany({
+      data: fixture.authorized.map((orgId) => ({ user_id: user.id, org_id: orgId })),
+    });
 
     const token = await login(user.username);
     const me = await get(token, '/auth/me');
-    const actualIds = new Set<string>(me.organizationIds);
-    if (fixture.scope === 1)
-      assert(actualIds.size === organizations.length, '全部数据范围未包含全部启用组织');
-    if (fixture.scope === 2) {
-      const expected = new Set(['1']);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const org of organizations) {
-          if (!expected.has(String(org.org_id)) && expected.has(String(org.parent_id))) {
-            expected.add(String(org.org_id));
-            changed = true;
-          }
-        }
-      }
-      assert([...expected].every((id) => actualIds.has(id)), '本组织及下级范围计算错误');
+    const actualIds = new Set<string>(
+      (me.authorizedOrganizations ?? []).map((item: { id: string }) => item.id),
+    );
+    assert(
+      actualIds.size === fixture.authorized.length &&
+        fixture.authorized.every((id) => actualIds.has(String(id))),
+      '授权组织列表与关系表不一致',
+    );
+    assert(me.currentOrgId === String(fixture.orgId), '登录时没有默认选择主组织');
+    if (fixture.authorized.length > 1) {
+      const targetOrgId = String(fixture.authorized[1]);
+      const switched = await post(token, '/auth/switch-organization', { orgId: targetOrgId });
+      assert(switched.user.currentOrgId === targetOrgId, '切换组织接口没有更新当前组织');
+      const refreshed = await get(token, '/auth/me');
+      assert(refreshed.currentOrgId === targetOrgId, 'Redis 会话没有持久化当前组织');
+      const rejected = await fetch(`${apiBase}/auth/switch-organization`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ orgId: String(organizations[2]!.org_id) }),
+      });
+      assert(rejected.status === 403, '后端没有拒绝切换到未授权组织');
     }
-    if (fixture.scope === 3)
-      assert(actualIds.size === 1 && actualIds.has('6'), '本组织范围计算错误');
-    if (fixture.scope === 4)
-      assert(actualIds.size === 2 && actualIds.has('6') && actualIds.has('7'), '指定组织范围计算错误');
-    if (fixture.scope === 5) {
-      assert(actualIds.size === 1 && actualIds.has('6'), '本人数据组织范围计算错误');
-      const applications = await get(token, '/purchase/applications');
-      assert((applications.items ?? []).length === 0, '本人数据范围读取了他人创建的采购申请');
-    }
-    results[`scope${fixture.scope}`] = { organizationIds: [...actualIds], passed: true };
+    results[fixture.name] = { authorizedOrganizationIds: [...actualIds], passed: true };
   }
 
   console.log(JSON.stringify({ result: 'PASS', scopes: results }, null, 2));
@@ -148,7 +158,9 @@ main()
       } catch {}
     }
     if (createdUserIds.length) {
-      await prisma.hspsi_sys_user_org_scope.deleteMany({ where: { user_id: { in: createdUserIds } } });
+      await prisma.hspsi_sys_user_authorized_org.deleteMany({
+        where: { user_id: { in: createdUserIds } },
+      });
       await prisma.hspsi_sys_user_role.deleteMany({
         where: { user_id: { in: createdUserIds.map(Number) } },
       });

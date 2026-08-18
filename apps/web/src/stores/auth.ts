@@ -5,6 +5,9 @@ export interface User {
   username: string;
   orgId: string | null;
   deptId: string | null;
+  currentOrgId: string;
+  currentOrgName: string;
+  authorizedOrganizations: Array<{ id: string; name: string }>;
   permissions: string[];
 }
 export interface Menu {
@@ -40,6 +43,7 @@ export const useAuthStore = defineStore('auth', {
     token: localStorage.getItem('hspsi_token') ?? '',
     menus: storedMenus(),
     amountAccess: defaultAmountAccess(),
+    switchingOrganization: false,
   }),
   actions: {
     async login(username: string, password: string, remember: boolean) {
@@ -74,6 +78,21 @@ export const useAuthStore = defineStore('auth', {
       this.menus = result.menus;
       localStorage.setItem('hspsi_menus', JSON.stringify(result.menus));
     },
+    async switchOrganization(orgId: string) {
+      if (!this.user || orgId === this.user.currentOrgId) return;
+      this.switchingOrganization = true;
+      try {
+        const result = (await api.post('/auth/switch-organization', { orgId })) as {
+          user: User;
+          menus: Menu[];
+        };
+        this.user = result.user;
+        this.menus = result.menus;
+        localStorage.setItem('hspsi_menus', JSON.stringify(result.menus));
+      } finally {
+        this.switchingOrganization = false;
+      }
+    },
     async logout() {
       try {
         await api.post('/auth/logout');
@@ -82,6 +101,7 @@ export const useAuthStore = defineStore('auth', {
         this.user = null;
         this.menus = [];
         this.amountAccess = defaultAmountAccess();
+        this.switchingOrganization = false;
         localStorage.removeItem('hspsi_token');
         localStorage.removeItem('hspsi_menus');
         localStorage.removeItem('hspsi_amount_access');

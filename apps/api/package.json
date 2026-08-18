@@ -14,6 +14,7 @@
     "bootstrap:admin": "tsx src/scripts/bootstrap-admin.ts",
     "seed:menus": "tsx src/scripts/seed-current-menus.ts",
     "backfill:purchase-refunds": "tsx src/scripts/backfill-purchase-refunds.ts",
+    "backfill:oa-staff-users": "tsx src/scripts/backfill-oa-staff-login-users.ts",
     "verify:document-chain": "tsx src/scripts/verify-document-chain.ts",
     "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts",
     "verify:organization-permissions": "tsx src/scripts/verify-organization-permissions.ts",

@@ -6,8 +6,9 @@ export interface AuthUser {
   staffId?: string | null;
   positionId?: string | null;
   positionName?: string | null;
-  dataScopeType?: number;
-  organizationIds?: string[];
+  currentOrgId?: string;
+  currentOrgName?: string;
+  authorizedOrganizations?: Array<{ id: string; name: string }>;
   isSuperAdmin?: boolean;
   permissions: string[];
 }

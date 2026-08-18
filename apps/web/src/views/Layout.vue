@@ -174,6 +174,10 @@ async function logout() {
   await auth.logout();
   router.push('/login');
 }
+async function switchOrganization(orgId: string) {
+  await auth.switchOrganization(orgId);
+  router.go(0);
+}
 function navigate(path?: string | null) {
   if (path) {
     router.push(path);
@@ -282,6 +286,23 @@ function navigate(path?: string | null) {
           >
         </div>
         <div class="top-actions">
+          <div class="organization-switcher desktop-only">
+            <span>当前组织</span>
+            <el-select
+              :model-value="auth.user?.currentOrgId"
+              :loading="auth.switchingOrganization"
+              :disabled="(auth.user?.authorizedOrganizations?.length ?? 0) <= 1"
+              size="small"
+              @change="switchOrganization"
+            >
+              <el-option
+                v-for="organization in auth.user?.authorizedOrganizations ?? []"
+                :key="organization.id"
+                :label="organization.name"
+                :value="organization.id"
+              />
+            </el-select>
+          </div>
           <button title="刷新数据" @click="router.go(0)">
             <el-icon><RefreshRight /></el-icon>
           </button>
@@ -550,6 +571,22 @@ function navigate(path?: string | null) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.organization-switcher {
+  width: 210px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+}
+.organization-switcher > span {
+  flex: none;
+  color: #8a94a4;
+  font-size: 10px;
+}
+.organization-switcher :deep(.el-select) {
+  min-width: 0;
+  flex: 1;
 }
 .top-actions button,
 .mobile-menu {
