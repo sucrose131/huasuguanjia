@@ -110,8 +110,8 @@ export class DashboardService {
     let lowStockItem: Record<string, unknown> | null = null;
     if (alertRows[0]) {
       const [goods, warehouse] = await Promise.all([
-        this.prisma.hspsi_goods_info.findUnique({ where: { goods_id: alertRows[0].goods_id } }),
-        this.prisma.hspsi_basic_warehouse.findUnique({
+        this.prisma.hspsi_goods_info.findFirst({ where: { goods_id: alertRows[0].goods_id } }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
           where: { warehouse_id: Number(alertRows[0].warehouse_id) },
         }),
       ]);
@@ -504,8 +504,8 @@ export class DashboardService {
     }));
     if (stockAlert) {
       const [goods, warehouse] = await Promise.all([
-        this.prisma.hspsi_goods_info.findUnique({ where: { goods_id: stockAlert.goods_id } }),
-        this.prisma.hspsi_basic_warehouse.findUnique({
+        this.prisma.hspsi_goods_info.findFirst({ where: { goods_id: stockAlert.goods_id } }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
           where: { warehouse_id: Number(stockAlert.warehouse_id) },
         }),
       ]);
