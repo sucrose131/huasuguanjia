@@ -77,16 +77,51 @@ typecheck 无新增错误；requisition spec 4/4 通过。
 
 ### 遗留
 
-- 前端 `RequisitionApplicationForm` 仍自动填主身份 staff_id；后端已拦截错配，但多账套用户在非主账套组织创建领用申请会被拦截无法提交，需后续前端按单据组织解析对应身份（或提供代申请入口）才能真正使用多账套。
+- 前端仍自动填主身份 staff_id，多账套用户在其他账套组织下创建被拦截。**本日已由下述第五节「多账套按组织/部门匹配身份」补全。**
 
-## 五、遗留问题
+## 五、多账套用户按组织/部门匹配OA员工身份（2026-08-19 追加）
+
+### 业务口径（业务确认）
+
+- 用户选组织（授权组织范围）后，按「单据组织→账套」解析该用户在该账套的 OA 员工身份：找到则自动填写领用人（=登录用户，锁定）和部门（=该员工主部门），提交走该账套身份与表单（各账套各走各的 OA 流）；
+- 找不到 → 可保存草稿（领用人/部门留空），提交被后端拦截；
+- 部门有条件跟随：ORGSEQ 优先单据所选部门（须属于该员工，主/兼任），否则回退主部门。
+
+### 实现
+
+**后端**
+- `RequisitionService.resolveApplicantIdentity(db, userId, orgId)`：orgId → 组织账套 → `hspsi_sys_user_oa_staff` → staff + 主部门；
+- 新增 `GET /requisitions/current-applicant?orgId=`：返回 `{ found, staffId, name, accountSetId, outerRefId, outStaffId, deptId, deptName, deptOuterRefId }`；
+- `saveApplication`：去掉 controller 注入主身份（`user.staffId`）；账套以单据组织为准；提交时解析不到身份报「当前账号未关联该组织的OA员工，无法提交审批」；草稿允许领用人/部门为空（`validateApplicationReferences` 放宽 `allowEmptyApplicant`）；编辑锁定组织（跨账套迁移禁止）；
+- `applicationFormOptions` 改收前端 orgId（修复此前错用登录用户主身份组织的 bug）；
+- `requisition-oa-approval.service` ORGSEQ 按「所选部门属于该员工则用，否则回退主部门」。
+
+**前端** `RequisitionApplicationForm.vue`
+- 组织下拉 = 用户授权组织（`auth.user.authorizedOrganizations`）；
+- 选组织/创建时调 `current-applicant` 自动填领用人（disabled）+ 主部门；找不到则留空并提示，签名控件禁用，可保存草稿；
+- validate：草稿不再强制领用人/部门；提交仍要求完整。
+
+### 验证
+
+- typecheck：API/Web 均无新增错误；
+- 测试：requisition 两个 spec 17/17，OA 相关 63/63 通过；
+- 真实数据（苏碧安 user_id=55）：
+
+| 组织 | currentApplicant 结果 |
+|---|---|
+| 账套1 组织(org1) | found=true，staff=6、V0006/0000000007、财务部(0002) |
+| 账套2 组织(org13) | found=true，staff=204、V0011/0000000038、财务部(0003) |
+| 账套3 组织(org15) | found=false（无可用账套3身份） |
+| 测试公司(org18，未关联账套) | found=false |
+
+## 六、遗留问题
 
 1. 真实 OA 发起联调待 DEV 外网环境：账套1/2 各走一张单据确认 OA 侧表单渲染（尤其 `FinPeopleSelect` 人员控件，依赖已修复的 `out_staff_id`）。
 2. 表单配置更新时机暂不处理（业务已确认先一次性填充）；重新填充后需调用 `OaFormMappingService.invalidate()` 清缓存。
 3. 账套3 OA 侧 `idRelation.staffId` 等于 memberId（`AAC61415` 账套），已确认不接入，无当前影响。
-4. 领用申请前端按组织解析身份待后续处理（见上「遗留」）；`/auth/switch-organization` 接口在当前分支不存在、前端无组织切换入口，与 08-17 文档记录不符，需业务确认。
+4. `/auth/switch-organization` 接口在当前分支不存在、前端无组织切换入口，与 08-17 文档记录不符，需业务确认。
 
-## 六、Git
+## 七、Git
 
 - 分支：`refactor/0819-split-generic-pages`
-- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））；`05e6eb3`（fix(api): 领用申请OA提交按单据组织账套解析提交人，拦截跨账套错配）
+- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））；`05e6eb3`（fix(api): 领用申请OA提交按单据组织账套解析提交人，拦截跨账套错配）；`d8cd8b1`（feat(api+web): 领用申请按单据组织账套匹配OA员工身份（多账套））
