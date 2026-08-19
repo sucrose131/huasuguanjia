@@ -1,0 +1,46 @@
+import type { BusinessDocumentConfig } from '../business-document-config';
+import { api } from '@/api';
+import { ElMessage } from 'element-plus';
+import InventoryOverflowInputForm from '../forms/InventoryOverflowInputForm.vue';
+
+export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
+  key: 'inventory/overflow-inputs',
+  title: '盘盈入库单',
+  endpoint: '/inventory/overflow-inputs',
+  no: 'businessNo',
+  columns: [
+    { prop: 'businessNo', label: '入库单号', minWidth: 165 },
+    { prop: 'sourceOverflowNo', label: '来源盘盈单', minWidth: 150 },
+    { prop: 'orgName', label: '组织', minWidth: 110 },
+    { prop: 'warehouseName', label: '仓库', minWidth: 120 },
+    { prop: 'date', label: '入库日期', minWidth: 110, kind: 'date' },
+    { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number' },
+    { prop: 'amount', label: '金额', minWidth: 110, kind: 'money' },
+    { prop: 'status', label: '状态', minWidth: 110, kind: 'status' },
+    { prop: 'createdByName', label: '创建人', minWidth: 100 },
+    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+  ],
+  dictionaries: [],
+  creatable: false,
+  formComponent: InventoryOverflowInputForm,
+  openFromRoute: async (query, ctx) => {
+    if (query.documentId) {
+      const detail: any = await api.get(`/inventory/overflow-inputs/${query.documentId}`);
+      ctx.openView(detail);
+    }
+  },
+  rowActions: [
+    { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
+    {
+      key: 'confirm',
+      label: '确认入库',
+      kind: 'success',
+      show: (row) => Number(row.status) === 0,
+      confirm: '确认后将库存过账，是否继续？',
+      handler: async (row) => {
+        await api.post(`/inventory/overflow-inputs/${row.id}/confirm`, { comment: '确认入库' });
+        ElMessage.success('已确认入库');
+      },
+    },
+  ],
+};

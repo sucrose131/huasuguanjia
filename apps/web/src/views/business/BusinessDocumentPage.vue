@@ -120,8 +120,11 @@ watch(
 onMounted(async () => {
   await loadDicts();
   await load();
-  if (String(route.query.create ?? '') === '1') openCreate();
-  else if (props.config.openFromRoute && Object.keys(route.query).length) {
+  if (String(route.query.create ?? '') === '1') {
+    const initial: Record<string, any> = { ...route.query };
+    delete initial.create;
+    openCreate(initial);
+  } else if (props.config.openFromRoute && Object.keys(route.query).length) {
     await props.config.openFromRoute(route.query, ctx);
   }
 });

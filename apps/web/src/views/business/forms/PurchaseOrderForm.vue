@@ -1,0 +1,488 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { api } from '@/api';
+import { useAuthStore } from '@/stores/auth';
+import { dateText } from '@/utils/format';
+import RemoteSelect from '@/components/RemoteSelect.vue';
+
+const props = defineProps<{
+  modelValue: Record<string, any>;
+  mode: 'create' | 'edit' | 'view';
+}>();
+const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
+
+const auth = useAuthStore();
+const form = computed(() => props.modelValue);
+const saving = ref(false);
+const options = reactive<Record<string, any>>({
+  orgs: [],
+  depts: [],
+  warehouses: [],
+  vendors: [],
+  units: [],
+});
+const dicts = reactive<Record<string, any[]>>({});
+const isView = computed(() => props.mode === 'view');
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+
+function blankLine() {
+  return {
+    goodsId: '',
+    skuId: '',
+    unitType: 0,
+    quantity: 1,
+    price: 0,
+    goodsCode: '',
+    goodsName: '',
+    skuSpec: '',
+    remark: '',
+  };
+}
+
+function lineAmount(line: any) {
+  return Number((Number(line.quantity ?? 0) * Number(line.price ?? 0)).toFixed(2));
+}
+
+const orderTotal = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + lineAmount(line), 0),
+);
+const orderQuantity = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.quantity ?? 0), 0),
+);
+
+async function loadDicts() {
+  const [arrivalType, settlementType] = await Promise.all([
+    api.get('/dictionaries/purchase_arrival_type').catch(() => []),
+    api.get('/dictionaries/purchase_settlement_type').catch(() => []),
+  ]);
+  dicts.purchase_arrival_type = arrivalType as any[];
+  dicts.purchase_settlement_type = settlementType as any[];
+}
+
+async function loadOrgScopedOptions(orgId: unknown) {
+  if (!orgId) {
+    options.depts = [];
+    options.warehouses = [];
+    return;
+  }
+  const [depts, warehouses] = await Promise.all([
+    api.get('/base-data/departments/options', { params: { orgId } }).catch(() => []),
+    api.get('/base-data/warehouses/options', { params: { orgId } }).catch(() => []),
+  ]);
+  options.depts = depts as any[];
+  options.warehouses = warehouses as any[];
+}
+
+function organizationChanged() {
+  form.value.deptId = '';
+  form.value.warehouseId = '';
+  loadOrgScopedOptions(form.value.orgId);
+}
+
+async function searchGoodsOptions(keyword: string) {
+  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
+  return (r.items ?? []).map((g: any) => ({
+    value: g.id,
+    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+  }));
+}
+
+async function lineGoodsChanged(line: any) {
+  line.skuId = '';
+  line.unitType = 0;
+  line.goodsCode = '';
+  line.goodsName = '';
+  line.skuSpec = '';
+  if (!line.goodsId) return;
+  const g: any = await api.get(`/goods/${line.goodsId}`);
+  const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
+  line.skuId = sku?.id ?? '';
+  line.unitType = sku?.unitType ?? 0;
+  line.goodsCode = g.queryCode ?? '';
+  line.goodsName = g.goodsName ?? '';
+  line.skuSpec = sku?.specModels ?? '';
+  if (canEditAmount.value && !Number(line.price)) {
+    line.price = Number(sku?.costPrice ?? g.costPrice ?? 0);
+  }
+}
+
+async function enrichLine(line: any) {
+  if (!line.goodsId) return;
+  try {
+    const g: any = await api.get(`/goods/${line.goodsId}`);
+    const sku =
+      (g.skus ?? []).find((x: any) => String(x.id) === String(line.skuId)) ?? g.skus?.[0];
+    line.goodsCode = line.goodsCode || g.queryCode || '';
+    line.goodsName = line.goodsName || g.goodsName || '';
+    line.skuSpec = sku?.specModels ?? '';
+    if (!line.skuId) line.skuId = sku?.id ?? '';
+    if (!Number(line.unitType)) line.unitType = sku?.unitType ?? 0;
+  } catch {
+    // 商品不存在时保留原始值
+  }
+}
+
+function unitName(line: any) {
+  const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
+  return unit?.label ?? unit?.name ?? '—';
+}
+
+function normalizeOrder(data: any) {
+  const planArrivalDate = data.planArrivalDate ?? data.plan_arrival_date;
+  const planPayDate = data.planPayDate ?? data.plan_pay_date;
+  return {
+    ...data,
+    id: data.id ?? data.po_id,
+    applicationId: data.applicationId ?? data.pur_id ?? '',
+    orgId: data.orgId ?? data.org_id,
+    deptId: data.deptId ?? data.dept_id,
+    warehouseId: data.warehouseId ?? data.warehouse_id,
+    receiverId: data.receiverId ?? data.receiver_id,
+    vendorId: data.vendorId ?? data.vendor_id,
+    arrivalType: data.arrivalType ?? data.arrival_type,
+    planArrivalDate: planArrivalDate ? dateText(planArrivalDate) : '',
+    deliveryType: data.deliveryType ?? data.delivery_type,
+    deliveryNo: data.deliveryNo ?? data.delivery_no,
+    paymentType: data.paymentType ?? data.pay_type,
+    planPayDate: planPayDate ? dateText(planPayDate) : '',
+  };
+}
+
+async function applicationChanged() {
+  if (!form.value.applicationId) return;
+  const source: any = await api.get(`/purchase/applications/${form.value.applicationId}`);
+  Object.assign(form.value, {
+    orgId: source.orgId ?? source.org_id ?? '',
+    deptId: source.deptId ?? source.dept_id ?? '',
+    warehouseId: source.warehouseId ?? source.warehouse_id ?? '',
+    applicationNo: source.applicationNo ?? '',
+  });
+  await loadOrgScopedOptions(form.value.orgId);
+  form.value.details = (source.details ?? []).map((line: any) => ({
+    ...blankLine(),
+    goodsId: line.goodsId,
+    skuId: line.skuId,
+    unitType: line.unitType,
+    quantity: Number(line.quantity ?? 0),
+    price: Number(line.referencePrice ?? 0),
+    remark: line.remark ?? '',
+  }));
+  await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
+}
+
+function addLine() {
+  (form.value.details ??= []).push(blankLine());
+}
+function removeLine(index: number) {
+  form.value.details.splice(index, 1);
+}
+
+function validate() {
+  if (!form.value.vendorId) {
+    ElMessage.warning('请选择供应商');
+    return false;
+  }
+  if (!form.value.orgId || !form.value.warehouseId || !form.value.deptId) {
+    ElMessage.warning('请选择所属组织、目标仓库和部门');
+    return false;
+  }
+  if (!form.value.planArrivalDate) {
+    ElMessage.warning('请选择计划到货日期');
+    return false;
+  }
+  if (!(form.value.details ?? []).length) {
+    ElMessage.warning('至少需要一条采购明细');
+    return false;
+  }
+  for (const line of form.value.details) {
+    if (!line.goodsId || !line.skuId) {
+      ElMessage.warning('请选择商品和规格');
+      return false;
+    }
+    if (!(Number(line.quantity) > 0)) {
+      ElMessage.warning('明细数量必须大于 0');
+      return false;
+    }
+    if (!(Number(line.price) > 0)) {
+      ElMessage.warning('明细单价必须大于 0');
+      return false;
+    }
+  }
+  return true;
+}
+
+async function save() {
+  if (!validate()) return;
+  saving.value = true;
+  try {
+    const url = '/purchase/orders';
+    const payload: Record<string, any> = {
+      ...form.value,
+      details: (form.value.details ?? []).map((line: any) => ({
+        ...line,
+        quantity: Number(line.quantity),
+        totalAmount: lineAmount(line),
+      })),
+    };
+    const result: any =
+      props.mode === 'edit'
+        ? await api.patch(`${url}/${form.value.id}`, payload)
+        : await api.post(url, payload);
+    ElMessage.success(result?.message ?? '保存成功');
+    emit('saved');
+  } catch {
+    // axios 拦截器已提示
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(async () => {
+  const [orgs, units, vendors] = await Promise.all([
+    api.get('/base-data/organizations/options').catch(() => []),
+    api.get('/base-data/units/options').catch(() => []),
+    api.get('/base-data/vendors/options').catch(() => []),
+  ]);
+  options.orgs = orgs as any[];
+  options.units = units as any[];
+  options.vendors = vendors as any[];
+  await loadDicts();
+
+  if (props.mode === 'create') {
+    Object.assign(form.value, {
+      applicationId: form.value.applicationId ?? '',
+      orgId: form.value.orgId ?? auth.user?.orgId ?? '',
+      deptId: form.value.deptId ?? auth.user?.deptId ?? '',
+      warehouseId: '',
+      receiverId: form.value.receiverId ?? auth.user?.id ?? '',
+      vendorId: '',
+      arrivalType: 1,
+      planArrivalDate: '',
+      deliveryType: 1,
+      deliveryNo: '',
+      paymentType: 1,
+      planPayDate: '',
+      remark: '',
+      details: [blankLine()],
+    });
+    if (form.value.applicationId) await applicationChanged();
+    else await loadOrgScopedOptions(form.value.orgId);
+  } else if (form.value.id) {
+    const detail: any = await api.get(`/purchase/orders/${form.value.id}`).catch(() => null);
+    if (detail) {
+      Object.assign(form.value, normalizeOrder(detail));
+      form.value.details = (form.value.details ?? []).map((line: any) => ({
+        ...line,
+        price: Number(line.unitPrice ?? 0),
+      }));
+    }
+    if (Array.isArray(form.value.details)) {
+      await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
+    }
+    await loadOrgScopedOptions(form.value.orgId);
+  }
+});
+</script>
+
+<template>
+  <el-form label-position="top" :disabled="isView">
+    <div class="form-grid">
+      <el-form-item label="来源采购申请">
+        <el-input
+          :model-value="form.applicationNo || (form.applicationId ? form.applicationId : '直接采购')"
+          disabled
+        />
+      </el-form-item>
+      <el-form-item label="供应商" required>
+        <el-select v-model="form.vendorId" filterable clearable :disabled="isView">
+          <el-option
+            v-for="x in options.vendors"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="所属组织" required>
+        <el-select
+          v-model="form.orgId"
+          filterable
+          :disabled="isView || Boolean(form.applicationId)"
+          @change="organizationChanged"
+        >
+          <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="目标仓库" required>
+        <el-select
+          v-model="form.warehouseId"
+          filterable
+          :disabled="isView || Boolean(form.applicationId)"
+        >
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="接收部门" required>
+        <el-select
+          v-model="form.deptId"
+          filterable
+          :disabled="isView || Boolean(form.applicationId)"
+        >
+          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="收货人">
+        <el-input :model-value="auth.user?.username ?? '—'" disabled />
+      </el-form-item>
+      <el-form-item label="到货方式">
+        <el-select v-model="form.arrivalType" :disabled="isView">
+          <el-option
+            v-for="item in dicts.purchase_arrival_type || []"
+            :key="item.value"
+            :label="item.label"
+            :value="Number(item.value)"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="计划到货日期" required>
+        <el-date-picker
+          v-model="form.planArrivalDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
+      </el-form-item>
+      <el-form-item label="结算方式">
+        <el-select v-model="form.paymentType" :disabled="isView">
+          <el-option
+            v-for="item in dicts.purchase_settlement_type || []"
+            :key="item.value"
+            :label="item.label"
+            :value="Number(item.value)"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="计划付款日期">
+        <el-date-picker
+          v-model="form.planPayDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
+      </el-form-item>
+      <el-form-item label="备注" class="span-2">
+        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
+      </el-form-item>
+    </div>
+
+    <div class="details-header">
+      <span class="details-title">订单明细</span>
+      <el-button v-if="!isView" link type="primary" @click="addLine">+ 添加明细</el-button>
+    </div>
+    <el-table :data="form.details ?? []" border size="small">
+      <el-table-column label="商品" min-width="200">
+        <template #default="s">
+          <RemoteSelect
+            v-if="!isView"
+            v-model="s.row.goodsId"
+            :fetch="searchGoodsOptions"
+            :current-label="s.row.goodsName || s.row.goodsId"
+            @change="lineGoodsChanged(s.row)"
+          />
+          <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="SKU/规格" min-width="120">
+        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="单位" width="80">
+        <template #default="s">{{ unitName(s.row) }}</template>
+      </el-table-column>
+      <el-table-column label="采购数量" width="120">
+        <template #default="s">
+          <el-input-number
+            v-model="s.row.quantity"
+            :min="1"
+            :precision="0"
+            :step="1"
+            :disabled="isView"
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="单价" width="140">
+        <template #default="s">
+          <el-input-number
+            v-model="s.row.price"
+            :min="0"
+            :precision="2"
+            :step="1"
+            controls-position="right"
+            :disabled="isView || !canEditAmount"
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="金额" width="120" align="right">
+        <template #default="s">
+          {{ lineAmount(s.row).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="备注" min-width="130">
+        <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
+      </el-table-column>
+      <el-table-column v-if="!isView" label="" width="60">
+        <template #default="s">
+          <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <div class="form-total">
+      合计：{{ orderQuantity }} 件　订单金额 ¥ {{ orderTotal.toFixed(2) }}
+    </div>
+
+    <div v-if="!isView" class="form-actions">
+      <el-button @click="emit('cancel')">取消</el-button>
+      <el-button type="primary" :loading="saving" :disabled="!canEditAmount" @click="save">
+        保存
+      </el-button>
+    </div>
+  </el-form>
+</template>
+
+<style scoped>
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0 16px;
+}
+.span-2 {
+  grid-column: 1 / -1;
+}
+.details-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.details-title {
+  font-weight: 600;
+}
+.form-total {
+  margin-top: 12px;
+  text-align: right;
+  color: #606266;
+  font-variant-numeric: tabular-nums;
+}
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+</style>

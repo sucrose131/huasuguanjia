@@ -1,0 +1,85 @@
+import type { BusinessDocumentConfig } from '../business-document-config';
+import { api } from '@/api';
+import { ElMessage } from 'element-plus';
+import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
+
+export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
+  key: 'inventory/adjustments',
+  title: '库存调整',
+  endpoint: '/inventory/adjustments',
+  no: 'adjustNo',
+  columns: [
+    { prop: 'adjustNo', label: '调整单号', minWidth: 150 },
+    { prop: 'reason', label: '调整原因', minWidth: 180 },
+    { prop: 'applicantDate', label: '申请日期', minWidth: 110, kind: 'date' },
+    { prop: 'detailCount', label: '明细数', minWidth: 80, kind: 'number' },
+    { prop: 'quantity', label: '调整数量', minWidth: 100, kind: 'number' },
+    { prop: 'approveStatus', label: '审批状态', minWidth: 100, kind: 'status' },
+    { prop: 'createdByName', label: '创建人', minWidth: 100 },
+    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+  ],
+  dictionaries: ['approval_status', 'inventory_adjust_type'],
+  creatable: true,
+  createText: '新增调整单',
+  formComponent: InventoryAdjustmentForm,
+  openFromRoute: async (query, ctx) => {
+    if (query.documentId) {
+      const detail: any = await api.get(`/inventory/adjustments/${query.documentId}`);
+      if (String(query.view ?? '') === '1') ctx.openView(detail);
+      else ctx.openEdit(detail);
+    }
+  },
+  rowActions: [
+    { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
+    {
+      key: 'edit',
+      label: '编辑',
+      show: (row) => Number(row.approveStatus) === 0,
+      handler: (row, ctx) => ctx.openEdit(row),
+    },
+    {
+      key: 'submit',
+      label: '提交',
+      kind: 'success',
+      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
+      confirm: '提交后进入审批，是否继续？',
+      handler: async (row) => {
+        await api.post(`/inventory/adjustments/${row.id}/submit`);
+        ElMessage.success('已提交审批');
+      },
+    },
+    {
+      key: 'approve',
+      label: '通过',
+      kind: 'success',
+      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      confirm: '通过后立即调整库存，是否继续？',
+      handler: async (row) => {
+        await api.post(`/inventory/adjustments/${row.id}/approve`, { approved: true, comment: '' });
+        ElMessage.success('审批已通过');
+      },
+    },
+    {
+      key: 'reject',
+      label: '驳回',
+      kind: 'danger',
+      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      confirm: '确认驳回该调整单？',
+      handler: async (row) => {
+        await api.post(`/inventory/adjustments/${row.id}/approve`, { approved: false, comment: '' });
+        ElMessage.success('已驳回');
+      },
+    },
+    {
+      key: 'delete',
+      label: '删除',
+      kind: 'danger',
+      show: (row) => Number(row.approveStatus) === 0,
+      confirm: '确认删除该调整单？',
+      handler: async (row) => {
+        await api.delete(`/inventory/adjustments/${row.id}`);
+        ElMessage.success('删除成功');
+      },
+    },
+  ],
+};
