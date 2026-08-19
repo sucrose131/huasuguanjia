@@ -94,6 +94,25 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['payment_channel'],
   optionBags: ['vendors'],
+  queryFields: [
+    {
+      key: 'orderId',
+      label: '关联采购订单',
+      type: 'remote-select',
+      width: 220,
+      fetch: async (keyword: string) => {
+        const r: any = await api.get('/purchase/orders', {
+          params: { keyword, pageSize: 50 },
+        });
+        return (r.items ?? []).map((x: any) => ({
+          value: x.id,
+          label: `${x.orderNo ?? ''} · ${x.vendorName ?? ''}`.trim(),
+        }));
+      },
+      currentLabel: (value: unknown) =>
+        value == null || value === '' ? '' : `#${String(value)}`,
+    },
+  ],
   summaryLabels: [
     { label: '付款记录总数', key: 'total', kind: 'number' },
     { label: '本页付款金额', key: 'paymentAmount', kind: 'money' },

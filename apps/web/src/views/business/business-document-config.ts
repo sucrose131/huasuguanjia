@@ -35,11 +35,19 @@ export type QueryField = {
   key: string;
   label: string;
   /** 控件类型 */
-  type?: 'input' | 'select';
+  type?: 'input' | 'select' | 'tree-select' | 'date-range' | 'remote-select';
   /** 静态选项（select 用） */
   options?: Array<{ value: string | number; label: string }>;
   /** 数据字典 code（select 用，优先于 options） */
   dictionary?: string;
+  /** options 集合名（tree-select/select 从引擎预加载的 optionBags 取数据） */
+  optionBag?: OptionBagName;
+  /** 远程搜索（remote-select 用）：返回 {value,label}[] */
+  fetch?: (keyword: string) => Promise<Array<{ value: string | number; label: string }>>;
+  /** 已选值回显标签（remote-select 用） */
+  currentLabel?: (value: unknown) => string;
+  /** 传给后端的参数键名（缺省用 key） */
+  param?: string;
   width?: number;
 };
 

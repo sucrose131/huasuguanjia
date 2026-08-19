@@ -83,7 +83,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       prop: 'arrivalProgress',
       label: '到货进度',
       width: 96,
-      render: (row) => `${row.arrivalProgress ?? 0}%`,
+      kind: 'progress',
     },
     {
       prop: 'orderStatus',
@@ -100,6 +100,22 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['purchase_settlement_type', 'purchase_order_status', 'purchase_payment_progress_status'],
   optionBags: ['vendors', 'warehouses'],
+  queryFields: [
+    {
+      key: 'vendorId',
+      label: '供应商',
+      type: 'select',
+      optionBag: 'vendors',
+      width: 200,
+    },
+    {
+      key: 'orderStatus',
+      label: '采购状态',
+      type: 'select',
+      dictionary: 'purchase_order_status',
+      width: 140,
+    },
+  ],
   summaryLabels: [
     { label: '订单总数', key: 'total', kind: 'number' },
     { label: '待处理数', key: 'pending', kind: 'number' },

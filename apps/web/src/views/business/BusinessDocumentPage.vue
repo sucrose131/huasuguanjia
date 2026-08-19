@@ -7,6 +7,7 @@ import { moneyText } from '@/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import RemoteSelect from '@/components/RemoteSelect.vue';
 import type {
   BusinessDocumentConfig,
   BusinessDocumentContext,
@@ -33,16 +34,16 @@ const formDialog = ref(false);
 const formMode = ref<'create' | 'edit' | 'view'>('create');
 const form = ref<Record<string, any>>({});
 
-for (const field of props.config.queryFields ?? []) query[field.key] = '';
+for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
 
 const statusOptions = computed(() => {
   const code = (props.config.dictionaries ?? []).find((item) => item.includes('status'));
   return code ? (dicts[code] ?? []) : [];
 });
-const queryOptions = (fieldKey: string) => {
-  const field = (props.config.queryFields ?? []).find((f) => f.key === fieldKey);
-  if (field?.dictionary) return dicts[field.dictionary] ?? [];
-  return field?.options ?? [];
+const queryOptions = (field: { type?: string; options?: Array<{ value: string | number; label: string }>; dictionary?: string; optionBag?: string }) => {
+  if (field.dictionary) return dicts[field.dictionary] ?? [];
+  if (field.optionBag) return options[field.optionBag] ?? [];
+  return field.options ?? [];
 };
 
 // 摘要卡片（对齐旧页 summary-strip 三列布局）
@@ -111,6 +112,19 @@ async function load() {
   loading.value = true;
   try {
     const params: Record<string, any> = { ...query };
+    // date-range 字段拆成 start/end 参数
+    for (const field of props.config.queryFields ?? []) {
+      if (field.type !== 'date-range') continue;
+      const value = query[field.key];
+      if (Array.isArray(value) && value.length === 2) {
+        const base = field.param ?? field.key;
+        params[`${base}Start`] = value[0];
+        params[`${base}End`] = value[1];
+        delete params[field.key];
+      } else {
+        delete params[field.key];
+      }
+    }
     const data = (await api.get(props.config.endpoint, { params })) as any;
     rows.value = data.items ?? [];
     total.value = data.total ?? rows.value.length;
@@ -120,6 +134,19 @@ async function load() {
     loading.value = false;
   }
 }
+
+// 组织树（tree-select 用）：由 orgs options 构建
+const organizationTree = computed(() => {
+  const build = (items: any[], parentId?: string): any[] =>
+    items
+      .filter((item: any) => (item.raw?.parentId ?? item.parentId ?? null) === (parentId ?? null))
+      .map((item: any) => ({
+        value: item.value,
+        label: item.label,
+        children: build(items, item.value),
+      }));
+  return build(options.orgs ?? []);
+});
 
 function displayCell(
   row: Record<string, any>,
@@ -193,7 +220,7 @@ watch(
   async () => {
     for (const key of Object.keys(query)) delete query[key];
     Object.assign(query, { keyword: '', page: 1, pageSize: 20 });
-    for (const field of props.config.queryFields ?? []) query[field.key] = '';
+    for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
     await loadDicts();
     await loadOptionBags();
     await load();
@@ -235,22 +262,61 @@ onMounted(async () => {
       <SummaryStrip v-if="summaryItems.length" :items="summaryItems" />
 
       <div class="query-bar">
-        <el-input v-model="query.keyword" class="query-field keyword" clearable placeholder="单号 / 关键字" @keyup.enter="query.page = 1; load()" />
-        <el-select
-          v-for="field in config.queryFields ?? []"
-          :key="field.key"
-          v-model="query[field.key]"
-          class="query-field"
+        <el-input
+          v-model="query.keyword"
+          class="query-field keyword"
           clearable
-          :placeholder="field.label"
-        >
-          <el-option
-            v-for="item in queryOptions(field.key)"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
+          placeholder="单号 / 关键字"
+          @keyup.enter="query.page = 1; load()"
+        />
+        <template v-for="field in config.queryFields ?? []" :key="field.key">
+          <el-tree-select
+            v-if="field.type === 'tree-select'"
+            v-model="query[field.key]"
+            :data="organizationTree"
+            class="query-field"
+            clearable
+            filterable
+            check-strictly
+            node-key="value"
+            :props="{ label: 'label', children: 'children' }"
+            :placeholder="field.label"
           />
-        </el-select>
+          <el-date-picker
+            v-else-if="field.type === 'date-range'"
+            v-model="query[field.key]"
+            class="query-field"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="起"
+            end-placeholder="止"
+            value-format="YYYY-MM-DD"
+          />
+          <RemoteSelect
+            v-else-if="field.type === 'remote-select' && field.fetch"
+            v-model="query[field.key]"
+            class="query-field"
+            :fetch="field.fetch"
+            :current-label="field.currentLabel ? field.currentLabel(query[field.key]) : ''"
+            clearable
+            :placeholder="field.label"
+          />
+          <el-select
+            v-else
+            v-model="query[field.key]"
+            class="query-field"
+            clearable
+            filterable
+            :placeholder="field.label"
+          >
+            <el-option
+              v-for="item in queryOptions(field)"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </template>
         <el-select v-if="statusOptions.length" v-model="query.status" class="query-field" clearable placeholder="业务状态">
           <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
@@ -260,7 +326,7 @@ onMounted(async () => {
             @click="
               query.keyword = '';
               query.status = '';
-              for (const field of config.queryFields ?? []) query[field.key] = '';
+              for (const field of config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
               load();
             "
             >重置</el-button

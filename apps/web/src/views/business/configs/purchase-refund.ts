@@ -74,6 +74,33 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['purchase_refund_status', 'purchase_refund_source'],
   optionBags: ['vendors'],
+  queryFields: [
+    {
+      key: 'orderId',
+      label: '关联采购订单',
+      type: 'remote-select',
+      width: 220,
+      fetch: async (keyword: string) => {
+        const r: any = await api.get('/purchase/orders', {
+          params: { keyword, pageSize: 50 },
+        });
+        return (r.items ?? []).map((x: any) => ({
+          value: x.id,
+          label: `${x.orderNo ?? ''} · ${x.vendorName ?? ''}`.trim(),
+        }));
+      },
+      currentLabel: (value: unknown) =>
+        value == null || value === '' ? '' : `#${String(value)}`,
+    },
+    { key: 'vendorId', label: '供应商', type: 'select', optionBag: 'vendors', width: 200 },
+    {
+      key: 'sourceType',
+      label: '退款来源',
+      type: 'select',
+      dictionary: 'purchase_refund_source',
+      width: 140,
+    },
+  ],
   summaryLabels: [
     { label: '退款任务总数', key: 'total', kind: 'number' },
     { label: '本页待退金额', key: 'pendingAmount', kind: 'money' },

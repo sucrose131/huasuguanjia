@@ -58,6 +58,15 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
     },
   ],
   dictionaries: ['approval_status', 'purchase_return_status'],
+  queryFields: [
+    {
+      key: 'approveStatus',
+      label: '处理状态',
+      type: 'select',
+      dictionary: 'purchase_return_status',
+      width: 140,
+    },
+  ],
   summaryLabels: [
     { label: '退货记录总数', key: 'total', kind: 'number' },
     { label: '待处理数', key: 'pending', kind: 'number' },

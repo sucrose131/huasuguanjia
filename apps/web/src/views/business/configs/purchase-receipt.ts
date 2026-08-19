@@ -47,6 +47,15 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['confirm_status', 'purchase_input_status'],
   optionBags: ['warehouses'],
+  queryFields: [
+    {
+      key: 'confirmStatus',
+      label: '入库状态',
+      type: 'select',
+      dictionary: 'purchase_input_status',
+      width: 140,
+    },
+  ],
   summaryLabels: [
     { label: '入库单总数', key: 'total', kind: 'number' },
     { label: '待入库数', key: 'pending', kind: 'number' },
