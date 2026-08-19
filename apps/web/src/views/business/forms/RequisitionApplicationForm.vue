@@ -26,6 +26,7 @@ const options = reactive<Record<string, any>>({
   requisitionDepts: [],
   employees: [],
   units: [],
+  contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
@@ -40,6 +41,7 @@ function blankLine() {
     quantity: 1,
     returnable: Number(form.value.drawType) === 2,
     remark: '',
+    goodsWarehouseType: 0,
   };
 }
 
@@ -65,8 +67,25 @@ async function loadRequisitionOptions(orgId: unknown) {
   options.requisitionWarehouses = result.warehouses ?? [];
   options.requisitionDepts = result.departments ?? [];
   options.employees = result.employees ?? [];
-  if (!form.value.applicantId && props.mode === 'create')
-    form.value.applicantId = auth.user?.staffId ?? '';
+}
+
+/** 按所选组织（账套）解析当前登录用户的OA员工身份，自动填充领用人/部门 */
+async function resolveCurrentApplicant() {
+  if (!form.value.orgId) {
+    form.value.applicantId = '';
+    form.value.deptId = '';
+    return;
+  }
+  const result: any = await api
+    .get('/requisitions/current-applicant', { params: { orgId: form.value.orgId } })
+    .catch(() => ({ found: false }));
+  if (result?.found) {
+    form.value.applicantId = result.staffId;
+    if (result.deptId) form.value.deptId = result.deptId;
+  } else {
+    form.value.applicantId = '';
+    form.value.deptId = '';
+  }
 }
 
 async function organizationChanged() {
@@ -74,7 +93,51 @@ async function organizationChanged() {
   form.value.deptId = '';
   form.value.applicantId = '';
   form.value.details = [blankLine()];
+  options.contextGoods = [];
   await loadRequisitionOptions(form.value.orgId);
+  await loadOrgGoods(form.value.orgId);
+  await resolveCurrentApplicant();
+}
+
+/** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
+async function loadOrgGoods(orgId: unknown) {
+  if (!orgId) {
+    options.contextGoods = [];
+    return;
+  }
+  options.contextGoods = (await api
+    .get('/requisitions/all-goods-options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+
+/** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
+const documentWarehouseType = computed(() => {
+  const types = new Set(
+    (form.value.details ?? [])
+      .map((line: any) => Number(line.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  return types.size === 1 ? [...types][0] : 0;
+});
+
+/** 仓库选项：领用仓库范围内，按明细商品分类类型过滤（先选商品后选仓库场景） */
+const warehouseOptions = computed(() =>
+  (options.requisitionWarehouses ?? []).filter(
+    (w: any) =>
+      !documentWarehouseType.value ||
+      Number(w.raw?.warehouseType ?? w.warehouseType ?? 0) === documentWarehouseType.value,
+  ),
+);
+
+function warehouseChanged() {
+  // 先选商品后选仓库：换仓库只校验兼容性，不清空明细
+  const current = warehouseOptions.value.find(
+    (w: any) => String(w.value) === String(form.value.warehouseId),
+  );
+  if (documentWarehouseType.value && !current) {
+    form.value.warehouseId = '';
+    ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
+  }
 }
 
 function drawTypeChanged(value: unknown) {
@@ -90,8 +153,11 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const list = options.contextGoods.filter((g: any) =>
+    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  );
+  return list.map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
   }));
@@ -99,6 +165,10 @@ async function searchGoodsOptions(keyword: string) {
 
 async function lineGoodsChanged(line: any) {
   if (!line.goodsId) return;
+  const matched = (options.contextGoods ?? []).find(
+    (g: any) => String(g.id) === String(line.goodsId),
+  );
+  line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
@@ -106,6 +176,20 @@ async function lineGoodsChanged(line: any) {
   line.goodsCode = g.queryCode ?? '';
   line.goodsName = g.goodsName ?? '';
   line.skuSpec = sku?.specModels ?? '';
+  // 商品分类类型变化后，若已选仓库类型不匹配则清空仓库
+  if (form.value.warehouseId && documentWarehouseType.value) {
+    const current = (options.requisitionWarehouses ?? []).find(
+      (w: any) => String(w.value) === String(form.value.warehouseId),
+    );
+    if (
+      !current ||
+      Number(current.raw?.warehouseType ?? current.warehouseType ?? 0) !==
+        documentWarehouseType.value
+    ) {
+      form.value.warehouseId = '';
+      ElMessage.warning('明细商品类型已变化，请重新选择匹配的仓库');
+    }
+  }
 }
 
 function lineUnitName(line: any) {
@@ -121,9 +205,34 @@ function signatureChanged(value: string) {
 }
 
 function validate(submit: boolean) {
-  if (!form.value.orgId || !form.value.deptId || !form.value.warehouseId || !form.value.applicantId) {
-    ElMessage.warning('请选择所属组织、领用部门、行政/健服类仓库和领用人');
+  if (!form.value.orgId) {
+    ElMessage.warning('请选择所属组织');
     return false;
+  }
+  // 找不到该组织下OA员工身份时可保存草稿（领用人/部门为空），提交必须完整
+  if (submit && (!form.value.deptId || !form.value.applicantId)) {
+    ElMessage.warning('当前账号未关联该组织的OA员工，无法提交审批，可先保存草稿');
+    return false;
+  }
+  const hasGoods = (form.value.details ?? []).some((line: any) => line.goodsId);
+  if (!form.value.warehouseId) {
+    ElMessage.warning(
+      hasGoods ? '请选择与商品匹配的领用仓库' : '请选择所属组织、领用部门、领用仓库和领用人',
+    );
+    return false;
+  }
+  if (hasGoods && documentWarehouseType.value) {
+    const current = (options.requisitionWarehouses ?? []).find(
+      (w: any) => String(w.value) === String(form.value.warehouseId),
+    );
+    if (
+      !current ||
+      Number(current.raw?.warehouseType ?? current.warehouseType ?? 0) !==
+        documentWarehouseType.value
+    ) {
+      ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
+      return false;
+    }
   }
   if (submit && !String(form.value.reason ?? '').trim()) {
     ElMessage.warning('提交申请前必须填写申请原因');
@@ -173,7 +282,12 @@ onMounted(async () => {
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
   ]);
-  options.orgs = orgs;
+  // 组织下拉按用户授权范围（用户管理配置的授权组织）
+  const authorized = (auth.user?.authorizedOrganizations ?? []).map((o) => ({
+    value: o.id,
+    label: o.name,
+  }));
+  options.orgs = authorized.length ? authorized : (orgs as any[]);
   options.units = units;
   await loadDicts();
   if (props.mode === 'create') {
@@ -181,7 +295,7 @@ onMounted(async () => {
       orgId: auth.user?.orgId ?? '',
       deptId: '',
       warehouseId: '',
-      applicantId: auth.user?.staffId ?? '',
+      applicantId: '',
       drawType: 1,
       date: dateText(new Date()),
       reason: '',
@@ -199,6 +313,17 @@ onMounted(async () => {
     if (detail) Object.assign(form.value, detail);
   }
   await loadRequisitionOptions(form.value.orgId);
+  await loadOrgGoods(form.value.orgId);
+  if (props.mode === 'create') await resolveCurrentApplicant();
+  // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
+  for (const line of form.value.details ?? []) {
+    if (line.goodsId && !Number(line.goodsWarehouseType)) {
+      const matched = (options.contextGoods ?? []).find(
+        (g: any) => String(g.id) === String(line.goodsId),
+      );
+      line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+    }
+  }
 });
 </script>
 
@@ -221,9 +346,12 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">
-          <el-option v-for="x in options.requisitionWarehouses" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId" @change="warehouseChanged">
+          <el-option v-for="x in warehouseOptions" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
+        <div v-if="documentWarehouseType && form.details?.some((l: any) => l.goodsId)" class="warehouse-hint">
+          已按明细商品类型匹配仓库
+        </div>
       </el-form-item>
       <el-form-item label="领用人" required>
         <el-select v-model="form.applicantId" filterable disabled>
@@ -249,7 +377,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="isView"
+            :disabled="isView || !form.orgId"
+            placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
           />
         </template>
@@ -299,9 +428,12 @@ onMounted(async () => {
       <SignaturePad
         :model-value="form.signatureContent"
         :has-stored-signature="Boolean(form.signatureAttachment)"
-        :disabled="mode === 'view'"
+        :disabled="mode === 'view' || !form.applicantId"
         @update:model-value="signatureChanged"
       />
+      <div v-if="!form.applicantId && !isView" class="warehouse-hint">
+        所选组织未匹配到当前账号的OA员工身份，无法签字，可先保存草稿
+      </div>
     </el-form-item>
 
     <div v-if="!isView" class="form-actions">
@@ -332,6 +464,11 @@ onMounted(async () => {
 }
 .full-field {
   grid-column: 1 / -1;
+}
+.warehouse-hint {
+  font-size: 12px;
+  color: var(--hs-muted, #909399);
+  margin-top: 2px;
 }
 .form-actions {
   display: flex;

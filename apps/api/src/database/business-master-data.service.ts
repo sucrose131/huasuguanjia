@@ -69,6 +69,34 @@ export class BusinessMasterDataService {
     }));
   }
 
+  /** 按组织返回全部启用商品（不按仓库类型过滤），携带分类 warehouse_type 供前端做仓库兼容匹配 */
+  async goodsOptionsByOrg(
+    orgIdValue: bigint | string | number,
+    db: Db = this.prisma,
+  ) {
+    const orgId = this.id(orgIdValue, '组织');
+    const items = await db.hspsi_goods_info.findMany({
+      where: { org_id: { in: [0n, orgId] }, status: 1, deleted_at: null },
+      orderBy: [{ sort: 'asc' }, { goods_id: 'asc' }],
+    });
+    const categoryIds = [...new Set(items.map((item) => String(item.goods_catg_id)))];
+    const categories = categoryIds.length
+      ? await db.hspsi_goods_info_category.findMany({
+          where: { goods_catg_id: { in: categoryIds.map(BigInt) } },
+          select: { goods_catg_id: true, warehouse_type: true },
+        })
+      : [];
+    const typeMap = new Map(categories.map((c) => [String(c.goods_catg_id), c.warehouse_type]));
+    return items.map((item) => ({
+      id: item.goods_id,
+      goodsId: item.goods_id,
+      queryCode: item.query_code,
+      goodsName: item.goods_name,
+      categoryId: item.goods_catg_id,
+      categoryWarehouseType: typeMap.get(String(item.goods_catg_id)) ?? 0,
+    }));
+  }
+
   async assertGoodsLines(
     orgIdValue: bigint | string | number,
     warehouseIdValue: bigint | string | number,

@@ -25,13 +25,16 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 
-const filteredWarehouses = computed(() =>
-  !form.value.orgId
-    ? (options.warehouses as any[])
-    : (options.warehouses as any[]).filter(
-        (w) => String(w.raw?.orgId ?? w.orgId) === String(form.value.orgId),
-      ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 function blankLine() {
   return {
@@ -88,10 +91,16 @@ async function loadStocks() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+  // 商品选项取自按 orgId+warehouseId 加载的库存（后端已过滤仓库类型），未选仓库时为空
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const seen = new Map<string, any>();
+  for (const s of options.stocks as any[]) {
+    if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
+    if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
+  }
+  return [...seen.values()].map((s: any) => ({
+    value: s.goodsId,
+    label: `${s.goodsCode || ''} ${s.goodsName || ''}`.trim(),
   }));
 }
 
@@ -182,13 +191,11 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, departments] = await Promise.all([
+  const [orgs, departments] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/departments/options').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.departments = departments;
   await loadDicts();
 
@@ -226,6 +233,7 @@ onMounted(async () => {
       return mapped;
     });
   }
+  await loadOrgWarehouses(form.value.orgId);
   await loadStocks();
 });
 </script>
@@ -249,6 +257,8 @@ onMounted(async () => {
           :disabled="isView"
           @change="
             form.warehouseId = '';
+            form.details = [blankLine()];
+            loadOrgWarehouses(form.orgId);
             loadStocks();
           "
         >
@@ -260,10 +270,13 @@ onMounted(async () => {
           v-model="form.warehouseId"
           filterable
           :disabled="isView || !form.orgId"
-          @change="loadStocks"
+          @change="
+            form.details = [blankLine()];
+            loadStocks();
+          "
         >
           <el-option
-            v-for="x in filteredWarehouses"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"
@@ -303,7 +316,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="isView"
+            :disabled="isView || !form.warehouseId"
+            placeholder="请先选择仓库，再搜索库存商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>

@@ -73,7 +73,19 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   autoStatusFilter: false,
   queryFields: [
     { key: 'orgId', label: '所属组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
-    { key: 'warehouseId', label: '目标仓库', type: 'select', optionBag: 'warehouses', width: 180 },
+    {
+      key: 'warehouseId',
+      label: '目标仓库',
+      type: 'select',
+      dependsOn: 'orgId',
+      width: 180,
+      loadOptions: async (deps) => {
+        if (!deps.orgId) return [];
+        return (await api.get('/base-data/warehouses/options', {
+          params: { orgId: deps.orgId },
+        })) as any[];
+      },
+    },
     {
       key: 'approveStatus',
       label: '审批状态',

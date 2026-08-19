@@ -47,13 +47,16 @@ const organizationTree = computed(() => {
       }));
   return build(options.orgs);
 });
-const warehouseOptions = computed(() =>
-  (options.warehouses ?? []).filter(
-    (w: any) =>
-      !form.value.orgId ||
-      String(w.raw?.orgId ?? w.orgId ?? '') === String(form.value.orgId),
-  ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 function blankRow(): B {
   return {
@@ -138,6 +141,7 @@ function organizationChanged() {
   allStocks.value = [];
   options.goods = [];
   rows.value = [blankRow()];
+  loadOrgWarehouses(form.value.orgId);
 }
 
 async function planChanged() {
@@ -171,6 +175,7 @@ async function planChanged() {
   }));
   form.value.details = flat;
   rows.value = flat;
+  await loadOrgWarehouses(form.value.orgId);
 }
 
 async function searchPlanOptions(keyword: string) {
@@ -257,16 +262,14 @@ async function save() {
 onMounted(async () => {
   loading.value = true;
   try {
-    const [o, w, destinations, outputTypes, plans, units] = (await Promise.all([
+    const [o, destinations, outputTypes, plans, units] = (await Promise.all([
       api.get('/base-data/organizations/options').catch(() => []),
-      api.get('/base-data/warehouses/options').catch(() => []),
       api.get('/dictionaries/temporary_outbound_destination').catch(() => []),
       api.get('/dictionaries/production_material_out_type').catch(() => []),
       api.get('/production/plans', { params: { pageSize: 100 } }).catch(() => ({ items: [] })),
       api.get('/base-data/units/options').catch(() => []),
     ])) as any[];
     options.orgs = o;
-    options.warehouses = w;
     options.destinations = destinations;
     options.outputTypes = outputTypes;
     options.plans = plans.items ?? [];
@@ -282,6 +285,7 @@ onMounted(async () => {
         outType: Number(form.value.outType ?? 3),
         details: [],
       });
+      await loadOrgWarehouses(form.value.orgId);
       if (form.value.planId) {
         await planChanged();
         await reloadStocks();
@@ -315,6 +319,7 @@ onMounted(async () => {
         });
       }
       rows.value = [...grouped.values()];
+      await loadOrgWarehouses(form.value.orgId);
       await reloadStocks();
     }
   } catch (e: any) {
@@ -379,8 +384,8 @@ watch(
         />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">
-          <el-option v-for="x in warehouseOptions" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId" @change="reloadStocks">
+          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item v-if="isLab" label="出库去向" required>

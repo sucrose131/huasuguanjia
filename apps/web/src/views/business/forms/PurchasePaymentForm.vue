@@ -33,19 +33,24 @@ const maxAmount = computed(() => {
   return remaining > 0 ? remaining : undefined;
 });
 
-const optionOrgId = (item: any) => item.orgId ?? item.raw?.orgId ?? item.raw?.org_id ?? '';
-const filteredDepts = computed(() => {
-  if (!form.value.orgId) return [];
-  return (options.depts ?? []).filter(
-    (d: any) => String(optionOrgId(d)) === String(form.value.orgId),
-  );
-});
-const filteredWarehouses = computed(() => {
-  if (!form.value.orgId) return [];
-  return (options.warehouses ?? []).filter(
-    (w: any) => String(optionOrgId(w)) === String(form.value.orgId),
-  );
-});
+/** 按组织加载部门/仓库选项（走后端），组织为空时清空 */
+async function loadOrgOptions(orgId: unknown) {
+  if (!orgId) {
+    options.depts = [];
+    options.warehouses = [];
+    return;
+  }
+  const [depts, warehouses] = await Promise.all([
+    api
+      .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
+      .catch(() => []),
+    api
+      .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+      .catch(() => []),
+  ]);
+  options.depts = depts;
+  options.warehouses = warehouses;
+}
 
 function money(value: unknown) {
   return canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
@@ -94,6 +99,7 @@ async function orderChanged() {
     Number(form.value.paymentAmount ?? 0),
     Number(form.value.orderRemaining ?? 0),
   );
+  await loadOrgOptions(form.value.orgId);
 }
 
 function validate() {
@@ -158,15 +164,11 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, depts, warehouses, vendors] = await Promise.all([
+  const [orgs, vendors] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/departments/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/vendors/options').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.depts = depts;
-  options.warehouses = warehouses;
   options.vendors = vendors;
   await loadDicts();
 
@@ -181,10 +183,12 @@ onMounted(async () => {
       paymentAmount: 0,
       remark: '',
     });
+    await loadOrgOptions(form.value.orgId);
     if (form.value.orderId) await orderChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/purchase/payments/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
+    await loadOrgOptions(form.value.orgId);
   }
 });
 </script>
@@ -206,7 +210,16 @@ onMounted(async () => {
         <el-input :model-value="form.vendorName || '—'" disabled />
       </el-form-item>
       <el-form-item label="所属组织" required>
-        <el-select v-model="form.orgId" filterable :disabled="Boolean(form.orderId)">
+        <el-select
+          v-model="form.orgId"
+          filterable
+          :disabled="Boolean(form.orderId)"
+          @change="
+            form.deptId = '';
+            form.warehouseId = '';
+            loadOrgOptions(form.orgId);
+          "
+        >
           <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
@@ -216,7 +229,7 @@ onMounted(async () => {
           filterable
           :disabled="Boolean(form.orderId) || !form.orgId"
         >
-          <el-option v-for="x in filteredDepts" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="仓库">
@@ -226,7 +239,7 @@ onMounted(async () => {
           :disabled="Boolean(form.orderId) || !form.orgId"
         >
           <el-option
-            v-for="x in filteredWarehouses"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"

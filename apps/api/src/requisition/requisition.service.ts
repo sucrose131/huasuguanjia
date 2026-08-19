@@ -114,6 +114,7 @@ export class RequisitionService {
       applicantId: bigint;
       drawType: number;
     },
+    allowEmptyApplicant = false,
   ) {
     const [organization, department, warehouse, applicant, drawTypeCategory] = await Promise.all([
       tx.hspsi_basic_organization.findFirst({
@@ -144,10 +145,13 @@ export class RequisitionService {
       }),
     ]);
     if (!organization) throw new BadRequestException('所属组织不存在或未正常运营');
-    if (!department) throw new BadRequestException('领用部门不属于所选组织或已停用');
+    // 草稿且找不到OA员工身份时（allowEmptyApplicant），领用人/部门允许为空，仅保存草稿
+    if (values.deptId > 0n && !department)
+      throw new BadRequestException('领用部门不属于所选组织或已停用');
     if (!warehouse)
       throw new BadRequestException('领用仓库仅限所选组织下已启用的行政类、健服类仓库');
-    if (!applicant) throw new BadRequestException('领用人必须选择已启用的基础员工');
+    if (values.applicantId > 0n && !applicant)
+      throw new BadRequestException('领用人必须选择已启用的基础员工');
 
     const [membership, drawType] = await Promise.all([
       tx.hspsi_basic_staff_organizations.findFirst({
@@ -172,7 +176,8 @@ export class RequisitionService {
           })
         : null,
     ]);
-    if (!membership) throw new BadRequestException('领用人不属于所选组织或领用部门');
+    if (values.applicantId > 0n && !membership)
+      throw new BadRequestException('领用人不属于所选组织或领用部门');
     if (!drawType) throw new BadRequestException('领用类型未在数据字典中配置');
   }
 
@@ -292,6 +297,12 @@ export class RequisitionService {
       BigInt(String(orgIdValue)),
       BigInt(String(warehouseIdValue)),
     );
+  }
+
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
 
   private aggregatePostingLines(
@@ -586,12 +597,94 @@ export class RequisitionService {
     return enriched!;
   }
 
+  /**
+   * 按单据组织（账套）解析登录用户的 OA 员工身份。
+   * 账套由组织决定；(user_id, account_set_id) 经身份表唯一确定员工。
+   * 找不到（用户不属于该组织账套）返回 null。
+   */
+  private async resolveApplicantIdentity(db: Db, userId: string, orgId: bigint) {
+    const organization = await db.hspsi_basic_organization.findFirst({
+      where: { org_id: orgId, operation_status: 1, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!organization?.account_set_id) return null;
+    const identity = await db.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) return null;
+    const staff = await db.hspsi_basic_staff.findFirst({
+      where: {
+        id: identity.staff_id,
+        account_set_id: organization.account_set_id,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, name: true, outer_ref_id: true, out_staff_id: true },
+    });
+    if (!staff) return null;
+    const primary = await db.hspsi_basic_staff_organizations.findFirst({
+      where: {
+        staff_id: staff.id,
+        account_set_id: organization.account_set_id,
+        type: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
+      select: { org_id: true, org_type: true },
+    });
+    return { ...staff, accountSetId: organization.account_set_id, primary };
+  }
+
+  /**
+   * 前端选组织后解析当前登录用户的 OA 员工身份（含主部门），用于自动填充领用人/部门。
+   */
+  async currentApplicant(userId: string, orgIdValue?: string) {
+    if (!orgIdValue) return { found: false };
+    const orgId = this.bigint(orgIdValue, '所属组织');
+    const applicant = await this.resolveApplicantIdentity(this.prisma, userId, orgId);
+    if (!applicant) return { found: false };
+    let deptId = '';
+    let deptName = '';
+    let deptOuterRefId = '';
+    if (applicant.primary?.org_type === 2) {
+      const dept = await this.prisma.hspsi_basic_dept.findFirst({
+        where: { dept_id: applicant.primary.org_id, deleted_at: null },
+        select: { dept_id: true, name: true, outer_ref_id: true },
+      });
+      if (dept) {
+        deptId = String(dept.dept_id);
+        deptName = dept.name;
+        deptOuterRefId = dept.outer_ref_id;
+      }
+    } else if (applicant.primary) {
+      const organization = await this.prisma.hspsi_basic_organization.findFirst({
+        where: { org_id: applicant.primary.org_id, deleted_at: null },
+        select: { name: true, outer_ref_id: true },
+      });
+      if (organization) {
+        deptName = organization.name;
+        deptOuterRefId = organization.outer_ref_id;
+      }
+    }
+    return {
+      found: true,
+      staffId: String(applicant.id),
+      name: applicant.name,
+      accountSetId: String(applicant.accountSetId),
+      outerRefId: applicant.outer_ref_id,
+      outStaffId: applicant.out_staff_id,
+      deptId,
+      deptName,
+      deptOuterRefId,
+    };
+  }
+
   async saveApplication(
     id: string | null,
     body: Body,
     userId: string,
     submit: boolean,
-    applicantIdentity?: { orgId?: string | null; staffId?: string | null },
   ) {
     const lines = this.detailLines(body.details).map((line) => ({
       goodsId: this.bigint(line.goodsId, '商品'),
@@ -664,12 +757,16 @@ export class RequisitionService {
           }
         }
 
-        if (applicantIdentity && !applicantIdentity.staffId)
-          throw new BadRequestException('当前账号未关联OA员工，不能发起领用申请');
-        const applicantId = this.bigint(
-          applicantIdentity?.staffId ?? body.applicantId ?? current?.applicant_id,
-          '领用人',
-        );
+        // 后端兜底：账套由单据组织决定，提交人按(登录用户, 组织账套)解析身份，
+        // 不信任前端/主身份 staff_id（多账套用户可能跨账套错配）。
+        const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
+        if (current && current.org_id !== orgId)
+          throw new ForbiddenException('领用申请的所属组织与已保存单据不一致，不允许变更组织');
+        const applicant = await this.resolveApplicantIdentity(tx, userId, orgId);
+        if (submit && !applicant) {
+          throw new BadRequestException('当前账号未关联该组织的OA员工，无法提交审批');
+        }
+        const applicantId = applicant?.id ?? 0n;
         const currentAttachments = this.attachmentItems(current?.attachments);
         const signatureWasExplicitlyCleared =
           body.signatureContent !== undefined &&
@@ -713,14 +810,9 @@ export class RequisitionService {
         if (signedAt && Number.isNaN(signedAt.getTime()))
           throw new BadRequestException('签署时间无效');
 
-        const orgId = this.bigint(
-          applicantIdentity?.orgId ?? body.orgId ?? current?.org_id,
-          '所属组织',
-        );
-        if (current && current.org_id !== orgId)
-          throw new ForbiddenException('领用申请的所属组织必须与发起人的OA所属组织一致');
         const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
-        const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
+        const deptIdRaw = body.deptId ?? current?.dept_id;
+        const deptId = deptIdRaw ? this.bigint(deptIdRaw, '领用部门') : 0n;
         const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
         const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
         if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
@@ -730,13 +822,17 @@ export class RequisitionService {
         if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
           throw new BadRequestException('借用的明细必须选择“可归还”');
         }
-        await this.validateApplicationReferences(tx, {
-          orgId,
-          warehouseId,
-          deptId,
-          applicantId,
-          drawType,
-        });
+        await this.validateApplicationReferences(
+          tx,
+          {
+            orgId,
+            warehouseId,
+            deptId,
+            applicantId,
+            drawType,
+          },
+          !submit && !applicant,
+        );
         await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
 
         const total = lines.reduce((sum, line) => sum + line.quantity, 0);

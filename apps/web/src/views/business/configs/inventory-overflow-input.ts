@@ -22,6 +22,23 @@ export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
     { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
   ],
   dictionaries: [],
+  optionBags: ['orgs'],
+  queryFields: [
+    { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
+    {
+      key: 'warehouseId',
+      label: '仓库',
+      type: 'select',
+      dependsOn: 'orgId',
+      width: 180,
+      loadOptions: async (deps) => {
+        if (!deps.orgId) return [];
+        return (await api.get('/base-data/warehouses/options', {
+          params: { orgId: deps.orgId },
+        })) as any[];
+      },
+    },
+  ],
   creatable: false,
   formComponent: InventoryOverflowInputForm,
   openFromRoute: async (query, ctx) => {

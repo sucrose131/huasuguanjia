@@ -79,21 +79,24 @@ function unitName(line: any) {
   return unit?.label ?? unit?.name ?? '—';
 }
 
-const warehouseOptions = computed(() =>
-  (options.warehouses as any[]).filter(
-    (item: any) =>
-      !form.value.orgId ||
-      String(item.raw?.orgId ?? item.orgId ?? '') === String(form.value.orgId),
-  ),
-);
-
-const deptOptions = computed(() =>
-  (options.depts as any[]).filter(
-    (item: any) =>
-      !form.value.orgId ||
-      String(item.raw?.orgId ?? item.orgId ?? '') === String(form.value.orgId),
-  ),
-);
+/** 按组织加载仓库/部门选项（走后端），组织为空时清空 */
+async function loadOrgOptions(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    options.depts = [];
+    return;
+  }
+  const [warehouses, depts] = await Promise.all([
+    api
+      .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+      .catch(() => []),
+    api
+      .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
+      .catch(() => []),
+  ]);
+  options.warehouses = warehouses as any[];
+  options.depts = depts as any[];
+}
 
 async function searchSalesOrderOptions(keyword: string) {
   if (!String(keyword ?? '').trim()) {
@@ -170,6 +173,7 @@ async function orderChanged() {
     stockKey: '',
   }));
   await enrichGoodsInfo(form.value.details);
+  await loadOrgOptions(form.value.orgId);
 }
 
 function validate() {
@@ -208,11 +212,9 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, depts, users, units, goodsResult, stocks, orders, destinationDict] =
+  const [orgs, users, units, goodsResult, stocks, orders, destinationDict] =
     await Promise.all([
       api.get('/base-data/organizations/options').catch(() => []),
-      api.get('/base-data/warehouses/options').catch(() => []),
-      api.get('/base-data/departments/options').catch(() => []),
       api.get('/base-data/users/options').catch(() => []),
       api.get('/base-data/units/options').catch(() => []),
       api
@@ -223,8 +225,6 @@ onMounted(async () => {
       api.get('/dictionaries/sales_output_destination').catch(() => []),
     ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
-  options.depts = depts;
   options.users = users;
   options.units = units;
   options.goods = (goodsResult as any).items ?? [];
@@ -258,6 +258,7 @@ onMounted(async () => {
         stockKey: stockKeyOf(line, form.value.warehouseId),
       }));
       await enrichGoodsInfo(form.value.details, order?.details ?? []);
+      await loadOrgOptions(form.value.orgId);
     }
   }
 });
@@ -285,7 +286,7 @@ onMounted(async () => {
           filterable
           :disabled="mode !== 'create' || !form.orgId || Boolean(form.sourceLocked)"
         >
-          <el-option v-for="x in warehouseOptions" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="出库类型">
@@ -308,7 +309,7 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="部门">
         <el-select v-model="form.deptId" filterable clearable :disabled="isView">
-          <el-option v-for="x in deptOptions" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="经办/接收人">

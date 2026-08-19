@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { InventoryPostingService } from '../inventory/inventory-posting.service';
 import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
@@ -34,6 +35,7 @@ type OperationHistoryItem = {
 export class PurchaseService {
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(BusinessMasterDataService) private masterData: BusinessMasterDataService,
     @Inject(InventoryPostingService) private inventoryPosting: InventoryPostingService,
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
@@ -49,6 +51,19 @@ export class PurchaseService {
       page: Math.max(1, Number(query.page ?? 1)),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize ?? 20))),
     };
+  }
+  /** 采购单据商品选项：按单据组织+仓库，仅返回分类 warehouse_type 匹配的启用商品 */
+  async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
+    if (!orgIdValue || !warehouseIdValue) return [];
+    return this.masterData.goodsOptions(
+      BigInt(String(orgIdValue)),
+      BigInt(String(warehouseIdValue)),
+    );
+  }
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
   private details(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');

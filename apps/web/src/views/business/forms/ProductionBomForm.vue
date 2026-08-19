@@ -57,10 +57,22 @@ async function loadContextGoods() {
   })) as any[];
 }
 
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+
 function organizationChanged() {
   form.value.warehouseId = '';
   form.value.details = [blankLine()];
   options.contextGoods = [];
+  loadOrgWarehouses(form.value.orgId);
 }
 
 function businessWarehouseChanged() {
@@ -171,16 +183,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, units, goodsResult] = await Promise.all([
+  const [orgs, units, goodsResult] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api
       .get('/goods', { params: { pageSize: 100, status: 1 } })
       .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.units = units;
   options.goods = (goodsResult as any).items ?? [];
   await loadDicts();
@@ -206,6 +216,7 @@ onMounted(async () => {
     }));
     await loadContextGoods();
   }
+  await loadOrgWarehouses(form.value.orgId);
 });
 </script>
 
@@ -248,11 +259,7 @@ onMounted(async () => {
           @change="businessWarehouseChanged"
         >
           <el-option
-            v-for="x in options.warehouses.filter(
-              (w: any) =>
-                !form.orgId ||
-                String(w.raw?.orgId ?? w.orgId ?? '') === String(form.orgId),
-            )"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"
