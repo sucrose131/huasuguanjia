@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import StatusTag from '@/components/StatusTag.vue';
 import type {
   BusinessDocumentConfig,
   BusinessDocumentContext,
@@ -153,15 +154,24 @@ function displayCell(
   row: Record<string, any>,
   column: { prop: string; kind?: string; render?: (row: Record<string, any>, ctx: ColumnRenderContext) => string },
 ) {
-  if (column.render) return column.render(row, columnRenderCtx);
+  if (column.render) {
+    const text = column.render(row, columnRenderCtx);
+    return column.kind === 'money' ? protectedMoney(text) : text;
+  }
   const value = row[column.prop];
   if (value === null || value === undefined) return '—';
   if (column.kind === 'date') return String(value).slice(0, 10);
   if (column.kind === 'datetime') return String(value).replace('T', ' ').slice(0, 16);
-  if (column.kind === 'money') return moneyText(value);
+  if (column.kind === 'money') return protectedMoney(value);
   if (column.kind === 'number') return Number(value).toLocaleString();
   return String(value);
 }
+
+// 金额：无查看权限掩码，有权限加 ¥ 前缀
+const protectedMoney = (value: unknown) => {
+  const text = moneyText(value);
+  return text === '****' ? text : `¥ ${text}`;
+};
 
 async function runAction(action: RowAction, row: Record<string, any>) {
   try {
@@ -345,6 +355,7 @@ onMounted(async () => {
             :label="column.label"
             :width="column.width"
             :min-width="column.minWidth"
+            :align="column.align"
             show-overflow-tooltip
           >
             <template #default="s">
@@ -353,7 +364,12 @@ onMounted(async () => {
                 :percentage="Math.round(Number(s.row[column.prop] || 0))"
                 :stroke-width="7"
               />
-              <el-tag v-else-if="column.kind === 'status'" effect="plain">{{ displayCell(s.row, column) }}</el-tag>
+              <StatusTag
+                v-else-if="column.kind === 'status'"
+                :value="s.row[column.prop]"
+                :dict-code="column.statusDict"
+                :label="column.render ? displayCell(s.row, column) : undefined"
+              />
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
           </el-table-column>

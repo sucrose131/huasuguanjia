@@ -28,6 +28,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '订单应付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.orderPayable ?? 0),
     },
     {
@@ -35,6 +36,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '退货后应付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.effectivePayable ?? row.orderPayable ?? 0),
     },
     {
@@ -42,6 +44,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '累计已付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.orderPaid ?? 0),
     },
     {
@@ -49,6 +52,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '累计已退',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.orderRefunded ?? 0),
     },
     {
@@ -56,6 +60,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '净已付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.netPaid ?? 0),
     },
     {
@@ -63,6 +68,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '剩余应付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.orderRemaining ?? 0),
     },
     {
@@ -70,13 +76,15 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       label: '本次付款',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.paymentAmount ?? 0),
     },
     {
       prop: 'paymentChannel',
       label: '付款渠道',
       width: 112,
-      render: (row, ctx) => ctx.dictLabel('payment_channel', row.paymentChannel),
+      kind: 'status',
+      statusDict: 'payment_channel',
     },
     {
       prop: 'paymentDate',

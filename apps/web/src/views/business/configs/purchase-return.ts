@@ -30,7 +30,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       render: (row) =>
         row.sourceType === 'receipt' ? (row.receiptNo ?? `GA${row.receiptId}`) : '—',
     },
-    { prop: 'returnQty', label: '退货数量', width: 104, kind: 'number' },
+    { prop: 'returnQty', label: '退货数量', width: 104, kind: 'number', align: 'right' },
     {
       prop: 'affectsInventory',
       label: '库存影响',
@@ -48,7 +48,8 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       prop: 'approveStatus',
       label: '处理状态',
       width: 96,
-      render: (row, ctx) => ctx.dictLabel('purchase_return_status', row.approveStatus),
+      kind: 'status',
+      statusDict: 'purchase_return_status',
     },
     {
       prop: 'createdBy',

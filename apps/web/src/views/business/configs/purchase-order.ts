@@ -49,6 +49,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       label: '采购数量',
       width: 104,
       kind: 'number',
+      align: 'right',
       render: (row) => String(row.pcsQty ?? row.quantity ?? 0),
     },
     {
@@ -56,6 +57,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       label: '订单总金额',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.payableAmount ?? row.totalAmount ?? 0),
     },
     {
@@ -63,6 +65,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       label: '净已付',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.netPaidAmount ?? 0),
     },
     {
@@ -70,14 +73,15 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       label: '待付款',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.remainingPayable ?? 0),
     },
     {
       prop: 'paymentProgressStatus',
       label: '付款进度',
       width: 104,
-      render: (row, ctx) =>
-        ctx.dictLabel('purchase_payment_progress_status', row.paymentProgressStatus),
+      kind: 'status',
+      statusDict: 'purchase_payment_progress_status',
     },
     {
       prop: 'arrivalProgress',
@@ -89,7 +93,8 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       prop: 'orderStatus',
       label: '采购状态',
       width: 104,
-      render: (row, ctx) => ctx.dictLabel('purchase_order_status', row.orderStatus),
+      kind: 'status',
+      statusDict: 'purchase_order_status',
     },
     {
       prop: 'createdBy',

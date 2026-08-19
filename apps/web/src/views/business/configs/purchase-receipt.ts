@@ -30,13 +30,14 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
       kind: 'date',
       render: (row) => String(row.createdAt ?? '').slice(0, 10),
     },
-    { prop: 'orderQuantity', label: '订单数量', width: 104, kind: 'number' },
-    { prop: 'inputQuantity', label: '本次入库', width: 104, kind: 'number' },
+    { prop: 'orderQuantity', label: '订单数量', width: 104, kind: 'number', align: 'right' },
+    { prop: 'inputQuantity', label: '本次入库', width: 104, kind: 'number', align: 'right' },
     {
       prop: 'confirmStatus',
       label: '入库状态',
       width: 96,
-      render: (row, ctx) => ctx.dictLabel('purchase_input_status', row.confirmStatus),
+      kind: 'status',
+      statusDict: 'purchase_input_status',
     },
     {
       prop: 'createdBy',

@@ -16,7 +16,8 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
       prop: 'sourceType',
       label: '退款来源',
       width: 136,
-      render: (row, ctx) => ctx.dictLabel('purchase_refund_source', row.sourceType),
+      kind: 'status',
+      statusDict: 'purchase_refund_source',
     },
     {
       prop: 'orderNo',
@@ -35,6 +36,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
       label: '退货金额',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.returnAmount ?? 0),
     },
     {
@@ -42,6 +44,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
       label: '应退金额',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.refundableAmount ?? 0),
     },
     {
@@ -49,6 +52,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
       label: '已退金额',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.refundedAmount ?? 0),
     },
     {
@@ -56,13 +60,15 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
       label: '待退金额',
       width: 120,
       kind: 'money',
+      align: 'right',
       render: (row) => String(row.remainingAmount ?? 0),
     },
     {
       prop: 'refundStatus',
       label: '退款状态',
       width: 112,
-      render: (row, ctx) => ctx.dictLabel('purchase_refund_status', row.refundStatus),
+      kind: 'status',
+      statusDict: 'purchase_refund_status',
     },
     {
       prop: 'createdAt',

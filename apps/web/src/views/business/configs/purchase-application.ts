@@ -38,11 +38,12 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       render: (row, ctx) => ctx.lookup('warehouses', row.warehouseId),
     },
     { prop: 'reason', label: '申请原因', minWidth: 200 },
-    { prop: 'quantity', label: '申请数量', width: 104, kind: 'number' },
+    { prop: 'quantity', label: '申请数量', width: 104, kind: 'number', align: 'right' },
     {
       prop: 'generationStatus',
       label: '生成状态',
       minWidth: 120,
+      kind: 'status',
       render: (row) =>
         row.generationStatus === 'fully_generated'
           ? '已生成订单'
@@ -63,7 +64,8 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       prop: 'approveStatus',
       label: '审批状态',
       width: 96,
-      render: (row, ctx) => ctx.dictLabel('approval_status', row.approveStatus),
+      kind: 'status',
+      statusDict: 'approval_status',
     },
   ],
   dictionaries: ['approval_status'],

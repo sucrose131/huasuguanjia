@@ -4,6 +4,10 @@ export type BusinessColumn = {
   width?: number;
   minWidth?: number;
   kind?: 'date' | 'datetime' | 'money' | 'number' | 'status' | 'progress' | 'text';
+  /** 列内容对齐（金额/数量列常右对齐） */
+  align?: 'left' | 'center' | 'right';
+  /** 状态列的字典 code（StatusTag 按字典 label 自动配色） */
+  statusDict?: string;
   /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */
   render?: (row: Record<string, any>, ctx: any) => string;
 };
