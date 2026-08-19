@@ -41,6 +41,7 @@ type ResolvedOrderLine = {
   price: number;
   amount: number;
   goodsType: number;
+  sourceProductId: number;
 };
 
 type ShipLine = {
@@ -175,7 +176,11 @@ export class HuasuHomeInstallmentOrderSyncService {
       },
     });
 
-    if (this.shouldSkipUnchanged(existing, order, sourceUpdatedAt)) {
+    if (
+      existing &&
+      this.shouldSkipUnchanged(existing, order, sourceUpdatedAt) &&
+      !(await this.hasServiceMissingGoods(existing.so_id))
+    ) {
       stats.skipped += 1;
       return;
     }
@@ -270,6 +275,7 @@ export class HuasuHomeInstallmentOrderSyncService {
             sourceId,
             orderType,
             order,
+            lines,
             customerId,
             operatorId,
             now,
@@ -277,16 +283,6 @@ export class HuasuHomeInstallmentOrderSyncService {
         ) {
           delta.events += 1;
         }
-
-        delta.events += await this.ensurePeriodEvents(tx, {
-          soId,
-          sourceId,
-          orderType,
-          order,
-          customerId,
-          operatorId,
-          now,
-        });
 
         delta.outputs += await this.ensurePeriodShipments(tx, {
           soId,
@@ -305,6 +301,7 @@ export class HuasuHomeInstallmentOrderSyncService {
           sourceId,
           orderType,
           order,
+          lines,
           orgId,
           warehouseId,
           customerId,
@@ -434,8 +431,8 @@ export class HuasuHomeInstallmentOrderSyncService {
       now,
     } = input;
     const totalQty = lines.reduce((sum, line) => sum + line.quantity, 0);
-    const totalAmount = this.dec(Number(order.amount ?? 0));
-    const factAmount = this.dec(Number(order.paid_amount ?? 0));
+    const totalAmount = this.dec(Number(order.package_amount ?? order.amount ?? 0));
+    const factAmount = this.dec(Number(order.amount ?? 0));
     const priceoff = this.dec(
       Math.max(Number(order.package_amount ?? order.amount ?? 0) - Number(order.amount ?? 0), 0),
     );
@@ -591,6 +588,7 @@ export class HuasuHomeInstallmentOrderSyncService {
     return created;
   }
 
+  /** 分期售后：无 aftersale 明细时补一条完结记录；有明细则由 AFTERSALE-{id} 写入。不写下单/发货。 */
   private async ensureStatusEvent(
     tx: Tx,
     input: {
@@ -598,36 +596,37 @@ export class HuasuHomeInstallmentOrderSyncService {
       sourceId: bigint;
       orderType: string;
       order: HuasuHomeInstallmentOrder;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       operatorId: bigint;
       now: Date;
     },
   ): Promise<boolean> {
     const status = Number(input.order.status);
-    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-STATUS-${status}`;
+    if (status !== HUASU_HOME_INSTALLMENT_STATUS.AFTER_SALES) return false;
+    if (this.normalizeAftersales(input.order).length) return false;
+
+    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-AS-DONE`;
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
-    if (old) return false;
+    const goods = input.lines[0] ?? null;
+    if (old) {
+      await this.backfillServiceGoods(tx, old, goods, input.operatorId, input.now);
+      return false;
+    }
 
-    const eventType =
-      status === HUASU_HOME_INSTALLMENT_STATUS.AFTER_SALES
-        ? 4
-        : this.shippablePeriods(input.order).length
-          ? 3
-          : 2;
-    const eventStatus = 2;
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
     await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
         customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
-        event_type: eventType,
+        goods_id: goods ? Number(goods.goodsId) : 0,
+        sku_id: goods ? Number(goods.skuId) : 0,
+        event_type: 4,
         event_content: this.clip(input.order.remark ?? '', 255),
-        event_status: eventStatus,
+        event_status: 2,
         handler_id: input.operatorId,
         event_date: input.now,
         remark: key,
@@ -638,42 +637,6 @@ export class HuasuHomeInstallmentOrderSyncService {
       },
     });
     return true;
-  }
-
-  private async ensurePeriodEvents(
-    tx: Tx,
-    input: {
-      soId: bigint;
-      sourceId: bigint;
-      orderType: string;
-      order: HuasuHomeInstallmentOrder;
-      customerId: bigint;
-      operatorId: bigint;
-      now: Date;
-    },
-  ): Promise<number> {
-    let created = 0;
-    for (const period of this.paidPeriods(input.order)) {
-      const paidKey = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-INSTALLMENT-${period.no}-PAID`;
-      if (await this.createServiceEvent(tx, input, paidKey, 2, period.offline_paid_time)) {
-        created += 1;
-      }
-      if (this.shouldShipPeriod(period)) {
-        const issuedKey = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-INSTALLMENT-${period.no}-ISSUED`;
-        if (
-          await this.createServiceEvent(
-            tx,
-            input,
-            issuedKey,
-            3,
-            period.rights_issue?.created_at ?? period.updated_at,
-          )
-        ) {
-          created += 1;
-        }
-      }
-    }
-    return created;
   }
 
   private async createServiceEvent(
@@ -688,19 +651,24 @@ export class HuasuHomeInstallmentOrderSyncService {
     key: string,
     eventType: number,
     eventDate?: string,
+    goods?: ResolvedOrderLine | null,
   ): Promise<boolean> {
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
-    if (old) return false;
+    const line = goods ?? null;
+    if (old) {
+      await this.backfillServiceGoods(tx, old, line, input.operatorId, input.now);
+      return false;
+    }
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
     await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
         customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
+        goods_id: line ? Number(line.goodsId) : 0,
+        sku_id: line ? Number(line.skuId) : 0,
         event_type: eventType,
         event_content: this.clip(input.order.remark ?? '', 255),
         event_status: 2,
@@ -863,6 +831,7 @@ export class HuasuHomeInstallmentOrderSyncService {
       sourceId: bigint;
       orderType: string;
       order: HuasuHomeInstallmentOrder;
+      lines: ResolvedOrderLine[];
       orgId: bigint;
       warehouseId: bigint;
       customerId: bigint;
@@ -899,6 +868,8 @@ export class HuasuHomeInstallmentOrderSyncService {
           eventKey,
           4,
           row.created_at ?? row.updated_at,
+          input.lines.find((line) => line.sourceProductId === Number(row.product_id)) ??
+            input.lines[0],
         )
       ) {
         result.events += 1;
@@ -1042,10 +1013,38 @@ export class HuasuHomeInstallmentOrderSyncService {
         price,
         amount: price * quantity,
         goodsType: Number(goods.goods_type ?? 1),
+        sourceProductId: Number(product.product_id),
       });
     }
     if (!lines.length) throw new BadRequestException('分期订单有效商品数量为 0');
     return lines;
+  }
+
+  private async hasServiceMissingGoods(soId: bigint): Promise<boolean> {
+    const missing = await this.prisma.hspsi_sale_order_service.findFirst({
+      where: { so_id: soId, deleted_at: null, goods_id: 0, event_type: { in: [4, 5] } },
+      select: { service_id: true },
+    });
+    return Boolean(missing);
+  }
+
+  private async backfillServiceGoods(
+    tx: Tx,
+    existing: { service_id: bigint; goods_id: number },
+    goods: ResolvedOrderLine | null,
+    operatorId: bigint,
+    now: Date,
+  ) {
+    if (!goods || Number(existing.goods_id) !== 0) return;
+    await tx.hspsi_sale_order_service.update({
+      where: { service_id: existing.service_id },
+      data: {
+        goods_id: Number(goods.goodsId),
+        sku_id: Number(goods.skuId),
+        updated_by: operatorId,
+        updated_at: now,
+      },
+    });
   }
 
   private async resolveDefaultStandardSku(

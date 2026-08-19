@@ -441,6 +441,11 @@ export interface ShifangQingyuanOrderExpress {
 /** 列表/详情共用完整订单快照（list 自 2026-08-12 起与 detail 同构） */
 export interface ShifangQingyuanOrderDetailData {
   order: ShifangQingyuanOrder;
+  /**
+   * 订单出库类型（v8，与 order 同级）：
+   * 0 无云库存数据 / 1 向云库存纯入库 / 2 从云库存出库 / 3 从系统仓库出库 / 4 混合出库
+   */
+  order_type?: number;
   details: ShifangQingyuanOrderDetail[];
   refunds?: ShifangQingyuanOrderRefund[];
   actions?: unknown[];

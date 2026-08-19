@@ -7,6 +7,7 @@
  * - 商品未映射失败
  * - 机构未映射失败
  * - 已发货出库 + conversion_rule 扩量
+ * - order_type=1 云库存纯入库不写出库/回库
  * - 无 conversion_rule 时按下单 SKU 出库
  * - 仅退款成功（so_pay_type=2，无 exit）
  * - 退货退款成功生成 exit
@@ -39,6 +40,7 @@ import {
   SHIFANG_QINGYUAN_REFUND_TYPE,
   SHIFANG_QINGYUAN_RULE_STATUS,
   SHIFANG_QINGYUAN_RULE_TYPE,
+  SHIFANG_QINGYUAN_STOCK_FLOW,
 } from '../shifang-qingyuan.constants';
 import type {
   ShifangQingyuanOrderDetail,
@@ -59,6 +61,7 @@ const TARGET_SKU_ID = 202n;
 function buildDetail(
   overrides: {
     order?: Partial<ShifangQingyuanOrderDetailData['order']>;
+    order_type?: number;
     details?: Partial<ShifangQingyuanOrderDetail>[];
     express?: ShifangQingyuanOrderExpress[];
     refunds?: ShifangQingyuanOrderRefund[];
@@ -175,6 +178,7 @@ function buildDetail(
 
   return {
     order,
+    order_type: overrides.order_type,
     details,
     express: overrides.express ?? [],
     refunds: overrides.refunds ?? [],
@@ -485,6 +489,8 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(stats.failed).toBe(0);
     expect(stats.created).toBe(1);
     expect(stats.payments).toBe(1);
+    expect(stats.events).toBe(0);
+    expect(ctx.tx.hspsi_sale_order_service.create).not.toHaveBeenCalled();
 
     expect(ctx.tx.hspsi_sys_organization_mapping.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -619,6 +625,62 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(detailArg[0].output_qty).toBe(6); // 2 * ratio 3
 
     expect(ctx.externalPosting.post).toHaveBeenCalled();
+  });
+
+  it('order_type=1 云库存纯入库：建单收款，不出库不扣库，发货态保持待发货', async () => {
+    const ctx = createContext();
+    const snapshot = buildDetail({
+      order_type: SHIFANG_QINGYUAN_STOCK_FLOW.CLOUD_IN,
+      order: {
+        order_status: SHIFANG_QINGYUAN_ORDER_STATUS.COMPLETED,
+        shipping_status: 1,
+      },
+    });
+    mockListSnapshot(ctx, snapshot);
+
+    const stats = await ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' });
+
+    expect(stats.failed, JSON.stringify(stats.failures)).toBe(0);
+    expect(stats.created).toBe(1);
+    expect(stats.payments).toBe(1);
+    expect(stats.outputs).toBe(0);
+    expect(ctx.tx.hspsi_sale_order_output.create).not.toHaveBeenCalled();
+    expect(ctx.externalPosting.post).not.toHaveBeenCalled();
+
+    const soCreate = ctx.tx.hspsi_sale_order.create.mock.calls[0]![0].data;
+    expect(soCreate.so_type).toBe(4);
+    expect(soCreate.delivery_status).toBe(1);
+    expect(soCreate.order_status).toBe(2);
+    expect(soCreate.delivery_date).toBeNull();
+  });
+
+  it('order_type=1 退货退款：只记账不回库', async () => {
+    const ctx = createContext();
+    const snapshot = buildDetail({
+      order_type: SHIFANG_QINGYUAN_STOCK_FLOW.CLOUD_IN,
+      order: {
+        order_status: SHIFANG_QINGYUAN_ORDER_STATUS.COMPLETED,
+        is_feedback: 2,
+      },
+      refunds: [
+        buildRefund({
+          type: SHIFANG_QINGYUAN_REFUND_TYPE.RETURN_REFUND,
+          is_refund: 1,
+          num: 1,
+          order_detail_id: 1,
+        }),
+      ],
+    });
+    mockListSnapshot(ctx, snapshot);
+
+    const stats = await ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' });
+
+    expect(stats.failed, JSON.stringify(stats.failures)).toBe(0);
+    expect(stats.outputs).toBe(0);
+    expect(stats.exits).toBe(0);
+    expect(stats.payments).toBeGreaterThanOrEqual(2);
+    expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
+    expect(ctx.externalPosting.post).not.toHaveBeenCalled();
   });
 
   it('仅退款成功：type=1 is_refund=1 → 退款收款计入 payments，无 exit', async () => {
@@ -875,5 +937,24 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(updateData).not.toHaveProperty('mobile');
     expect(updateData).not.toHaveProperty('levels');
     expect(updateData).not.toHaveProperty('status');
+  });
+
+  it('同步进行中再次触发应拒绝', async () => {
+    const ctx = createContext();
+    let release!: (value: { list: unknown[] }) => void;
+    ctx.shifangQingyuan.getOrderList.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const first = ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' });
+    await vi.waitFor(() => expect(ctx.shifangQingyuan.getOrderList).toHaveBeenCalled());
+    await expect(ctx.service.syncOrders('1', { start_time: '2026-01-01 00:00:00' })).rejects.toThrow(
+      /仍在进行/,
+    );
+    release({ list: [] });
+    await first;
   });
 });

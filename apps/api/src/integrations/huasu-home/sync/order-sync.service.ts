@@ -45,6 +45,7 @@ type ResolvedOrderLine = {
   price: number;
   amount: number;
   goodsType: number;
+  sourceProductId: number;
 };
 
 type ShipLine = {
@@ -208,7 +209,8 @@ export class HuasuHomeOrderSyncService {
       sourceUpdatedAt &&
       existing.source_updated_at &&
       existing.source_updated_at.getTime() === sourceUpdatedAt.getTime() &&
-      existing.source_status === Number(order.order_status)
+      existing.source_status === Number(order.order_status) &&
+      !(await this.hasServiceMissingGoods(existing.so_id))
     ) {
       stats.skipped += 1;
       return;
@@ -293,20 +295,6 @@ export class HuasuHomeOrderSyncService {
           delta.payments += 1;
         }
 
-        if (
-          await this.ensureStatusEvent(tx, {
-            soId,
-            sourceId,
-            orderType,
-            order,
-            customerId,
-            operatorId,
-            now,
-          })
-        ) {
-          delta.events += 1;
-        }
-
         if (HUASU_HOME_ORDER_SHIPPED_STATUSES.has(Number(order.order_status))) {
           const shipped = await this.ensureShipments(tx, {
             soId,
@@ -328,6 +316,7 @@ export class HuasuHomeOrderSyncService {
           sourceId,
           orderType,
           order,
+          lines,
           customerId,
           orgId,
           warehouseId,
@@ -561,63 +550,6 @@ export class HuasuHomeOrderSyncService {
     return true;
   }
 
-  private async ensureStatusEvent(
-    tx: Tx,
-    input: {
-      soId: bigint;
-      sourceId: bigint;
-      orderType: string;
-      order: HuasuHomeOrder;
-      customerId: bigint;
-      operatorId: bigint;
-      now: Date;
-    },
-  ): Promise<boolean> {
-    // 售后状态(7/8/6)由 ensureAfterSalesEvent 单独记录，避免重复
-    const status = Number(input.order.order_status);
-    if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
-    ) {
-      return false;
-    }
-
-    const key = this.eventKey(
-      input.sourceId,
-      input.orderType,
-      input.order.id,
-      Number(input.order.order_status),
-    );
-    const old = await tx.hspsi_sale_order_service.findFirst({
-      where: { so_id: input.soId, remark: key, deleted_at: null },
-    });
-    if (old) return false;
-
-    const eventType = this.eventTypeForStatus(Number(input.order.order_status), input.order);
-    const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
-      data: {
-        service_no: serviceNo,
-        so_id: input.soId,
-        customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
-        event_type: eventType,
-        event_content: this.resolveEventContent(input.order, 'status'),
-        event_status: 2,
-        handler_id: input.operatorId,
-        event_date: input.now,
-        remark: key,
-        created_by: input.operatorId,
-        updated_by: input.operatorId,
-        created_at: input.now,
-        updated_at: input.now,
-      },
-    });
-    return true;
-  }
-
   private async ensureShipments(
     tx: Tx,
     input: {
@@ -748,6 +680,7 @@ export class HuasuHomeOrderSyncService {
       sourceId: bigint;
       orderType: string;
       order: HuasuHomeOrder;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       orgId: bigint;
       warehouseId: bigint;
@@ -955,6 +888,7 @@ export class HuasuHomeOrderSyncService {
       sourceId: bigint;
       orderType: string;
       order: HuasuHomeOrder;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       operatorId: bigint;
       now: Date;
@@ -966,7 +900,11 @@ export class HuasuHomeOrderSyncService {
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
-    if (old) return false;
+    const goods = this.resolveServiceGoodsLine(input.order, input.lines);
+    if (old) {
+      await this.backfillServiceGoods(tx, old, goods, input.operatorId, input.now);
+      return false;
+    }
     const type = Number(input.order.after_sales_type ?? 0);
     const eventType =
       type === HUASU_HOME_AFTER_SALES_TYPE.EXCHANGE
@@ -980,10 +918,10 @@ export class HuasuHomeOrderSyncService {
         service_no: serviceNo,
         so_id: input.soId,
         customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
+        goods_id: goods ? Number(goods.goodsId) : 0,
+        sku_id: goods ? Number(goods.skuId) : 0,
         event_type: eventType,
-        event_content: this.resolveEventContent(input.order, 'after_sales', input.eventStatus),
+        event_content: this.resolveEventContent(input.order, input.eventStatus),
         event_status: input.eventStatus,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -1198,6 +1136,58 @@ export class HuasuHomeOrderSyncService {
     };
   }
 
+  /** 历史同步事件 goods_id=0 时，下次同步补写商品规格，不跳过。 */
+  private async hasServiceMissingGoods(soId: bigint): Promise<boolean> {
+    const missing = await this.prisma.hspsi_sale_order_service.findFirst({
+      where: { so_id: soId, deleted_at: null, goods_id: 0, event_type: { in: [4, 5] } },
+      select: { service_id: true },
+    });
+    return Boolean(missing);
+  }
+
+  /**
+   * 售后事件商品取销售订单行（必须属于该单，页面才能编辑）。
+   * 优先：权益扣减 product_id 能匹配的下单行 → 有 after_sales_amount 的行 → 首行。
+   */
+  private resolveServiceGoodsLine(
+    order: HuasuHomeOrder,
+    lines: ResolvedOrderLine[],
+  ): ResolvedOrderLine | null {
+    if (!lines.length) return null;
+    const rightsIds = new Set(
+      (order.after_sales?.rights_deducted_records ?? [])
+        .map((row) => Number(row.product_id))
+        .filter((id) => id > 0),
+    );
+    if (rightsIds.size) {
+      const matched = lines.find((line) => rightsIds.has(line.sourceProductId));
+      if (matched) return matched;
+    }
+    const items = order.items ?? [];
+    const amountIndex = items.findIndex((item) => Number(item.after_sales_amount) > 0);
+    if (amountIndex >= 0 && lines[amountIndex]) return lines[amountIndex]!;
+    return lines[0] ?? null;
+  }
+
+  private async backfillServiceGoods(
+    tx: Tx,
+    existing: { service_id: bigint; goods_id: number },
+    goods: ResolvedOrderLine | null,
+    operatorId: bigint,
+    now: Date,
+  ) {
+    if (!goods || Number(existing.goods_id) !== 0) return;
+    await tx.hspsi_sale_order_service.update({
+      where: { service_id: existing.service_id },
+      data: {
+        goods_id: Number(goods.goodsId),
+        sku_id: Number(goods.skuId),
+        updated_by: operatorId,
+        updated_at: now,
+      },
+    });
+  }
+
   private async resolveOrderLines(
     tx: Tx,
     sourceId: bigint,
@@ -1249,6 +1239,7 @@ export class HuasuHomeOrderSyncService {
         price,
         amount: price * quantity,
         goodsType: Number(goods.goods_type ?? 1),
+        sourceProductId: Number(item.product_id),
       });
     }
     return lines;
@@ -1475,47 +1466,12 @@ export class HuasuHomeOrderSyncService {
    * - 售后拒绝/用户取消 → cancel_reason
    * - 其余状态/售后事件 → remark
    */
-  private resolveEventContent(
-    order: HuasuHomeOrder,
-    kind: 'status' | 'after_sales',
-    eventStatus?: number,
-  ): string {
-    if (kind === 'after_sales') {
-      if (eventStatus === 3) {
-        return this.clip(order.cancel_reason ?? '', 255);
-      }
-      const as = order.after_sales;
-      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
+  private resolveEventContent(order: HuasuHomeOrder, eventStatus?: number): string {
+    if (eventStatus === 3) {
+      return this.clip(order.cancel_reason ?? '', 255);
     }
-    // kind === 'status'：售后相关状态优先取 after_sales.reason
-    const status = Number(order.order_status);
-    if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
-    ) {
-      const as = order.after_sales;
-      return this.clip(as?.reason || as?.remark || order.remark || '', 255);
-    }
-    return this.clip(order.remark ?? '', 255);
-  }
-
-  private eventTypeForStatus(status: number, order: HuasuHomeOrder): number {
-    if (status === HUASU_HOME_ORDER_STATUS.PAID) return 2;
-    if (
-      status === HUASU_HOME_ORDER_STATUS.SHIPPED ||
-      status === HUASU_HOME_ORDER_STATUS.RECEIVED ||
-      status === HUASU_HOME_ORDER_STATUS.COMPLETED
-    )
-      return 3;
-    if (
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES ||
-      status === HUASU_HOME_ORDER_STATUS.AFTER_SALES_DONE ||
-      status === HUASU_HOME_ORDER_STATUS.REFUNDED
-    ) {
-      return Number(order.after_sales_type) === HUASU_HOME_AFTER_SALES_TYPE.EXCHANGE ? 5 : 4;
-    }
-    return 11;
+    const as = order.after_sales;
+    return this.clip(as?.reason || as?.remark || order.remark || '', 255);
   }
 
   private formatAddress(order: HuasuHomeOrder): string {
@@ -1591,14 +1547,6 @@ export class HuasuHomeOrderSyncService {
     token: number | string,
   ) {
     return `HH-EXIT-${sourceId}-${orderType}-${orderId}-${token}`;
-  }
-  private eventKey(
-    sourceId: bigint,
-    orderType: string,
-    orderId: number | string,
-    status: number,
-  ) {
-    return `HH-EVT-${sourceId}-${orderType}-${orderId}-STATUS-${status}`;
   }
 
   private async markMappingFailed(

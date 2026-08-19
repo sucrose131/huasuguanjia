@@ -10,7 +10,10 @@ import {
 import type { Request } from 'express';
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalCallbackService } from '../integrations/xinfutong-oa/approval/approval-callback.service';
-import { EVENT_CODE_OA_PROCESS_FINISH } from '../integrations/xinfutong-oa/approval/approval.types';
+import {
+  EVENT_CODE_OA_PROCESS_FINISH,
+  formKeyFromProcKey,
+} from '../integrations/xinfutong-oa/approval/approval.types';
 import {
   EVENT_CODE_CONNECTIVITY_TEST,
   OaEventVerifyError,
@@ -94,6 +97,32 @@ export class RequisitionOaCallbackController {
       }
 
       const payload = this.callback.handleProcessFinishEvent(verified.inner);
+      const formKey = formKeyFromProcKey(payload.procKey);
+      const template = await this.prisma.hspsi_oa_form_template.findFirst({
+        where: {
+          form_key: formKey,
+          account_set_id: verified.accountSetId,
+          status: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (!template) {
+        await this.prisma.hspsi_oa_approval_callback_log.update({
+          where: { id: log.id },
+          data: {
+            account_set_id: verified.accountSetId,
+            proc_status: payload.procStatus,
+            bus_key: payload.busKey,
+            proc_inst_id: payload.procInstId,
+            proc_key: payload.procKey,
+            processed: 1,
+            process_result: `非本系统表单，已忽略：${formKey}`.slice(0, 500),
+          },
+        });
+        return oaEventAck();
+      }
+
       const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
         where: {
           bus_key: payload.busKey,

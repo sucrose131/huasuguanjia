@@ -9,7 +9,7 @@ type Db = Prisma.TransactionClient | PrismaClient;
  * 外部订单同步专用库存过账（华溯之家 / 十方清源等共用）。
  *
  * 与平台 InventoryPostingService 的差异：
- * - 商品/SKU 只校验存在且启用，不要求 goods.org_id === 订单机构
+ * - 商品/SKU 只校验存在且未删除，不判断启用状态，也不要求 goods.org_id === 订单机构
  * - 出库允许无库存明细时建账并扣成负数
  * - 分类有 warehouse_type 时仍校验与目标仓库类型一致
  */
@@ -36,14 +36,14 @@ export class ExternalInventoryPostingService {
         throw new BadRequestException('库存数量必须为正整数');
       const goodsId = BigInt(String(line.goodsId));
       const skuId = BigInt(String(line.skuId));
-      // 外部同步商品常为 org_id=0：不按订单机构过滤
+      // 外部同步商品常为 org_id=0：不按订单机构过滤；停用商品/规格仍允许出库、回库
       const goods = await db.hspsi_goods_info.findFirst({
-        where: { goods_id: goodsId, status: 1, deleted_at: null },
+        where: { goods_id: goodsId, deleted_at: null },
       });
       const sku = await db.hspsi_goods_info_sku.findFirst({
-        where: { sku_id: skuId, good_id: goodsId, status: 1, deleted_at: null },
+        where: { sku_id: skuId, good_id: goodsId, deleted_at: null },
       });
-      if (!goods || !sku) throw new BadRequestException('商品或 SKU 无效，或未启用');
+      if (!goods || !sku) throw new BadRequestException('商品或 SKU 无效');
       const category = await db.hspsi_goods_info_category.findFirst({
         where: { goods_catg_id: goods.goods_catg_id, deleted_at: null },
       });

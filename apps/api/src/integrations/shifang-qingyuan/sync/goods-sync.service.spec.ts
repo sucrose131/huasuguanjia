@@ -30,7 +30,7 @@ import {
 } from '../shifang-qingyuan.constants';
 import { ShifangQingyuanService } from '../shifang-qingyuan.service';
 import type { ShifangQingyuanGoodsListData } from '../shifang-qingyuan.types';
-import { ShifangQingyuanGoodsSyncService } from './goods-sync.service';
+import { asRecordArray, ShifangQingyuanGoodsSyncService } from './goods-sync.service';
 
 /**
  * 加载 .env，并覆盖 process.env。
@@ -162,8 +162,10 @@ describeExternal('ShifangQingyuanGoodsSyncService 商品同步集成测试（真
 
         // 有 gift_plan / upgrade_bag 的商品 source_type 是 MAPPED
         const hasMapping =
-          sample.cloud_stock_gift_plan?.some((p) => p.status === 1) ||
-          sample.cloud_stock_upgrade_bag?.some((b) => b.status === 1 && b.is_enable === 1);
+          asRecordArray(sample.cloud_stock_gift_plan).some((p) => p.status === 1) ||
+          asRecordArray(sample.cloud_stock_upgrade_bag).some(
+            (b) => b.status === 1 && b.is_enable === 1,
+          );
         expect(mappings[0]!.source_type).toBe(
           hasMapping ? SHIFANG_QINGYUAN_SOURCE_TYPE.MAPPED : SHIFANG_QINGYUAN_SOURCE_TYPE.STANDARD,
         );

@@ -824,3 +824,48 @@ describe('SalesService after-sales batch guards', () => {
     ]);
   });
 });
+
+describe('SalesService saveOutput no-output orders', () => {
+  function outputTx(soType: number) {
+    return {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_sale_order_output: { findFirst: vi.fn() },
+      hspsi_sale_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          so_id: 8n,
+          so_type: soType,
+          approve_status: 1,
+          so_property_type: 1,
+        }),
+      },
+    };
+  }
+
+  it('rejects creating output for 无需出库 orders', async () => {
+    const tx = outputTx(4);
+    const { service } = createService({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    await expect(
+      service.saveOutput(
+        null,
+        { orderId: '8', details: [{ goodsId: '1', skuId: '2', quantity: 1 }] },
+        '9',
+      ),
+    ).rejects.toThrow('无需出库订单不能创建销售出库');
+  });
+
+  it('rejects creating output for virtual orders', async () => {
+    const tx = outputTx(2);
+    const { service } = createService({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    await expect(
+      service.saveOutput(
+        null,
+        { orderId: '8', details: [{ goodsId: '1', skuId: '2', quantity: 1 }] },
+        '9',
+      ),
+    ).rejects.toThrow('虚拟订单不能创建实物出库');
+  });
+});

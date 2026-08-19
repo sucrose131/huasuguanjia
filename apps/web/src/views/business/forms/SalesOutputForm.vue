@@ -50,6 +50,11 @@ function nid(v: unknown) {
   return v == null || v === '' || v === 0 || v === '0' ? '' : v;
 }
 
+/** sales_order_type=4 无需出库，不能办理销售出库 */
+function isNoOutputOrder(order: { orderType?: unknown }) {
+  return Number(order.orderType) === 4;
+}
+
 function goodsOf(line: any) {
   return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
@@ -98,21 +103,22 @@ async function loadOrgOptions(orgId: unknown) {
   options.depts = depts as any[];
 }
 
+function toOutputOrderOption(order: any) {
+  return {
+    value: order.id,
+    label: `${order.orderNo ?? ''} · ${order.customerName ?? ''}`.trim(),
+  };
+}
+
 async function searchSalesOrderOptions(keyword: string) {
   if (!String(keyword ?? '').trim()) {
-    return (options.orders as any[]).map((x: any) => ({
-      value: x.id,
-      label: `${x.orderNo ?? ''} · ${x.customerName ?? ''}`.trim(),
-    }));
+    return (options.orders as any[]).filter((x) => !isNoOutputOrder(x)).map(toOutputOrderOption);
   }
   const r: any = await api.get('/sales/money-order-options', {
     params: { keyword, pageSize: 50 },
   });
   const items = (Array.isArray(r) ? r : r.items ?? []) as any[];
-  return items.map((x: any) => ({
-    value: x.id,
-    label: `${x.orderNo ?? ''} · ${x.customerName ?? ''}`.trim(),
-  }));
+  return items.filter((x) => !isNoOutputOrder(x)).map(toOutputOrderOption);
 }
 
 async function enrichGoodsInfo(lines: any[], orderDetails?: any[]) {
@@ -155,6 +161,12 @@ async function orderChanged() {
     return;
   }
   const o: any = await api.get(`/sales/orders/${form.value.orderId}`);
+  if (isNoOutputOrder(o)) {
+    ElMessage.warning('无需出库订单不能办理销售出库');
+    form.value.orderId = '';
+    form.value.details = [];
+    return;
+  }
   Object.assign(form.value, {
     orgId: o.orgId,
     warehouseId: o.warehouseId,

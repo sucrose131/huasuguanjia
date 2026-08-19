@@ -35,7 +35,7 @@ import {
   SHIFANG_QINGYUAN_SOURCE_TYPE,
 } from '../shifang-qingyuan.constants';
 import type { ShifangQingyuanGoodsItem } from '../shifang-qingyuan.types';
-import { ShifangQingyuanGoodsSyncService } from './goods-sync.service';
+import { asRecordArray, ShifangQingyuanGoodsSyncService } from './goods-sync.service';
 
 /** 构造一个"自身出库"普通商品 */
 function buildStandardGoods(overrides: Partial<ShifangQingyuanGoodsItem> = {}): ShifangQingyuanGoodsItem {
@@ -498,11 +498,13 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     const goods = ctx.goodsStore[0]!;
     expect(goods.goods_name).toBe('尝鲜装');
     expect(goods.sale_price.toNumber()).toBeCloseTo(686, 2); // 接口已是元
+    expect(goods.spec_models).toBe('默认规格');
 
     // SKU
     const sku = ctx.skuStore[0]!;
     expect(sku.sale_price.toNumber()).toBeCloseTo(686, 2);
     expect(sku.pcs_qty).toBe(1); // 库存不同步
+    expect(sku.spec_models).toBe('默认规格');
 
     // Mapping：source_type=STANDARD
     const mapping = ctx.mappingStore[0]!;
@@ -549,6 +551,47 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
     const stats = await ctx.service.syncGoods('0');
     expect(stats.goods.skipped).toBe(1);
     expect(stats.warnings.some((w) => w.includes('无 SKU'))).toBe(true);
+  });
+
+  it('规格名为空白时写入默认规格，有名称时保留原名', async () => {
+    const ctx = createContext();
+    const blankName = buildStandardGoods({
+      goods: { ...buildStandardGoods().goods, id: 101, goods_name: '空白规格商品' },
+      qimall_goods_attr: [
+        {
+          ...buildStandardGoods().qimall_goods_attr[0]!,
+          id: 101,
+          goods_id: 101,
+          name: '   ',
+        },
+      ],
+    });
+    const named = buildStandardGoods({
+      goods: { ...buildStandardGoods().goods, id: 102, goods_name: '有规格商品' },
+      qimall_goods_attr: [
+        {
+          ...buildStandardGoods().qimall_goods_attr[0]!,
+          id: 102,
+          goods_id: 102,
+          name: '500ml',
+        },
+      ],
+    });
+    ctx.shifangQingyuan.getGoodsList.mockResolvedValueOnce({
+      list: [blankName, named],
+      pagination: { total: 2, page: 1, page_size: 100 },
+    });
+
+    await ctx.service.syncGoods('0');
+
+    const blankSku = ctx.skuStore.find((row) => row.spec_models === '默认规格');
+    const namedSku = ctx.skuStore.find((row) => row.spec_models === '500ml');
+    const blankGoods = ctx.goodsStore.find((row) => row.goods_name === '空白规格商品');
+    const namedGoods = ctx.goodsStore.find((row) => row.goods_name === '有规格商品');
+    expect(blankSku).toBeTruthy();
+    expect(namedSku).toBeTruthy();
+    expect(blankGoods?.spec_models).toBe('默认规格');
+    expect(namedGoods?.spec_models).toBe('500ml');
   });
 
   it('gift_plan 对象格式 give_goods_num：source_type=MAPPED，写多条 conversion_rule', async () => {
@@ -790,5 +833,73 @@ describe('ShifangQingyuanGoodsSyncService 单元测试', () => {
 
     expect(ctx.shifangQingyuan.getGoodsList).toHaveBeenCalledTimes(2);
     expect(stats.goods.created).toBe(100);
+  });
+
+  it('同步进行中再次触发应拒绝', async () => {
+    const ctx = createContext();
+    let release!: (value: { list: unknown[]; pagination: { total: number; page: number; page_size: number } }) => void;
+    ctx.shifangQingyuan.getGoodsList.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const first = ctx.service.syncGoods('0');
+    await vi.waitFor(() => expect(ctx.shifangQingyuan.getGoodsList).toHaveBeenCalled());
+    await expect(ctx.service.syncGoods('0')).rejects.toThrow(/仍在进行/);
+    release({ list: [], pagination: { total: 0, page: 1, page_size: 100 } });
+    await first;
+  });
+
+  it('upgrade_bag 为空对象 {} 时按无方案处理，不抛错', async () => {
+    const ctx = createContext();
+    const item = buildStandardGoods({
+      cloud_stock_upgrade_bag: {} as never,
+      cloud_stock_gift_plan: {} as never,
+    });
+    ctx.shifangQingyuan.getGoodsList.mockResolvedValueOnce({
+      list: [item],
+      pagination: { total: 1, page: 1, page_size: 100 },
+    });
+
+    const stats = await ctx.service.syncGoods('0');
+    expect(stats.goods.created).toBe(1);
+    const mapping = ctx.mappingStore.find((row) => row.source_goods_id === '1')!;
+    expect(mapping.source_type).toBe(SHIFANG_QINGYUAN_SOURCE_TYPE.STANDARD);
+    expect(stats.conversionRules.upserted).toBe(0);
+  });
+
+  it('upgrade_bag 为单条对象时仍按启用方案写入 conversion_rule', async () => {
+    const ctx = createContext();
+    const standard = buildStandardGoods();
+    const withBag = buildUpgradeBagGoods();
+    const [bag] = withBag.cloud_stock_upgrade_bag;
+    const item = { ...withBag, cloud_stock_upgrade_bag: bag as never };
+    ctx.shifangQingyuan.getGoodsList.mockResolvedValueOnce({
+      list: [standard, item],
+      pagination: { total: 2, page: 1, page_size: 100 },
+    });
+
+    const stats = await ctx.service.syncGoods('0');
+    const bagMapping = ctx.mappingStore.find((row) => row.source_goods_id === '30')!;
+    expect(bagMapping.source_type).toBe(SHIFANG_QINGYUAN_SOURCE_TYPE.MAPPED);
+    expect(stats.conversionRules.upserted).toBe(1);
+  });
+});
+
+describe('asRecordArray', () => {
+  it('空对象视为空数组', () => {
+    expect(asRecordArray({})).toEqual([]);
+  });
+
+  it('数字键对象展开为数组', () => {
+    expect(asRecordArray({ '0': { id: 1 }, '1': { id: 2 } })).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('单条记录对象包成数组', () => {
+    expect(asRecordArray({ id: 3, name: '礼包', goods_id: [1] })).toEqual([
+      { id: 3, name: '礼包', goods_id: [1] },
+    ]);
   });
 });

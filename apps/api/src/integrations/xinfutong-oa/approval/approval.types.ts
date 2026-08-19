@@ -136,6 +136,19 @@ export interface FormStartResult {
 /** 流程状态终态（触发回调的状态） */
 export type FinalProcStatus = 'PASSED' | 'REJECTED' | 'CANCELED' | 'DELETED';
 
+/** 解密后 procKey 的表单前缀；去掉后即为 hspsi_oa_form_template.form_key */
+export const OA_PROC_KEY_FORM_PREFIX = 'FORM_';
+
+/**
+ * 从流程结束事件的 procKey 还原 OA 表单 form_key。
+ * 实测值为 `FORM_AAC15400_NFORM_…`，去掉 `FORM_` 即模板表 form_key。
+ */
+export function formKeyFromProcKey(procKey: string): string {
+  return procKey.startsWith(OA_PROC_KEY_FORM_PREFIX)
+    ? procKey.slice(OA_PROC_KEY_FORM_PREFIX.length)
+    : procKey;
+}
+
 /** OA 审批流程结束事件回调载荷 */
 export interface ApprovalCallbackPayload {
   /** 企业号 */
@@ -148,6 +161,8 @@ export interface ApprovalCallbackPayload {
   procInstId: string;
   /** 流程 Key */
   procKey: string;
+  /** 由 procKey 去掉 FORM_ 前缀得到的表单 Key */
+  formKey: string;
 }
 
 /** 事件编号：OA 审批流程结束事件 */
