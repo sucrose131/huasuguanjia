@@ -53,13 +53,40 @@ OA 审批表单映射从硬编码常量改为按账套（`account_set_id`）由�
 
 真实 OA 发起（账套1/2 各提交一张单据到 OA 并确认流程创建、账套3 提交被拦截）需 DEV 外网环境执行，未在本机完成。
 
-## 四、遗留问题
+## 四、缺陷修复：领用申请跨账套错配兜底（2026-08-19 追加）
+
+### 背景
+
+核对「登录自动填登录人 → OA 员工映射」链路时发现：领用申请前端自动填 `applicantId = auth.user.staffId`（登录时的**主身份** staff_id，几乎总是账套1），后端 `buildSubmissionContext` 按 `hspsi_basic_staff.id` 直接查并用其 `account_set_id` 作为单据 OA 账套——多账套用户（如苏碧安：账套1 staff=6、账套2 staff=204）在账套2 组织创建领用申请时会用账套1 身份 + 账套1 表单发起，造成跨账套错配。单账套用户不受影响。采购/库存/生产/销售已按单据组织账套解析，无此问题。
+
+### 修复（后端兜底，`requisition-oa-approval.service.ts`）
+
+1. 账套以**单据所属组织**为准：`hspsi_draw_approve.org_id → hspsi_basic_organization.account_set_id`；
+2. 提交人按 `(user_id, accountSetId)` 经 `hspsi_sys_user_oa_staff` 解析该账套员工身份；
+3. 校验单据 `applicant_id === 解析出的 staff_id`，不一致抛「领用人与提交人OA身份不一致，请刷新页面重新选择领用人后提交」，不产生错误 OA 流程。
+
+### 验证（真实多账套样本苏碧安 user_id=55）
+
+| 场景 | 结果 |
+|---|---|
+| 账套1 组织(org1) + applicant_id=6（主身份） | ✅ 通过，用账套1 身份 V0006/0000000007 |
+| 账套2 组织(org13) + applicant_id=6（前端错填主身份） | ✅ 正确拦截，提示应为账套2 身份 V0011/0000000038 |
+| 账套2 组织(org13) + applicant_id=204（账套2 身份） | ✅ 通过 |
+
+typecheck 无新增错误；requisition spec 4/4 通过。
+
+### 遗留
+
+- 前端 `RequisitionApplicationForm` 仍自动填主身份 staff_id；后端已拦截错配，但多账套用户在非主账套组织创建领用申请会被拦截无法提交，需后续前端按单据组织解析对应身份（或提供代申请入口）才能真正使用多账套。
+
+## 五、遗留问题
 
 1. 真实 OA 发起联调待 DEV 外网环境：账套1/2 各走一张单据确认 OA 侧表单渲染（尤其 `FinPeopleSelect` 人员控件，依赖已修复的 `out_staff_id`）。
 2. 表单配置更新时机暂不处理（业务已确认先一次性填充）；重新填充后需调用 `OaFormMappingService.invalidate()` 清缓存。
 3. 账套3 OA 侧 `idRelation.staffId` 等于 memberId（`AAC61415` 账套），已确认不接入，无当前影响。
+4. 领用申请前端按组织解析身份待后续处理（见上「遗留」）；`/auth/switch-organization` 接口在当前分支不存在、前端无组织切换入口，与 08-17 文档记录不符，需业务确认。
 
-## 五、Git
+## 六、Git
 
 - 分支：`refactor/0819-split-generic-pages`
-- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））
+- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））；本次兜底修复待提交。

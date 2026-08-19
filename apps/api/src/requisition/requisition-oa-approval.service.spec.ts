@@ -68,7 +68,10 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
         .mockResolvedValue([{ draw_detail_id: 70n, draw_id: 7n, goods_id: 101n, draw_qty: 3 }]),
     },
     hspsi_basic_organization: {
-      findFirst: vi.fn().mockResolvedValue({ name: '华溯科技', outer_ref_id: 'ORG-2' }),
+      findFirst: vi.fn().mockResolvedValue({ name: '华溯科技', outer_ref_id: 'ORG-2', account_set_id: 1n }),
+    },
+    hspsi_sys_user_oa_staff: {
+      findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
     },
     hspsi_basic_dept: {
       findFirst: vi.fn().mockResolvedValue({ name: '研发部', outer_ref_id: 'DEPT-6' }),

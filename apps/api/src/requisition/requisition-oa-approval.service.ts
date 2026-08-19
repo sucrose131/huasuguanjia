@@ -34,21 +34,28 @@ export class RequisitionOaApprovalService {
   ) {}
 
   async submit(drawId: bigint, userId: string): Promise<OaSubmissionResult> {
-    // 先解析账套：领用申请的 account_set_id 取领用人所属账套
+    // 后端兜底：账套以单据所属组织为准，提交人按 (登录用户, 单据组织账套) 解析，
+    // 不信任前端自动填入的主身份 staff_id（多账套用户可能跨账套错配）。
     const appBrief = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
-      select: { applicant_id: true },
+      select: { org_id: true },
     });
     if (!appBrief) throw new BadRequestException('领用申请不存在');
-    const applicantBrief = await this.prisma.hspsi_basic_staff.findFirst({
-      where: { id: appBrief.applicant_id, status: 1, deleted_at: null },
+    const orgBrief = await this.prisma.hspsi_basic_organization.findFirst({
+      where: { org_id: appBrief.org_id, deleted_at: null },
       select: { account_set_id: true },
     });
-    if (!applicantBrief?.account_set_id) {
-      throw new BadRequestException('领用人尚未关联有效OA账号，请先同步OA组织人员');
+    if (!orgBrief?.account_set_id) throw new BadRequestException('领用申请所属组织未关联OA账套');
+    const accountSetId = orgBrief.account_set_id;
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: accountSetId },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) {
+      throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
     }
-    const form = await this.mappingService.getMapping(BUSINESS_TYPE, applicantBrief.account_set_id);
-    const context = await this.buildSubmissionContext(drawId, form);
+    const form = await this.mappingService.getMapping(BUSINESS_TYPE, accountSetId);
+    const context = await this.buildSubmissionContext(drawId, form, accountSetId, identity.staff_id);
     const credential = await this.credentialService.getById(context.accountSetId);
     if (!credential) throw new BadRequestException('领用人所属OA账套未启用');
 
@@ -241,7 +248,12 @@ export class RequisitionOaApprovalService {
     return { id: fileId, objectKey, name: attachment.fileName };
   }
 
-  private async buildSubmissionContext(drawId: bigint, form: OaFormMapping) {
+  private async buildSubmissionContext(
+    drawId: bigint,
+    form: OaFormMapping,
+    accountSetId: bigint,
+    applicantStaffId: bigint,
+  ) {
     const un = (key: string) => form.fields[key]!.uniqueName;
     const f = {
       organization: un('organization'),
@@ -259,6 +271,13 @@ export class RequisitionOaApprovalService {
       where: { draw_id: drawId, deleted_at: null },
     });
     if (!application) throw new BadRequestException('领用申请不存在');
+    // 后端兜底：单据领用人必须是提交人在单据账套下的员工身份，
+    // 防止前端自动填入其他账套的主身份导致跨账套错配。
+    if (application.applicant_id !== applicantStaffId) {
+      throw new BadRequestException(
+        '领用人与提交人OA身份不一致，请刷新页面重新选择领用人后提交',
+      );
+    }
     const [details, organization, department, warehouse, applicant, drawTypeCategory] =
       await Promise.all([
         this.prisma.hspsi_draw_approve_detail.findMany({
@@ -278,7 +297,7 @@ export class RequisitionOaApprovalService {
           select: { name: true },
         }),
         this.prisma.hspsi_basic_staff.findFirst({
-          where: { id: application.applicant_id, status: 1, deleted_at: null },
+          where: { id: applicantStaffId, account_set_id: accountSetId, status: 1, deleted_at: null },
           select: {
             id: true,
             name: true,
