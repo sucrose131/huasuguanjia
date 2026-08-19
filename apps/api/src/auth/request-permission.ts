@@ -126,12 +126,15 @@ export function inferRequestPermissions(request: PermissionRequest): string[] {
   const context = pageContext(segments);
   if (!context) return [];
   const method = String(request.method ?? 'GET').toUpperCase();
-  const required = new Set<string>([context.pageCode]);
   if (method === 'GET') {
+    // 读取（列表/详情）按模块级判断：表单里引用其它单据（如生产出库选「生产计划」）只应要求
+    // 拥有该模块目录 code，而不是被引用单据的页面 code；页面入口由前端菜单/路由单独控制。
+    const required = new Set<string>([context.moduleName]);
     if (segments.includes('export')) required.add(`${context.pageCode}:export`);
     return [...required];
   }
 
+  const required = new Set<string>([context.pageCode]);
   const action = customAction(segments, method);
   if (action) required.add(`${context.pageCode}:${action}`);
   else if (method === 'POST') required.add(`${context.pageCode}:create`);

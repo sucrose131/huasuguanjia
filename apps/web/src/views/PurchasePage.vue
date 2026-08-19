@@ -479,56 +479,58 @@ async function load() {
   }
 }
 async function loadOptions() {
-  const [
-    orgs,
-    depts,
-    warehouses,
-    vendors,
-    goods,
-    orders,
-    receipts,
-    applications,
-    categories,
-    units,
-    ...dictionaries
-  ] = (await Promise.all([
-    api.get('/base-data/organizations/options'),
-    api.get('/base-data/departments/options'),
-    api.get('/base-data/warehouses/options'),
-    api.get('/base-data/vendors/options'),
-    api.get('/goods', { params: { pageSize: 100, status: 1 } }),
-    api.get('/purchase/orders', { params: { pageSize: 100 } }),
-    api.get('/purchase/receipts', { params: { pageSize: 100, confirmStatus: 1 } }),
-    api.get('/purchase/applications', { params: { pageSize: 100, approveStatus: 1 } }),
-    api.get('/goods/categories'),
-    api.get('/base-data/units/options'),
-    ...dictCodes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
-  ])) as any[];
+  // 公共基础下拉 + 字典
+  const [orgs, depts, warehouses, vendors, goods, categories, units, ...dictionaries] =
+    (await Promise.all([
+      api.get('/base-data/organizations/options'),
+      api.get('/base-data/departments/options'),
+      api.get('/base-data/warehouses/options'),
+      api.get('/base-data/vendors/options'),
+      api.get('/goods', { params: { pageSize: 100, status: 1 } }),
+      api.get('/goods/categories'),
+      api.get('/base-data/units/options'),
+      ...dictCodes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
+    ])) as any[];
   options.organizations = orgs;
   options.departments = depts;
   options.warehouses = warehouses;
   options.vendors = vendors;
   options.goods = goods.items;
-  options.orders = orders.items.map((item: any) => ({
-    ...item,
-    label: item.orderNo,
-    value: item.id,
-  }));
-  options.receipts = receipts.items.map((item: any) => ({
-    ...item,
-    label: item.receiptNo,
-    value: item.id,
-  }));
-  options.applications = applications.items.map((item: any) => ({
-    ...item,
-    label: item.applicationNo,
-    value: item.id,
-  }));
   options.categories = categories.items ?? [];
   options.units = units ?? [];
   dictCodes.forEach((code, index) => {
     dicts[code] = dictionaries[index] ?? [];
   });
+
+  // 采购来源下拉按需加载，避免「采购申请只勾了申请页面」时误触订单/入库接口报 403。
+  if (['receipts', 'returns', 'payments', 'refunds'].includes(resource.value)) {
+    const r: any = await api.get('/purchase/orders', { params: { pageSize: 100 } });
+    options.orders = (r.items ?? []).map((item: any) => ({
+      ...item,
+      label: item.orderNo,
+      value: item.id,
+    }));
+  }
+  if (resource.value === 'returns') {
+    const r: any = await api.get('/purchase/receipts', {
+      params: { pageSize: 100, confirmStatus: 1 },
+    });
+    options.receipts = (r.items ?? []).map((item: any) => ({
+      ...item,
+      label: item.receiptNo,
+      value: item.id,
+    }));
+  }
+  if (resource.value === 'orders') {
+    const r: any = await api.get('/purchase/applications', {
+      params: { pageSize: 100, approveStatus: 1 },
+    });
+    options.applications = (r.items ?? []).map((item: any) => ({
+      ...item,
+      label: item.applicationNo,
+      value: item.id,
+    }));
+  }
 }
 function resetQuery() {
   Object.assign(query, {

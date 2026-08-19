@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { inferRequestPermissions } from './request-permission';
 
 describe('inferRequestPermissions', () => {
-  it('区分采购申请查看、新增、提交和审核', () => {
+  it('读取按模块级判定，写入按页面+操作判定', () => {
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/purchase/applications/7' }),
-    ).toEqual(['purchase:applications']);
+    ).toEqual(['purchase']);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/production/plans' }),
+    ).toEqual(['production']);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods/properties' }),
+    ).toEqual(['goods']);
     expect(
       inferRequestPermissions({
         method: 'POST',

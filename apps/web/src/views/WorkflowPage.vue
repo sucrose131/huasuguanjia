@@ -253,19 +253,14 @@ async function load() {
   }
 }
 async function loadOptions() {
-  const [o, w, d, c, u, g, bo, pl, so, ra, ro, st, units] = (await Promise.all([
+  // 公共基础下拉（所有业务共用，避免误触其它业务模块接口）
+  const [o, w, d, c, u, g, units] = (await Promise.all([
     api.get('/base-data/organizations/options'),
     api.get('/base-data/warehouses/options'),
     api.get('/base-data/departments/options'),
     api.get('/base-data/customers/options'),
     api.get('/base-data/users/options'),
     api.get('/goods', { params: { pageSize: 100, status: 1 } }),
-    api.get('/production/boms', { params: { pageSize: 100, status: 1 } }),
-    api.get('/production/plans', { params: { pageSize: 100 } }),
-    api.get('/sales/money-order-options', { params: { pageSize: 100 } }),
-    api.get('/requisitions/application-options'),
-    api.get('/requisitions/output-options'),
-    api.get('/inventory/stock-options'),
     api.get('/base-data/units/options'),
   ])) as any[];
   Object.assign(options, {
@@ -275,14 +270,41 @@ async function loadOptions() {
     customers: c,
     users: u,
     goods: g.items,
-    boms: bo.items,
-    plans: pl.items,
-    orders: so,
-    applications: ra,
-    outputs: ro,
-    stocks: st,
     units,
   });
+
+  // 各业务模块专属下拉：按当前模块+子资源按需加载，避免跨模块/跨页面 403。
+  const grp = group.value;
+  const r = resource.value;
+  if (grp === 'production') {
+    if (r === 'plans') {
+      const bo: any = await api.get('/production/boms', { params: { pageSize: 100, status: 1 } });
+      options.boms = bo.items;
+    } else if (r === 'inputs' || r === 'outputs') {
+      const pl: any = await api.get('/production/plans', { params: { pageSize: 100 } });
+      options.plans = pl.items;
+    }
+    if (r === 'outputs') options.stocks = (await api.get('/inventory/stock-options')) as B[];
+  } else if (grp === 'sales') {
+    if (['outputs', 'returns', 'payments', 'refunds', 'services'].includes(r)) {
+      const so: any = await api.get('/sales/money-order-options', { params: { pageSize: 100 } });
+      options.orders = so;
+    }
+    if (['orders', 'discount-orders', 'outputs'].includes(r))
+      options.stocks = (await api.get('/inventory/stock-options')) as B[];
+  } else if (grp === 'requisitions') {
+    if (r === 'outputs') {
+      const [ra, st] = (await Promise.all([
+        api.get('/requisitions/application-options'),
+        api.get('/inventory/stock-options'),
+      ])) as any[];
+      options.applications = ra;
+      options.stocks = st;
+    } else if (r === 'returns') {
+      const ro: any = await api.get('/requisitions/output-options');
+      options.outputs = ro;
+    }
+  }
 }
 async function loadRequisitionFormOptions(orgId: unknown) {
   if (group.value !== 'requisitions' || !orgId) {
