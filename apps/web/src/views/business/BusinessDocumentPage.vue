@@ -162,6 +162,13 @@ onMounted(async () => {
         "
         >重置</el-button
       >
+      <div class="query-spacer"></div>
+      <el-button
+        v-if="config.creatable !== false"
+        type="primary"
+        @click="openCreate()"
+        >{{ config.createText || '新增' + config.title }}</el-button
+      >
     </div>
 
     <div class="table-card">
@@ -232,6 +239,9 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+}
+.query-spacer {
+  flex: 1;
 }
 .summary-line {
   display: flex;
