@@ -294,6 +294,12 @@ export class RequisitionService {
     );
   }
 
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
+  }
+
   private aggregatePostingLines(
     orgId: bigint | string | number,
     warehouseId: bigint | string | number,

@@ -45,6 +45,11 @@ export class RequisitionController {
   ) {
     return this.service.productOptions(orgId, warehouseId);
   }
+  @RequirePermissions('requisitions')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId: string | undefined) {
+    return this.service.allGoodsOptions(orgId);
+  }
 
   @RequirePermissions('requisitions')
   @Get('applications/:id')
