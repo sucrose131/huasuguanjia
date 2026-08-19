@@ -89,4 +89,4 @@ typecheck 无新增错误；requisition spec 4/4 通过。
 ## 六、Git
 
 - 分支：`refactor/0819-split-generic-pages`
-- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））；本次兜底修复待提交。
+- 提交号：`d5d4542`（feat(api): OA表单映射改由DB按账套承载（OaFormMappingService））；`05e6eb3`（fix(api): 领用申请OA提交按单据组织账套解析提交人，拦截跨账套错配）
