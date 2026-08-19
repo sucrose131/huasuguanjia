@@ -99,6 +99,19 @@ describe('RequisitionService locked requisition mutations', () => {
         deleteMany: vi.fn(),
         createMany: vi.fn(),
       },
+      // 后端兜底：按单据组织解析登录用户OA身份（orgId=1 → 账套1 → staff=9）
+      hspsi_basic_organization: {
+        findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }),
+      },
+      hspsi_sys_user_oa_staff: {
+        findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
+      },
+      hspsi_basic_staff: {
+        findFirst: vi.fn().mockResolvedValue({ id: 9n, account_set_id: 1n, outer_ref_id: 'M-9', out_staff_id: 'S-9' }),
+      },
+      hspsi_basic_staff_organizations: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 3n, org_type: 2 }),
+      },
     };
     const { service, attachmentsService } = serviceWithTransaction(tx);
     vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
@@ -129,7 +142,6 @@ describe('RequisitionService locked requisition mutations', () => {
       },
       '3',
       false,
-      { orgId: '8', staffId: '9' },
     );
 
     expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
@@ -138,7 +150,7 @@ describe('RequisitionService locked requisition mutations', () => {
           signature_content: null,
           signature_attachment: 'signature-1',
           attachments: [signature],
-          org_id: 8n,
+          org_id: 1n,
           applicant_id: 9n,
         }),
       }),

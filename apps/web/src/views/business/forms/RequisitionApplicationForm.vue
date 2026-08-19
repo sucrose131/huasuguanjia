@@ -67,8 +67,25 @@ async function loadRequisitionOptions(orgId: unknown) {
   options.requisitionWarehouses = result.warehouses ?? [];
   options.requisitionDepts = result.departments ?? [];
   options.employees = result.employees ?? [];
-  if (!form.value.applicantId && props.mode === 'create')
-    form.value.applicantId = auth.user?.staffId ?? '';
+}
+
+/** 按所选组织（账套）解析当前登录用户的OA员工身份，自动填充领用人/部门 */
+async function resolveCurrentApplicant() {
+  if (!form.value.orgId) {
+    form.value.applicantId = '';
+    form.value.deptId = '';
+    return;
+  }
+  const result: any = await api
+    .get('/requisitions/current-applicant', { params: { orgId: form.value.orgId } })
+    .catch(() => ({ found: false }));
+  if (result?.found) {
+    form.value.applicantId = result.staffId;
+    if (result.deptId) form.value.deptId = result.deptId;
+  } else {
+    form.value.applicantId = '';
+    form.value.deptId = '';
+  }
 }
 
 async function organizationChanged() {
@@ -79,6 +96,7 @@ async function organizationChanged() {
   options.contextGoods = [];
   await loadRequisitionOptions(form.value.orgId);
   await loadOrgGoods(form.value.orgId);
+  await resolveCurrentApplicant();
 }
 
 /** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
@@ -187,8 +205,13 @@ function signatureChanged(value: string) {
 }
 
 function validate(submit: boolean) {
-  if (!form.value.orgId || !form.value.deptId || !form.value.applicantId) {
-    ElMessage.warning('请选择所属组织、领用部门和领用人');
+  if (!form.value.orgId) {
+    ElMessage.warning('请选择所属组织');
+    return false;
+  }
+  // 找不到该组织下OA员工身份时可保存草稿（领用人/部门为空），提交必须完整
+  if (submit && (!form.value.deptId || !form.value.applicantId)) {
+    ElMessage.warning('当前账号未关联该组织的OA员工，无法提交审批，可先保存草稿');
     return false;
   }
   const hasGoods = (form.value.details ?? []).some((line: any) => line.goodsId);
@@ -259,7 +282,12 @@ onMounted(async () => {
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
   ]);
-  options.orgs = orgs;
+  // 组织下拉按用户授权范围（用户管理配置的授权组织）
+  const authorized = (auth.user?.authorizedOrganizations ?? []).map((o) => ({
+    value: o.id,
+    label: o.name,
+  }));
+  options.orgs = authorized.length ? authorized : (orgs as any[]);
   options.units = units;
   await loadDicts();
   if (props.mode === 'create') {
@@ -267,7 +295,7 @@ onMounted(async () => {
       orgId: auth.user?.orgId ?? '',
       deptId: '',
       warehouseId: '',
-      applicantId: auth.user?.staffId ?? '',
+      applicantId: '',
       drawType: 1,
       date: dateText(new Date()),
       reason: '',
@@ -286,6 +314,7 @@ onMounted(async () => {
   }
   await loadRequisitionOptions(form.value.orgId);
   await loadOrgGoods(form.value.orgId);
+  if (props.mode === 'create') await resolveCurrentApplicant();
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
   for (const line of form.value.details ?? []) {
     if (line.goodsId && !Number(line.goodsWarehouseType)) {
@@ -399,9 +428,12 @@ onMounted(async () => {
       <SignaturePad
         :model-value="form.signatureContent"
         :has-stored-signature="Boolean(form.signatureAttachment)"
-        :disabled="mode === 'view'"
+        :disabled="mode === 'view' || !form.applicantId"
         @update:model-value="signatureChanged"
       />
+      <div v-if="!form.applicantId && !isView" class="warehouse-hint">
+        所选组织未匹配到当前账号的OA员工身份，无法签字，可先保存草稿
+      </div>
     </el-form-item>
 
     <div v-if="!isView" class="form-actions">

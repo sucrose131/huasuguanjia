@@ -320,6 +320,7 @@ export class RequisitionOaApprovalService {
       throw new BadRequestException('领用人尚未关联有效OA账号，请先同步OA组织人员');
     }
 
+    // 部门有条件跟随：优先单据所选部门（须属于该员工，主/兼任），否则回退主部门
     const primaryMembership = await this.prisma.hspsi_basic_staff_organizations.findFirst({
       where: {
         staff_id: applicant.id,
@@ -330,18 +331,41 @@ export class RequisitionOaApprovalService {
       orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
     });
     if (!primaryMembership) throw new BadRequestException('领用人没有有效的OA主部门');
-    const primaryOrg =
-      primaryMembership.org_type === 2
-        ? await this.prisma.hspsi_basic_dept.findFirst({
-            where: { dept_id: primaryMembership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          })
-        : await this.prisma.hspsi_basic_organization.findFirst({
-            where: { org_id: primaryMembership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          });
-    if (!primaryOrg?.outer_ref_id) {
-      throw new BadRequestException('领用人的OA主部门标识缺失，请先同步OA组织人员');
+    let orgSeq = '';
+    if (application.dept_id > 0n) {
+      const deptBelongs = await this.prisma.hspsi_basic_staff_organizations.findFirst({
+        where: {
+          staff_id: applicant.id,
+          account_set_id: applicant.account_set_id,
+          org_type: 2,
+          org_id: application.dept_id,
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (deptBelongs) {
+        const selectedDept = await this.prisma.hspsi_basic_dept.findFirst({
+          where: { dept_id: application.dept_id, deleted_at: null },
+          select: { outer_ref_id: true },
+        });
+        if (selectedDept?.outer_ref_id) orgSeq = selectedDept.outer_ref_id;
+      }
+    }
+    if (!orgSeq) {
+      const primaryOrg =
+        primaryMembership.org_type === 2
+          ? await this.prisma.hspsi_basic_dept.findFirst({
+              where: { dept_id: primaryMembership.org_id, deleted_at: null },
+              select: { outer_ref_id: true },
+            })
+          : await this.prisma.hspsi_basic_organization.findFirst({
+              where: { org_id: primaryMembership.org_id, deleted_at: null },
+              select: { outer_ref_id: true },
+            });
+      if (!primaryOrg?.outer_ref_id) {
+        throw new BadRequestException('领用人的OA主部门标识缺失，请先同步OA组织人员');
+      }
+      orgSeq = primaryOrg.outer_ref_id;
     }
 
     const drawType = drawTypeCategory
@@ -373,7 +397,7 @@ export class RequisitionOaApprovalService {
       accountSetId: applicant.account_set_id,
       busKey: `${BUSINESS_TYPE}:${drawId}`,
       starterId: applicant.outer_ref_id,
-      starterOrgId: primaryOrg.outer_ref_id,
+      starterOrgId: orgSeq,
       formData: {
         [f.organization]: organization.name,
         [f.department]: department.name,
@@ -384,7 +408,7 @@ export class RequisitionOaApprovalService {
             USRNAM: applicant.name,
             STFSEQ: applicant.out_staff_id,
             USRNBR: applicant.outer_ref_id,
-            ORGSEQ: primaryOrg.outer_ref_id,
+            ORGSEQ: orgSeq,
           },
         ],
         [f.applicationDate]: this.formatDate(applicationDate),
