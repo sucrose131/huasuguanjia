@@ -57,13 +57,16 @@ function unitName(line: any) {
   return unit?.label ?? unit?.name ?? '—';
 }
 
-const warehouseOptions = computed(() =>
-  (options.warehouses as any[]).filter(
-    (item: any) =>
-      !form.value.orgId ||
-      String(item.raw?.orgId ?? item.orgId ?? '') === String(form.value.orgId),
-  ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 async function searchSalesOrderOptions(keyword: string) {
   if (!String(keyword ?? '').trim()) {
@@ -125,6 +128,7 @@ async function loadOrderInfo(orderId: unknown) {
   options.salesOutputs = (await api
     .get('/sales/output-options', { params: { orderId } })
     .catch(() => [])) as any[];
+  await loadOrgWarehouses(form.value.orgId);
   return o;
 }
 
@@ -212,9 +216,8 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, units, goodsResult, orders, disposalDict] = await Promise.all([
+  const [orgs, units, goodsResult, orders, disposalDict] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api
       .get('/goods', { params: { pageSize: 100, status: 1 } })
@@ -223,7 +226,6 @@ onMounted(async () => {
     api.get('/dictionaries/sales_return_disposal').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.units = units;
   options.goods = (goodsResult as any).items ?? [];
   options.orders = Array.isArray(orders) ? orders : ((orders as any).items ?? []);
@@ -295,7 +297,7 @@ onMounted(async () => {
           filterable
           :disabled="isView || !form.orgId"
         >
-          <el-option v-for="x in warehouseOptions" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="退货日期" required>

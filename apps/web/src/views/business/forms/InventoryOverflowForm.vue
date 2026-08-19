@@ -25,13 +25,16 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 
-const filteredWarehouses = computed(() =>
-  !form.value.orgId
-    ? (options.warehouses as any[])
-    : (options.warehouses as any[]).filter(
-        (w) => String(w.raw?.orgId ?? w.orgId) === String(form.value.orgId),
-      ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 function blankLine() {
   return {
@@ -188,13 +191,11 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, departments] = await Promise.all([
+  const [orgs, departments] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/departments/options').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.departments = departments;
   await loadDicts();
 
@@ -232,6 +233,7 @@ onMounted(async () => {
       return mapped;
     });
   }
+  await loadOrgWarehouses(form.value.orgId);
   await loadStocks();
 });
 </script>
@@ -256,6 +258,7 @@ onMounted(async () => {
           @change="
             form.warehouseId = '';
             form.details = [blankLine()];
+            loadOrgWarehouses(form.orgId);
             loadStocks();
           "
         >
@@ -273,7 +276,7 @@ onMounted(async () => {
           "
         >
           <el-option
-            v-for="x in filteredWarehouses"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"

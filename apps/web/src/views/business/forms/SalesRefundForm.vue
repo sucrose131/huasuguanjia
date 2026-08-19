@@ -27,11 +27,16 @@ const orderActualAmount = computed(
 const moneyLimit = computed(() =>
   Math.max(0, Number(form.value.refundableAmount ?? form.value.availableAmount ?? 0) || 0),
 );
-const deptOptions = computed(() =>
-  (options.depts as any[]).filter(
-    (d: any) => !form.value.orgId || String(d.raw?.orgId ?? d.orgId) === String(form.value.orgId),
-  ),
-);
+/** 按组织加载部门选项（走后端），组织为空时清空 */
+async function loadOrgDepts(orgId: unknown) {
+  if (!orgId) {
+    options.depts = [];
+    return;
+  }
+  options.depts = (await api
+    .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 async function searchOrderOptions(keyword: string) {
   const r: any = await api.get('/sales/money-order-options', {
@@ -73,6 +78,7 @@ async function orderChanged() {
   }
   const s: any = await api.get(`/sales/orders/${form.value.orderId}/payment-summary`);
   Object.assign(form.value, s, { orderId: s.orderId, amount: 0 });
+  await loadOrgDepts(form.value.orgId);
   normalizeDepartment();
 }
 
@@ -146,13 +152,11 @@ onMounted(async () => {
     emit('cancel');
     return;
   }
-  const [orgs, depts, paymentChannels] = await Promise.all([
+  const [orgs, paymentChannels] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/departments/options').catch(() => []),
     api.get('/dictionaries/payment_channel').catch(() => []),
   ]);
   options.orgs = orgs as any[];
-  options.depts = depts as any[];
   dicts.payment_channel = paymentChannels as any[];
 
   if (props.mode === 'create') {
@@ -165,10 +169,12 @@ onMounted(async () => {
       remark: form.value.remark ?? '',
       requestKey: form.value.requestKey || createRequestId(),
     });
+    await loadOrgDepts(form.value.orgId);
     if (form.value.orderId) await orderChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/sales/refunds/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
+    await loadOrgDepts(form.value.orgId);
   }
 });
 </script>
@@ -252,7 +258,7 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="部门" required>
         <el-select v-model="form.deptId" filterable>
-          <el-option v-for="x in deptOptions" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="退款原因" required class="span-2">

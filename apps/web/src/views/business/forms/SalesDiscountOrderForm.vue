@@ -92,10 +92,22 @@ async function customerChanged() {
   });
 }
 
-function organizationChanged() {
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+
+async function organizationChanged() {
   form.value.warehouseId = '';
   form.value.details = [blankLine()];
   options.contextGoods = [];
+  await loadOrgWarehouses(form.value.orgId);
 }
 
 function warehouseChanged() {
@@ -218,9 +230,8 @@ onMounted(async () => {
     emit('cancel');
     return;
   }
-  const [orgs, warehouses, customers, goodsResult, units, stocks] = await Promise.all([
+  const [orgs, customers, goodsResult, units, stocks] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/customers/options').catch(() => []),
     api
       .get('/goods', { params: { pageSize: 100, status: 1 } })
@@ -229,7 +240,6 @@ onMounted(async () => {
     api.get('/inventory/stock-options').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.customers = customers;
   options.goods = (goodsResult as any).items ?? [];
   options.units = units;
@@ -262,6 +272,7 @@ onMounted(async () => {
       factAmount: x.factAmount == null ? null : Number(x.factAmount),
     }));
   }
+  await loadOrgWarehouses(form.value.orgId);
   await loadContextGoods();
 });
 </script>
@@ -297,11 +308,7 @@ onMounted(async () => {
           @change="warehouseChanged"
         >
           <el-option
-            v-for="x in options.warehouses.filter(
-              (w: any) =>
-                !form.orgId ||
-                String(w.raw?.orgId ?? w.orgId ?? '') === String(form.orgId),
-            )"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"

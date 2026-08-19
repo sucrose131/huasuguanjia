@@ -30,6 +30,17 @@ function goodsOf(row: any) {
   return options.goods.find((g: any) => String(g.id) === String(row.goodsId)) ?? {};
 }
 
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+
 async function planChanged() {
   if (!form.value.planId) return;
   const p: any = await api.get(`/production/plans/${form.value.planId}`);
@@ -44,6 +55,7 @@ async function planChanged() {
     deliveredQty: p.deliveredQty,
   });
   form.value.batchNo = generateBatchNo();
+  await loadOrgWarehouses(form.value.orgId);
 }
 
 async function searchPlanOptions(keyword: string) {
@@ -98,16 +110,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, plans, goodsResult] = await Promise.all([
+  const [orgs, plans, goodsResult] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/production/plans', { params: { pageSize: 100 } }).catch(() => ({ items: [] })),
     api
       .get('/goods', { params: { pageSize: 100, status: 1 } })
       .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.plans = (plans as any).items ?? [];
   options.goods = (goodsResult as any).items ?? [];
 
@@ -131,6 +141,7 @@ onMounted(async () => {
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/inputs/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
+    await loadOrgWarehouses(form.value.orgId);
   }
 });
 </script>
@@ -186,11 +197,7 @@ onMounted(async () => {
       <el-form-item label="仓库" required>
         <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">
           <el-option
-            v-for="x in options.warehouses.filter(
-              (w: any) =>
-                !form.orgId ||
-                String(w.raw?.orgId ?? w.orgId ?? '') === String(form.orgId),
-            )"
+            v-for="x in options.warehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"

@@ -18,7 +18,8 @@ const form = computed(() => props.modelValue);
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
-  warehouses: [],
+  outWarehouses: [],
+  inWarehouses: [],
   users: [],
   units: [],
   stocks: [],
@@ -29,20 +30,21 @@ const organizationTree = computed(() =>
   buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
 );
 
-const outWarehouses = computed(() =>
-  (options.warehouses ?? []).filter(
-    (w: any) =>
-      !form.value.orgId || String(w.raw?.orgId ?? w.orgId ?? '') === String(form.value.orgId),
-  ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadWarehousesByOrg(target: 'out' | 'in', orgId: unknown) {
+  if (!orgId) {
+    options[target === 'out' ? 'outWarehouses' : 'inWarehouses'] = [];
+    return;
+  }
+  options[target === 'out' ? 'outWarehouses' : 'inWarehouses'] = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+/** 调入仓库：调入组织范围内，且排除调出仓库本身（业务规则保留前端判断） */
 const inWarehouses = computed(() =>
-  (options.warehouses ?? []).filter((w: any) => {
-    const belongsToOrg =
-      !form.value.toOrgId ||
-      String(w.raw?.orgId ?? w.orgId ?? '') === String(form.value.toOrgId);
-    const differentWarehouse = String(w.value) !== String(form.value.warehouseId);
-    return belongsToOrg && differentWarehouse;
-  }),
+  (options.inWarehouses ?? []).filter(
+    (w: any) => String(w.value) !== String(form.value.warehouseId),
+  ),
 );
 
 function blankLine() {
@@ -222,15 +224,13 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, users, units, stocks] = await Promise.all([
+  const [orgs, users, units, stocks] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/employees/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/inventory/stock-options').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.users = users;
   options.units = units;
   options.stocks = stocks;
@@ -259,6 +259,10 @@ onMounted(async () => {
       stockKey: `${line.goodsId}-${line.skuId}-${form.value.warehouseId}-${line.batchNo ?? ''}`,
     }));
   }
+  await Promise.all([
+    loadWarehousesByOrg('out', form.value.orgId),
+    loadWarehousesByOrg('in', form.value.toOrgId),
+  ]);
   await loadStocks();
 });
 </script>
@@ -279,6 +283,7 @@ onMounted(async () => {
             form.warehouseId = '';
             form.toWarehouseId = '';
             form.details = [blankLine()];
+            loadWarehousesByOrg('out', form.orgId);
             loadStocks();
           "
         />
@@ -295,7 +300,7 @@ onMounted(async () => {
           "
         >
           <el-option
-            v-for="x in outWarehouses"
+            v-for="x in options.outWarehouses"
             :key="x.value"
             :label="x.label"
             :value="x.value"
@@ -311,7 +316,10 @@ onMounted(async () => {
           node-key="value"
           :props="{ label: 'label', children: 'children' }"
           :disabled="isView"
-          @change="form.toWarehouseId = ''"
+          @change="
+            form.toWarehouseId = '';
+            loadWarehousesByOrg('in', form.toOrgId);
+          "
         />
       </el-form-item>
       <el-form-item label="调入仓库" required>

@@ -205,16 +205,25 @@ async function save() {
   }
 }
 
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
+
 onMounted(async () => {
-  const [orgs, warehouses, units, stocks, adjustTypes] = await Promise.all([
+  const [orgs, units, stocks, adjustTypes] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/inventory/stock-options').catch(() => []),
     api.get('/dictionaries/inventory_adjust_type').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   options.units = units;
   options.stocks = stocks;
   dicts.adjustTypes = adjustTypes as any[];
@@ -240,6 +249,7 @@ onMounted(async () => {
     }));
     await Promise.all(form.value.details.map((line: any) => loadLineStocks(line)));
   }
+  await loadOrgWarehouses(form.value.orgId);
 });
 </script>
 
@@ -294,11 +304,7 @@ onMounted(async () => {
             @change="warehouseChanged(s.row)"
           >
             <el-option
-              v-for="w in options.warehouses.filter(
-                (x: any) =>
-                  !form.orgId ||
-                  String(x.raw?.orgId ?? x.orgId ?? '') === String(form.orgId),
-              )"
+              v-for="w in options.warehouses"
               :key="w.value"
               :label="w.label"
               :value="w.value"

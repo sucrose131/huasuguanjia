@@ -24,12 +24,16 @@ const organizationTree = computed(() =>
   buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
 );
 
-const warehouseOptions = computed(() =>
-  (options.warehouses ?? []).filter(
-    (w: any) =>
-      !form.value.orgId || String(w.raw?.orgId ?? w.orgId ?? '') === String(form.value.orgId),
-  ),
-);
+/** 按组织加载仓库选项（走后端），组织为空时清空 */
+async function loadOrgWarehouses(orgId: unknown) {
+  if (!orgId) {
+    options.warehouses = [];
+    return;
+  }
+  options.warehouses = (await api
+    .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
+    .catch(() => [])) as any[];
+}
 
 function recalcCheckLine(line: any) {
   line.differentQty = Number(line.checkQty ?? 0) - Number(line.inventoryQty ?? 0);
@@ -109,13 +113,11 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, checkTypes] = await Promise.all([
+  const [orgs, checkTypes] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/dictionaries/inventory_check_type').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.warehouses = warehouses;
   dicts.checkTypes = checkTypes as any[];
 
   if (props.mode === 'create') {
@@ -132,6 +134,7 @@ onMounted(async () => {
     if (detail) Object.assign(form.value, detail);
     (form.value.details ?? []).forEach(recalcCheckLine);
   }
+  await loadOrgWarehouses(form.value.orgId);
 });
 </script>
 
@@ -160,13 +163,16 @@ onMounted(async () => {
           node-key="value"
           :props="{ label: 'label', children: 'children' }"
           :disabled="!isCreate"
-          @change="form.warehouseId = ''"
+          @change="
+            form.warehouseId = '';
+            loadOrgWarehouses(form.orgId);
+          "
         />
       </el-form-item>
       <el-form-item label="仓库" required>
         <el-select v-model="form.warehouseId" filterable :disabled="!isCreate">
           <el-option
-            v-for="w in warehouseOptions"
+            v-for="w in options.warehouses"
             :key="w.value"
             :label="w.label"
             :value="w.value"
