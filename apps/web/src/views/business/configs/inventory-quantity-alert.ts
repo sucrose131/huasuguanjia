@@ -9,7 +9,7 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   no: 'goodsName',
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 120 },
-    { prop: 'goodsName', label: '商品名称', minWidth: 150 },
+    { prop: 'goodsName', label: '商品名称', minWidth: 150, tooltip: true },
     { prop: 'skuSpec', label: '规格', minWidth: 120 },
     { prop: 'warehouseName', label: '所在仓库', minWidth: 120 },
     { prop: 'factQty', label: '实际库存', minWidth: 95, kind: 'number', align: 'right' },

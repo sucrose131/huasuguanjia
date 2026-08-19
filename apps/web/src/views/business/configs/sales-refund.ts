@@ -10,7 +10,7 @@ export const salesRefundConfig: BusinessDocumentConfig = {
   no: 'paymentNo',
   columns: [
     { prop: 'paymentNo', label: '退款单号', minWidth: 160 },
-    { prop: 'orderNo', label: '销售订单', minWidth: 155 },
+    { prop: 'orderNo', label: '销售订单', minWidth: 155, tooltip: true },
     { prop: 'customerName', label: '客户', minWidth: 130 },
     { prop: 'receivedAmount', label: '累计收款', minWidth: 120, kind: 'money', align: 'right' },
     { prop: 'refundedAmount', label: '累计退款', minWidth: 120, kind: 'money', align: 'right' },
@@ -19,7 +19,7 @@ export const salesRefundConfig: BusinessDocumentConfig = {
     { prop: 'amount', label: '本次退款', minWidth: 120, kind: 'money', align: 'right' },
     { prop: 'paymentModeName', label: '退款方式', minWidth: 105, kind: 'status' },
     { prop: 'paymentDate', label: '退款日期', minWidth: 110, kind: 'date' },
-    { prop: 'remark', label: '退款原因', minWidth: 160 },
+    { prop: 'remark', label: '退款原因', minWidth: 160, tooltip: true },
     { prop: 'orgName', label: '组织', minWidth: 125 },
     { prop: 'deptName', label: '部门', minWidth: 125 },
     { prop: 'createdByName', label: '操作人', minWidth: 110 },

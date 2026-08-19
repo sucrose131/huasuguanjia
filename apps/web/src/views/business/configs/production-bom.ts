@@ -10,9 +10,9 @@ export const productionBomConfig: BusinessDocumentConfig = {
   no: 'bomNo',
   columns: [
     { prop: 'bomNo', label: 'BOM编号', minWidth: 155 },
-    { prop: 'bomName', label: 'BOM名称', minWidth: 155 },
+    { prop: 'bomName', label: 'BOM名称', minWidth: 155, tooltip: true },
     { prop: 'goodsCode', label: '成品编码', minWidth: 110 },
-    { prop: 'goodsName', label: '生产成品', minWidth: 135 },
+    { prop: 'goodsName', label: '生产成品', minWidth: 135, tooltip: true },
     { prop: 'categoryName', label: '分类', minWidth: 100 },
     { prop: 'unitName', label: '单位', minWidth: 65 },
     { prop: 'materialCount', label: '原料种数', minWidth: 105, kind: 'number', align: 'right' },

@@ -10,8 +10,8 @@ export const salesReturnConfig: BusinessDocumentConfig = {
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '退货单号', minWidth: 160 },
-    { prop: 'orderNo', label: '销售订单', minWidth: 155 },
-    { prop: 'sourceOutputNo', label: '来源出库单', minWidth: 135 },
+    { prop: 'orderNo', label: '销售订单', minWidth: 155, tooltip: true },
+    { prop: 'sourceOutputNo', label: '来源出库单', minWidth: 135, tooltip: true },
     { prop: 'customerName', label: '客户', minWidth: 130 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'date', label: '退货日期', minWidth: 110, kind: 'date' },

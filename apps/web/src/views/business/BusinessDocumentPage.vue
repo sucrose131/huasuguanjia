@@ -356,7 +356,7 @@ onMounted(async () => {
             :width="column.width"
             :min-width="column.minWidth"
             :align="column.align"
-            show-overflow-tooltip
+            :show-overflow-tooltip="column.tooltip"
           >
             <template #default="s">
               <el-progress

@@ -15,7 +15,7 @@ export const inventoryStockConfig: BusinessDocumentConfig = {
   no: 'goodsName',
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 120 },
-    { prop: 'goodsName', label: '商品名称', minWidth: 150 },
+    { prop: 'goodsName', label: '商品名称', minWidth: 150, tooltip: true },
     { prop: 'categoryName', label: '分类', minWidth: 110 },
     { prop: 'skuSpec', label: 'SKU/规格', minWidth: 130 },
     { prop: 'unitName', label: '单位', width: 80 },

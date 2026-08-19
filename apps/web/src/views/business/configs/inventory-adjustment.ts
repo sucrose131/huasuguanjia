@@ -11,7 +11,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   no: 'adjustNo',
   columns: [
     { prop: 'adjustNo', label: '调整单号', minWidth: 150 },
-    { prop: 'reason', label: '调整原因', minWidth: 180 },
+    { prop: 'reason', label: '调整原因', minWidth: 180, tooltip: true },
     { prop: 'applicantDate', label: '申请日期', minWidth: 110, kind: 'date' },
     { prop: 'detailCount', label: '明细数', minWidth: 80, kind: 'number', align: 'right' },
     { prop: 'quantity', label: '调整数量', minWidth: 100, kind: 'number', align: 'right' },

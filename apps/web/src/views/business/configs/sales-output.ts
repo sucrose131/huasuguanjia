@@ -10,7 +10,7 @@ export const salesOutputConfig: BusinessDocumentConfig = {
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '出库单号', minWidth: 160 },
-    { prop: 'orderNo', label: '销售订单', minWidth: 155 },
+    { prop: 'orderNo', label: '销售订单', minWidth: 155, tooltip: true },
     { prop: 'customerName', label: '客户', minWidth: 130 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'date', label: '出库日期', minWidth: 110, kind: 'date' },

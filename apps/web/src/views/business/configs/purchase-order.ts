@@ -19,7 +19,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
   endpoint: '/purchase/orders',
   no: 'orderNo',
   columns: [
-    { prop: 'orderNo', label: '订单编号', minWidth: 165 },
+    { prop: 'orderNo', label: '订单编号', minWidth: 165, tooltip: true },
     {
       prop: 'applicationId',
       label: '数据来源',

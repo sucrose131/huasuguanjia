@@ -11,10 +11,10 @@ export const productionShortageConfig: BusinessDocumentConfig = {
   creatable: false,
   columns: [
     { prop: 'shortageNo', label: '缺料清单编号', minWidth: 155 },
-    { prop: 'planNo', label: '生产计划', minWidth: 145 },
+    { prop: 'planNo', label: '生产计划', minWidth: 145, tooltip: true },
     { prop: 'productGoodsName', label: '生产成品', minWidth: 130 },
     { prop: 'goodsCode', label: '原料编码', minWidth: 120 },
-    { prop: 'goodsName', label: '原料名称', minWidth: 145 },
+    { prop: 'goodsName', label: '原料名称', minWidth: 145, tooltip: true },
     { prop: 'requireQty', label: '总需求', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'factQty', label: '当前库存', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'gapQty', label: '缺口数量', minWidth: 105, kind: 'number', align: 'right' },

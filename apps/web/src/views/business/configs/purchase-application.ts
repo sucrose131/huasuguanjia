@@ -18,7 +18,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   endpoint: '/purchase/applications',
   no: 'applicationNo',
   columns: [
-    { prop: 'applicationNo', label: '申请单号', minWidth: 165 },
+    { prop: 'applicationNo', label: '申请单号', minWidth: 165, tooltip: true },
     {
       prop: 'orgId',
       label: '组织',
@@ -37,7 +37,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       minWidth: 144,
       render: (row, ctx) => ctx.lookup('warehouses', row.warehouseId),
     },
-    { prop: 'reason', label: '申请原因', minWidth: 200 },
+    { prop: 'reason', label: '申请原因', minWidth: 200, tooltip: true },
     { prop: 'quantity', label: '申请数量', width: 104, kind: 'number', align: 'right' },
     {
       prop: 'generationStatus',

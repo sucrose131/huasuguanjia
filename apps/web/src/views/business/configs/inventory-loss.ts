@@ -15,7 +15,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
     { prop: 'orgName', label: '组织', minWidth: 110 },
     { prop: 'warehouseName', label: '仓库', minWidth: 120 },
     { prop: 'documentTypeName', label: '单据类型', minWidth: 110, kind: 'status' },
-    { prop: 'reason', label: '原因', minWidth: 150 },
+    { prop: 'reason', label: '原因', minWidth: 150, tooltip: true },
     { prop: 'date', label: '日期', minWidth: 110, kind: 'date' },
     { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number', align: 'right' },
     { prop: 'amount', label: '金额', minWidth: 110, kind: 'money', align: 'right' },

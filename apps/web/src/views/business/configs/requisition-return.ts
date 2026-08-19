@@ -9,9 +9,9 @@ export const requisitionReturnConfig: BusinessDocumentConfig = {
   endpoint: '/requisitions/returns',
   no: 'returnNo',
   columns: [
-    { prop: 'returnNo', label: '退回单号', minWidth: 160 },
-    { prop: 'outputNo', label: '来源出库单', minWidth: 155 },
-    { prop: 'applicationNo', label: '领用申请', minWidth: 155 },
+    { prop: 'returnNo', label: '退回单号', minWidth: 160, tooltip: true },
+    { prop: 'outputNo', label: '来源出库单', minWidth: 155, tooltip: true },
+    { prop: 'applicationNo', label: '领用申请', minWidth: 155, tooltip: true },
     { prop: 'deptName', label: '领用部门', minWidth: 130 },
     { prop: 'receiverIdName', label: '经办人', minWidth: 110 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },

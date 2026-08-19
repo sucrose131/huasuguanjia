@@ -9,9 +9,9 @@ export const salesOrderConfig: BusinessDocumentConfig = {
   endpoint: '/sales/orders',
   no: 'orderNo',
   columns: [
-    { prop: 'orderNo', label: '订单号', minWidth: 155 },
+    { prop: 'orderNo', label: '订单号', minWidth: 155, tooltip: true },
     { prop: 'customerName', label: '客户', minWidth: 130 },
-    { prop: 'goodsNames', label: '商品名称', minWidth: 180 },
+    { prop: 'goodsNames', label: '商品名称', minWidth: 180, tooltip: true },
     { prop: 'sourceTypeName', label: '订单来源', minWidth: 105, kind: 'status' },
     { prop: 'propertyTypeName', label: '订单属性', minWidth: 105, kind: 'status' },
     { prop: 'orderDate', label: '订单日期', minWidth: 110, kind: 'date' },

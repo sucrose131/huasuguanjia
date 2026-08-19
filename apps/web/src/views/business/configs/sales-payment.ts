@@ -10,7 +10,7 @@ export const salesPaymentConfig: BusinessDocumentConfig = {
   no: 'paymentNo',
   columns: [
     { prop: 'paymentNo', label: '收款单号', minWidth: 160 },
-    { prop: 'orderNo', label: '销售订单', minWidth: 155 },
+    { prop: 'orderNo', label: '销售订单', minWidth: 155, tooltip: true },
     { prop: 'customerName', label: '客户', minWidth: 130 },
     { prop: 'orderActualAmount', label: '订单实际金额', minWidth: 120, kind: 'money', align: 'right' },
     { prop: 'receivedAmount', label: '累计收款', minWidth: 120, kind: 'money', align: 'right' },

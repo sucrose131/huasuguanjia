@@ -9,10 +9,10 @@ export const productionPlanConfig: BusinessDocumentConfig = {
   endpoint: '/production/plans',
   no: 'planNo',
   columns: [
-    { prop: 'planNo', label: '生产计划单号', minWidth: 155 },
-    { prop: 'sourceOrderNo', label: '关联销售订单', minWidth: 155 },
+    { prop: 'planNo', label: '生产计划单号', minWidth: 155, tooltip: true },
+    { prop: 'sourceOrderNo', label: '关联销售订单', minWidth: 155, tooltip: true },
     { prop: 'bomNo', label: 'BOM编号', minWidth: 135 },
-    { prop: 'goodsName', label: '生产成品', minWidth: 145 },
+    { prop: 'goodsName', label: '生产成品', minWidth: 145, tooltip: true },
     { prop: 'planQty', label: '生产数量', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'deliveryProgress', label: '交付进度', minWidth: 120, kind: 'progress' },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },

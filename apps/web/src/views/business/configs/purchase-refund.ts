@@ -11,7 +11,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
   no: 'refundNo',
   columns: [
     { prop: 'refundNo', label: '退款单号', minWidth: 160 },
-    { prop: 'returnNo', label: '来源退货单', minWidth: 160 },
+    { prop: 'returnNo', label: '来源退货单', minWidth: 160, tooltip: true },
     {
       prop: 'sourceType',
       label: '退款来源',

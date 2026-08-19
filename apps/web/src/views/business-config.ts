@@ -8,6 +8,8 @@ export type BusinessColumn = {
   align?: 'left' | 'center' | 'right';
   /** 状态列的字典 code（StatusTag 按字典 label 自动配色） */
   statusDict?: string;
+  /** 是否启用悬停溢出提示（长文本列用；缺省 false，避免数字/日期列误弹 tooltip） */
+  tooltip?: boolean;
   /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */
   render?: (row: Record<string, any>, ctx: any) => string;
 };

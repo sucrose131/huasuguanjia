@@ -95,6 +95,12 @@ function onChange(value: string | number | '') {
     :disabled="disabled"
     :size="size"
     :placeholder="placeholder"
+    teleported
+    :popper-options="{
+      placement: 'bottom-start',
+      strategy: 'fixed',
+      modifiers: [{ name: 'offset', options: { offset: [0, 4] } }],
+    }"
     @visible-change="onVisibleChange"
     @update:model-value="onChange"
   >

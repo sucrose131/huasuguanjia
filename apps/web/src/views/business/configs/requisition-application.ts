@@ -9,7 +9,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
   endpoint: '/requisitions/applications',
   no: 'applicationNo',
   columns: [
-    { prop: 'applicationNo', label: '申请单号', minWidth: 160 },
+    { prop: 'applicationNo', label: '申请单号', minWidth: 160, tooltip: true },
     { prop: 'deptName', label: '领用部门', minWidth: 130 },
     { prop: 'receiverIdName', label: '领用人', minWidth: 110 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },

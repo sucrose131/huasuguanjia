@@ -10,7 +10,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
   endpoint: '/purchase/returns',
   no: 'returnNo',
   columns: [
-    { prop: 'returnNo', label: '退货单号', minWidth: 160 },
+    { prop: 'returnNo', label: '退货单号', minWidth: 160, tooltip: true },
     {
       prop: 'sourceTypeLabel',
       label: '退货来源',

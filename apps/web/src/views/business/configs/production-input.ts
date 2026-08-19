@@ -10,8 +10,8 @@ export const productionInputConfig: BusinessDocumentConfig = {
   no: 'inputNo',
   columns: [
     { prop: 'inputNo', label: '成品入库单号', minWidth: 160 },
-    { prop: 'planNo', label: '来源生产计划', minWidth: 155 },
-    { prop: 'goodsName', label: '入库成品', minWidth: 145 },
+    { prop: 'planNo', label: '来源生产计划', minWidth: 155, tooltip: true },
+    { prop: 'goodsName', label: '入库成品', minWidth: 145, tooltip: true },
     { prop: 'quantity', label: '本次入库', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'batchNo', label: '批号', minWidth: 140 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },

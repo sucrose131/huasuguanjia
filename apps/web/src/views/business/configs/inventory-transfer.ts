@@ -17,7 +17,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
     { prop: 'toWarehouseName', label: '调入仓库', minWidth: 120 },
     { prop: 'sendByName', label: '发出人', minWidth: 90 },
     { prop: 'receiveByName', label: '接收人', minWidth: 90 },
-    { prop: 'reason', label: '调拨理由', minWidth: 150 },
+    { prop: 'reason', label: '调拨理由', minWidth: 150, tooltip: true },
     { prop: 'transferDate', label: '调拨日期', minWidth: 110, kind: 'date' },
     { prop: 'quantity', label: '调拨数量', minWidth: 100, kind: 'number', align: 'right' },
     { prop: 'approveStatus', label: '审批状态', minWidth: 100, kind: 'status' },
