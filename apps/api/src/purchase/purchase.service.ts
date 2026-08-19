@@ -753,6 +753,12 @@ export class PurchaseService {
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (query.approveStatus !== undefined) where.approve_status = Number(query.approveStatus);
+    if (query.createdStart || query.createdEnd) {
+      where.created_at = {
+        ...(query.createdStart ? { gte: new Date(String(query.createdStart)) } : {}),
+        ...(query.createdEnd ? { lte: new Date(`${String(query.createdEnd)}T23:59:59`) } : {}),
+      };
+    }
     if (query.keyword)
       where.OR = [
         { pur_no: { contains: String(query.keyword) } },

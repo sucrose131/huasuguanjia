@@ -78,6 +78,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       dictionary: 'approval_status',
       width: 140,
     },
+    { key: 'createdDate', label: '申请日期', type: 'date-range', param: 'created', width: 250 },
   ],
   summaryLabels: [
     { label: '申请单总数', key: 'total', kind: 'number' },
