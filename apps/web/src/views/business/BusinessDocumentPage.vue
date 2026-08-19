@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import type { BusinessDocumentConfig, RowAction } from './business-document-config';
+import type { BusinessDocumentConfig, BusinessDocumentContext, RowAction } from './business-document-config';
 
 const props = defineProps<{ config: BusinessDocumentConfig }>();
+const route = useRoute();
+const router = useRouter();
 
 const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
@@ -64,16 +67,16 @@ function displayCell(row: Record<string, any>, column: { prop: string; kind?: st
 async function runAction(action: RowAction, row: Record<string, any>) {
   try {
     if (action.confirm) await ElMessageBox.confirm(action.confirm, '提示', { type: 'warning' });
-    await action.handler(row, { refresh: load, openCreate, openEdit, openView });
+    await action.handler(row, ctx);
     await load();
   } catch (error) {
     if (error !== 'cancel') ElMessage.error(error instanceof Error ? error.message : String(error));
   }
 }
 
-function openCreate() {
+function openCreate(initial: Record<string, any> = {}) {
   formMode.value = 'create';
-  form.value = {};
+  form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
   formDialog.value = true;
 }
 function openEdit(row: Record<string, any>) {
@@ -90,6 +93,16 @@ function closeForm() {
   formDialog.value = false;
 }
 
+const ctx: BusinessDocumentContext = {
+  refresh: load,
+  openCreate,
+  openEdit,
+  openView,
+  navigate: async (path, query) => {
+    await router.push({ path, query });
+  },
+};
+
 watch(
   () => props.config.key,
   async () => {
@@ -104,6 +117,10 @@ watch(
 onMounted(async () => {
   await loadDicts();
   await load();
+  if (String(route.query.create ?? '') === '1') openCreate();
+  else if (props.config.openFromRoute && Object.keys(route.query).length) {
+    await props.config.openFromRoute(route.query, ctx);
+  }
 });
 </script>
 
@@ -170,7 +187,7 @@ onMounted(async () => {
               link
               :type="action.kind ?? 'primary'"
               @click="runAction(action, s.row)"
-              >{{ action.label }}</el-button
+              >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-button
             >
           </template>
         </el-table-column>

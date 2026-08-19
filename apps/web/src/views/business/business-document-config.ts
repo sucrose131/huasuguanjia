@@ -24,7 +24,8 @@ export type QueryField = {
 /** 行操作 */
 export type RowAction = {
   key: string;
-  label: string;
+  /** 静态文案，或按行数据返回的动态文案（如“办理出库/查看出库”） */
+  label: string | ((row: Record<string, any>) => string);
   kind?: 'primary' | 'success' | 'warning' | 'danger' | 'info';
   /** 是否显示 */
   show?: (row: Record<string, any>) => boolean;
@@ -37,9 +38,12 @@ export type RowAction = {
 /** 引擎上下文（传给表单组件 / 行操作） */
 export type BusinessDocumentContext = {
   refresh: () => Promise<void>;
-  openCreate: () => void;
+  /** 打开新增表单，initial 为表单初始值（配合 createPreset 使用） */
+  openCreate: (initial?: Record<string, any>) => void;
   openEdit: (row: Record<string, any>) => void;
   openView: (row: Record<string, any>) => void;
+  /** 跳转其它业务页面（跨页深链，如“生成退回”） */
+  navigate: (path: string, query?: Record<string, string>) => Promise<void>;
 };
 
 /** 业务文档配置 */
@@ -56,8 +60,15 @@ export type BusinessDocumentConfig = {
   summary?: boolean;
   creatable?: boolean;
   createText?: string;
+  /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */
+  createPreset?: () => Record<string, any>;
   queryFields?: QueryField[];
   rowActions?: RowAction[];
   /** 专属表单组件（v-model 接收 form、emit save/cancel），可为空（只读业务） */
   formComponent?: Component;
+  /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */
+  openFromRoute?: (
+    query: Record<string, any>,
+    ctx: BusinessDocumentContext,
+  ) => Promise<void> | void;
 };

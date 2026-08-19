@@ -25,6 +25,9 @@ export const requisitionReturnConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增领用退回单',
   formComponent: RequisitionReturnForm,
+  openFromRoute: async (query, ctx) => {
+    if (query.outputId) ctx.openCreate({ outputId: String(query.outputId) });
+  },
   rowActions: [
     { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
     { key: 'edit', label: '编辑', handler: (row, ctx) => ctx.openEdit(row) },

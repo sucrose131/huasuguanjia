@@ -26,6 +26,13 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增领用申请',
   formComponent: RequisitionApplicationForm,
+  openFromRoute: async (query, ctx) => {
+    if (query.documentId) {
+      const detail: any = await api.get(`/requisitions/applications/${query.documentId}`);
+      if (String(query.view ?? '') === '1') ctx.openView(detail);
+      else ctx.openEdit(detail);
+    }
+  },
   rowActions: [
     {
       key: 'view',
@@ -35,7 +42,20 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
+      show: (row) => Number(row.approveStatus) === 0,
       handler: (row, ctx) => ctx.openEdit(row),
+    },
+    {
+      key: 'auto-output',
+      label: (row) => (Number(row.autoOutputConfirmStatus) === 1 ? '查看出库' : '办理出库'),
+      show: (row) =>
+        Boolean(row.autoOutputId) &&
+        (Number(row.approveStatus) === 1 || Boolean(row.reverseGenerated)),
+      handler: (row, ctx) =>
+        ctx.navigate('/requisitions/outputs', {
+          documentId: String(row.autoOutputId),
+          view: Number(row.autoOutputConfirmStatus) === 1 ? '1' : '0',
+        }),
     },
     {
       key: 'retry-oa',

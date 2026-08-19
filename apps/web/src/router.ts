@@ -10,6 +10,7 @@ import InventoryPage from '@/views/InventoryPage.vue';
 import InventoryGeneralPage from '@/views/InventoryGeneralPage.vue';
 import WorkflowPage from '@/views/WorkflowPage.vue';
 import RequisitionApplicationPage from '@/views/business/RequisitionApplicationPage.vue';
+import RequisitionOutputPage from '@/views/business/RequisitionOutputPage.vue';
 import RequisitionReturnPage from '@/views/business/RequisitionReturnPage.vue';
 import ProductionShortagePage from '@/views/business/ProductionShortagePage.vue';
 import SystemPage from '@/views/SystemPage.vue';
@@ -41,6 +42,7 @@ const routes = [
       { path: 'production/:resource', component: WorkflowPage },
       { path: 'sales/:resource', component: WorkflowPage },
       { path: 'requisitions/applications', component: RequisitionApplicationPage },
+      { path: 'requisitions/outputs', component: RequisitionOutputPage },
       { path: 'requisitions/returns', component: RequisitionReturnPage },
       { path: 'requisitions/:resource', component: WorkflowPage },
       { path: 'system/:resource(roles|users|config|tasks)', component: SystemPage },
