@@ -93,6 +93,8 @@ export type BusinessDocumentConfig = {
   /** 引擎需要预加载的公共 options 集合（供列 render 的 lookup/byId 使用） */
   optionBags?: OptionBagName[];
   dictionaries?: string[];
+  /** 是否自动显示「业务状态」下拉（默认 true；当 queryFields 已有状态筛选时置 false 避免重复） */
+  autoStatusFilter?: boolean;
   summary?: boolean;
   /** 摘要卡片映射（summary 为 true 时按此渲染头部卡片；key 对应列表接口返回的 summary 对象字段） */
   summaryLabels?: Array<{ label: string; key: string; kind?: 'money' | 'number' }>;

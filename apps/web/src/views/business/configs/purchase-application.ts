@@ -68,6 +68,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['approval_status'],
   optionBags: ['orgs', 'depts', 'warehouses'],
+  autoStatusFilter: false,
   queryFields: [
     { key: 'orgId', label: '所属组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
     { key: 'warehouseId', label: '目标仓库', type: 'select', optionBag: 'warehouses', width: 180 },

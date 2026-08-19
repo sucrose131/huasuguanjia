@@ -37,6 +37,7 @@ const form = ref<Record<string, any>>({});
 for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
 
 const statusOptions = computed(() => {
+  if (props.config.autoStatusFilter === false) return [];
   const code = (props.config.dictionaries ?? []).find((item) => item.includes('status'));
   return code ? (dicts[code] ?? []) : [];
 });
@@ -288,8 +289,8 @@ onMounted(async () => {
             class="query-field"
             type="daterange"
             range-separator="至"
-            start-placeholder="起"
-            end-placeholder="止"
+            :start-placeholder="`${field.label}起`"
+            :end-placeholder="`${field.label}止`"
             value-format="YYYY-MM-DD"
           />
           <RemoteSelect
