@@ -3,6 +3,7 @@ import { XinfutongOaClient } from './core/client';
 import { XinfutongOaCredentialService } from './core/credential.service';
 import { XinfutongOaOrganizationService } from './organization/organization.service';
 import { XinfutongOaFormService } from './form/form.service';
+import { OaFormMappingService } from './form/form-mapping.service';
 import { XinfutongOaApprovalService } from './approval/approval.service';
 import { XinfutongOaApprovalCallbackService } from './approval/approval-callback.service';
 import { XinfutongOaSyncService } from './sync/sync.service';
@@ -28,6 +29,7 @@ import { XinfutongOaOrgSyncJob } from './sync/org-sync-job.service';
     XinfutongOaCredentialService,
     XinfutongOaOrganizationService,
     XinfutongOaFormService,
+    OaFormMappingService,
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,
@@ -39,6 +41,7 @@ import { XinfutongOaOrgSyncJob } from './sync/org-sync-job.service';
     XinfutongOaCredentialService,
     XinfutongOaOrganizationService,
     XinfutongOaFormService,
+    OaFormMappingService,
     XinfutongOaApprovalService,
     XinfutongOaApprovalCallbackService,
     XinfutongOaSyncService,

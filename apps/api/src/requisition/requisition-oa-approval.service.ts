@@ -7,25 +7,10 @@ import { Attachment, AttachmentsService } from '../attachments/attachments.servi
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalService } from '../integrations/xinfutong-oa/approval/approval.service';
 import { XinfutongOaCredentialService } from '../integrations/xinfutong-oa/core/credential.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
 const BUSINESS_TYPE = 'requisition_application';
-const REQUISITION_FORM = OA_FORM_MAPPINGS.requisition_application;
-const FORM_KEY = REQUISITION_FORM.formKey;
-
-const OA_FIELDS = {
-  organization: REQUISITION_FORM.fields.organization.uniqueName,
-  department: REQUISITION_FORM.fields.department.uniqueName,
-  drawType: REQUISITION_FORM.fields.drawType.uniqueName,
-  warehouse: REQUISITION_FORM.fields.warehouse.uniqueName,
-  applicant: REQUISITION_FORM.fields.applicant.uniqueName,
-  applicationDate: REQUISITION_FORM.fields.applicationDate.uniqueName,
-  reason: REQUISITION_FORM.fields.reason.uniqueName,
-  details: REQUISITION_FORM.fields.details.uniqueName,
-  goodsName: REQUISITION_FORM.fields.goodsName.uniqueName,
-  quantity: REQUISITION_FORM.fields.quantity.uniqueName,
-  attachments: REQUISITION_FORM.fields.attachments.uniqueName,
-} as const;
 
 type OaSubmissionResult = {
   instanceId: bigint;
@@ -45,10 +30,25 @@ export class RequisitionOaApprovalService {
     private readonly approvalService: XinfutongOaApprovalService,
     @Inject(AttachmentsService)
     private readonly attachmentsService: AttachmentsService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
   ) {}
 
   async submit(drawId: bigint, userId: string): Promise<OaSubmissionResult> {
-    const context = await this.buildSubmissionContext(drawId);
+    // 先解析账套：领用申请的 account_set_id 取领用人所属账套
+    const appBrief = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+      select: { applicant_id: true },
+    });
+    if (!appBrief) throw new BadRequestException('领用申请不存在');
+    const applicantBrief = await this.prisma.hspsi_basic_staff.findFirst({
+      where: { id: appBrief.applicant_id, status: 1, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!applicantBrief?.account_set_id) {
+      throw new BadRequestException('领用人尚未关联有效OA账号，请先同步OA组织人员');
+    }
+    const form = await this.mappingService.getMapping(BUSINESS_TYPE, applicantBrief.account_set_id);
+    const context = await this.buildSubmissionContext(drawId, form);
     const credential = await this.credentialService.getById(context.accountSetId);
     if (!credential) throw new BadRequestException('领用人所属OA账套未启用');
 
@@ -89,7 +89,7 @@ export class RequisitionOaApprovalService {
         data: {
           business_type: BUSINESS_TYPE,
           business_id: drawId,
-          form_key: FORM_KEY,
+          form_key: form.formKey,
           bus_key: context.busKey,
           proc_inst_id: '',
           proc_key: '',
@@ -117,9 +117,10 @@ export class RequisitionOaApprovalService {
         drawId,
         context.accountSetId,
         credential,
+        form.fields.attachments!.uniqueName,
       );
       const commonParams = {
-        formKey: FORM_KEY,
+        formKey: form.formKey,
         busKey: context.busKey,
         formData: JSON.stringify({ ...context.formData, ...attachmentFields }),
         starterId: context.starterId,
@@ -136,7 +137,7 @@ export class RequisitionOaApprovalService {
       const updated = await this.prisma.hspsi_oa_approval_instance.update({
         where: { id: instance.id },
         data: {
-          form_key: body.formKey || FORM_KEY,
+          form_key: body.formKey || form.formKey,
           bus_key: body.busKey || context.busKey,
           proc_inst_id: body.procInstId,
           proc_status: body.procStatus,
@@ -170,6 +171,7 @@ export class RequisitionOaApprovalService {
     drawId: bigint,
     accountSetId: bigint,
     credential: Parameters<XinfutongOaApprovalService['uploadFile']>[0],
+    attachmentUniqueName: string,
   ) {
     const attachments = await this.attachmentsService.listForIntegration(
       BUSINESS_TYPE,
@@ -205,7 +207,7 @@ export class RequisitionOaApprovalService {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-    return files.length ? { [OA_FIELDS.attachments]: files } : {};
+    return files.length ? { [attachmentUniqueName]: files } : {};
   }
 
   private async uploadAttachmentToOa(
@@ -239,7 +241,20 @@ export class RequisitionOaApprovalService {
     return { id: fileId, objectKey, name: attachment.fileName };
   }
 
-  private async buildSubmissionContext(drawId: bigint) {
+  private async buildSubmissionContext(drawId: bigint, form: OaFormMapping) {
+    const un = (key: string) => form.fields[key]!.uniqueName;
+    const f = {
+      organization: un('organization'),
+      department: un('department'),
+      drawType: un('drawType'),
+      warehouse: un('warehouse'),
+      applicant: un('applicant'),
+      applicationDate: un('applicationDate'),
+      reason: un('reason'),
+      details: un('details'),
+      goodsName: un('goodsName'),
+      quantity: un('quantity'),
+    };
     const application = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
     });
@@ -330,7 +345,7 @@ export class RequisitionOaApprovalService {
     const detailData = details.map((item) => {
       const goodsName = goodsNames.get(String(item.goods_id));
       if (!goodsName) throw new BadRequestException(`商品 ${item.goods_id} 不存在`);
-      return { [OA_FIELDS.goodsName]: goodsName, [OA_FIELDS.quantity]: item.draw_qty };
+      return { [f.goodsName]: goodsName, [f.quantity]: item.draw_qty };
     });
     const applicationDate = application.draw_date;
     if (!applicationDate) throw new BadRequestException('申请日期不能为空');
@@ -341,11 +356,11 @@ export class RequisitionOaApprovalService {
       starterId: applicant.outer_ref_id,
       starterOrgId: primaryOrg.outer_ref_id,
       formData: {
-        [OA_FIELDS.organization]: organization.name,
-        [OA_FIELDS.department]: department.name,
-        [OA_FIELDS.drawType]: drawType.dict_name,
-        [OA_FIELDS.warehouse]: warehouse.name,
-        [OA_FIELDS.applicant]: [
+        [f.organization]: organization.name,
+        [f.department]: department.name,
+        [f.drawType]: drawType.dict_name,
+        [f.warehouse]: warehouse.name,
+        [f.applicant]: [
           {
             USRNAM: applicant.name,
             STFSEQ: applicant.out_staff_id,
@@ -353,9 +368,9 @@ export class RequisitionOaApprovalService {
             ORGSEQ: primaryOrg.outer_ref_id,
           },
         ],
-        [OA_FIELDS.applicationDate]: this.formatDate(applicationDate),
-        [OA_FIELDS.reason]: application.draw_reason.trim(),
-        [OA_FIELDS.details]: detailData,
+        [f.applicationDate]: this.formatDate(applicationDate),
+        [f.reason]: application.draw_reason.trim(),
+        [f.details]: detailData,
       },
     };
   }

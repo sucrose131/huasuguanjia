@@ -48,11 +48,15 @@ describe('SalesOaApprovalService', () => {
       resolve: vi.fn().mockResolvedValue({ accountSetId: 1n, starterId: 'U1', starterOrgId: 'O1' }),
     };
     const submissions = { submit: vi.fn().mockResolvedValue({ procStatus: 'RUNNING' }) };
+    const mappings = {
+      getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.sales_order),
+    };
     const service = new SalesOaApprovalService(
       prisma as never,
       sales as never,
       starters as never,
       submissions as never,
+      mappings as never,
     );
 
     await service.submitDiscountOrder(6n, '9');

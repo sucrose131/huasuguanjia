@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
+import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 function createFixture(options: { existingStatus?: string; startError?: Error } = {}) {
@@ -131,6 +132,7 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
       credentialService as never,
       approvalService as never,
       attachmentsService as never,
+      { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.requisition_application) } as never,
     ),
     prisma,
     tx,

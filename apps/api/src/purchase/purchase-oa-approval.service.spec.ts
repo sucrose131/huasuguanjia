@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 
 function fixture(existingStatus?: string) {
@@ -67,10 +68,7 @@ function fixture(existingStatus?: string) {
     hspsi_basic_warehouse: { findFirst: vi.fn().mockResolvedValue({ name: '办公用品仓' }) },
     hspsi_sys_user: { findFirst: vi.fn().mockResolvedValue({ username: '13800000000' }) },
     hspsi_basic_organization: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValueOnce({ account_set_id: 1n })
-        .mockResolvedValue({ outer_ref_id: 'ORG-2' }),
+      findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }),
     },
     hspsi_production_plan: { findFirst: vi.fn() },
     hspsi_basic_staff: {
@@ -119,6 +117,7 @@ function fixture(existingStatus?: string) {
       credentials as never,
       approval as never,
       attachments as never,
+      { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.purchase_application) } as never,
     ),
     approval,
   };
