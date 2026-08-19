@@ -108,6 +108,43 @@ const filteredRows = computed(() =>
   }),
 );
 
+// 系统菜单：扁平列表 → 树形（parentId==='0' 为根，children 挂子级）
+const menuTree = computed<any[]>(() => {
+  if (resource.value !== 'config') return [];
+  const byParent = new Map<string, any[]>();
+  for (const row of filteredRows.value) {
+    const pid = String(row.parentId ?? '0');
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid)!.push(row);
+  }
+  const build = (pid: string): any[] =>
+    (byParent.get(pid) ?? [])
+      .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0))
+      .map((row) => {
+        const children = build(String(row.id));
+        return children.length ? { ...row, children } : { ...row };
+      });
+  return build('0');
+});
+
+// 树形默认仅展开一级
+const menuExpandedKeys = computed<string[]>(() =>
+  resource.value === 'config' ? menuTree.value.map((row) => String(row.id)) : [],
+);
+
+// 树形节点计数（含子级，供底部统计/空态判断）
+const menuRowCount = computed(() => {
+  let count = 0;
+  const walk = (nodes: any[]) => {
+    for (const node of nodes) {
+      count += 1;
+      if (node.children?.length) walk(node.children);
+    }
+  };
+  walk(menuTree.value);
+  return count;
+});
+
 const summaryItems = computed(() => {
   if (resource.value === 'roles')
     return [
@@ -724,18 +761,29 @@ onMounted(async () => {
             >
           </el-table>
 
-          <el-table v-else :data="filteredRows" min-width="1180">
+          <el-table
+            v-else
+            :data="menuTree"
+            row-key="id"
+            :tree-props="{ children: 'children' }"
+            :default-expanded-keys="menuExpandedKeys"
+            min-width="1180"
+          >
             <el-table-column type="index" label="序号" width="65" />
             <el-table-column prop="id" label="ID" width="100" />
-            <el-table-column prop="parentName" label="上级菜单" min-width="120" />
-            <el-table-column prop="name" label="菜单名称" min-width="140"
+            <el-table-column prop="name" label="菜单名称" min-width="200"
               ><template #default="{ row }"
-                ><strong>{{ row.name }}</strong></template
+                ><strong v-if="row.typeValue === 1">{{ row.name }}</strong
+                ><span v-else-if="row.typeValue === 2">{{ row.name }}</span
+                ><span v-else class="menu-action-name">{{ row.name }}</span></template
               ></el-table-column
             >
             <el-table-column prop="type" label="菜单类型" width="90"
               ><template #default="{ row }"
-                ><el-tag>{{ row.type }}</el-tag></template
+                ><el-tag
+                  :type="row.typeValue === 1 ? 'primary' : row.typeValue === 2 ? '' : 'info'"
+                  >{{ row.type }}</el-tag
+                ></template
               ></el-table-column
             >
             <el-table-column prop="path" label="访问路径" min-width="180"
@@ -782,20 +830,23 @@ onMounted(async () => {
               ></el-table-column
             >
           </el-table>
-          <div v-if="!loading && !filteredRows.length" class="system-state">
+          <div
+            v-if="!loading && !(resource === 'config' ? menuRowCount : filteredRows.length)"
+            class="system-state"
+          >
             <strong>暂无符合条件的{{ title.replace('管理', '').replace('配置', '菜单') }}</strong>
             <p>请调整状态或搜索条件。</p>
           </div>
         </div>
         <footer class="table-footer">
           <span class="result-total"
-            >共 {{ filteredRows.length }}
+            >共 {{ resource === 'config' ? menuRowCount : filteredRows.length }}
             {{
               resource === 'users' ? '名用户' : resource === 'config' ? '个菜单' : '条记录'
             }}</span
           ><el-pagination
-            :total="filteredRows.length"
-            :page-size="Math.max(filteredRows.length, 1)"
+            :total="resource === 'config' ? menuRowCount : filteredRows.length"
+            :page-size="Math.max(resource === 'config' ? menuRowCount : filteredRows.length, 1)"
             layout="prev, pager, next"
             disabled
           />
@@ -1312,6 +1363,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.menu-action-name {
+  color: #8a94a6;
+  font-size: 12px;
+}
 .system-toolbar {
   display: flex;
   align-items: center;
