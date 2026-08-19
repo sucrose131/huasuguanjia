@@ -12,6 +12,7 @@ import WorkflowPage from '@/views/WorkflowPage.vue';
 import RequisitionApplicationPage from '@/views/business/RequisitionApplicationPage.vue';
 import RequisitionOutputPage from '@/views/business/RequisitionOutputPage.vue';
 import RequisitionReturnPage from '@/views/business/RequisitionReturnPage.vue';
+import ProductionPlanPage from '@/views/business/ProductionPlanPage.vue';
 import ProductionShortagePage from '@/views/business/ProductionShortagePage.vue';
 import SystemPage from '@/views/SystemPage.vue';
 import DashboardPage from '@/views/DashboardPage.vue';
@@ -38,6 +39,7 @@ const routes = [
         path: 'inventory/:resource(stocks|transfers|adjustments|losses|loss-outputs|overflows|overflow-inputs|checks|quantity-alerts|expiry-alerts)',
         component: InventoryPage,
       },
+      { path: 'production/plans', component: ProductionPlanPage },
       { path: 'production/shortages', component: ProductionShortagePage },
       { path: 'production/:resource', component: WorkflowPage },
       { path: 'sales/:resource', component: WorkflowPage },
