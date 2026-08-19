@@ -28,6 +28,15 @@ export const productionOutputConfig: BusinessDocumentConfig = {
     'temporary_outbound_destination',
     'confirm_status',
   ],
+  queryFields: [
+    {
+      key: 'outType',
+      label: '出库类型',
+      type: 'select',
+      dictionary: 'production_material_out_type',
+      width: 150,
+    },
+  ],
   creatable: true,
   createText: '新增临时出库',
   createPreset: () => ({ outType: 3, destinationType: 1 }),
