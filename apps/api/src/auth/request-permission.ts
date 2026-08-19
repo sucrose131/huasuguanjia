@@ -118,6 +118,11 @@ function customAction(segments: string[], method: string) {
  */
 export function inferRequestPermissions(request: PermissionRequest): string[] {
   const segments = normalizedSegments(request);
+  // 下拉/选项辅助接口（*-options 或 /options）不绑定具体页面：
+  // 统一回退到装饰器里的模块目录 code，由 PermissionGuard 按“目录或其下任一权限”判定，
+  // 避免「列表走页面 code、options 走目录 code」的不一致导致新角色 options 报 403。
+  if (segments.some((segment) => segment === 'options' || segment.endsWith('-options')))
+    return [];
   const context = pageContext(segments);
   if (!context) return [];
   const method = String(request.method ?? 'GET').toUpperCase();

@@ -54,4 +54,13 @@ describe('PermissionGuard 菜单内操作权限', () => {
       ),
     ).toBe(true);
   });
+
+  it('拥有模块下页面权限时，options 辅助接口无需目录 code 即可访问', () => {
+    const request = {
+      method: 'GET',
+      originalUrl: '/api/sales/order-options',
+      user: { permissions: ['sales:orders'] },
+    };
+    expect(guard(['sales']).canActivate(context(request))).toBe(true);
+  });
 });

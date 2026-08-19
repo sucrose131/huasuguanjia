@@ -47,6 +47,15 @@ describe('inferRequestPermissions', () => {
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/production/product-options' }),
     ).toEqual([]);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/inventory/losses/approved-options' }),
+    ).toEqual([]);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/sales/services/source-options' }),
+    ).toEqual([]);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/base-data/companies/options' }),
+    ).toEqual([]);
   });
 
   it('只对具有提交动作的页面追加提交权限，并映射生产退料', () => {

@@ -143,7 +143,23 @@ export class SystemService {
     });
     if (menus.length !== requested.size)
       throw new BadRequestException('包含不存在或已停用的菜单权限');
-    menus.filter((menu) => menu.parent_id > 0).forEach((menu) => requested.add(menu.parent_id));
+    // 逐级补齐全部祖先目录（不止一级）：报表/基础资料存在「目录→子目录→页面」的多层结构，
+    // 只补一级父目录会漏掉顶层目录 code，导致依赖目录 code 的接口（如 options）报无权限。
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      const parents = await this.prisma.hspsi_sys_menu.findMany({
+        where: { id: { in: [...requested] }, status: 1, deleted_at: null },
+        select: { id: true, parent_id: true },
+      });
+      for (const menu of parents) {
+        const parentId = Number(menu.parent_id);
+        if (parentId > 0 && !requested.has(parentId)) {
+          requested.add(parentId);
+          expanded = true;
+        }
+      }
+    }
     return [...requested].map(BigInt);
   }
 
