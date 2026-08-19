@@ -3,6 +3,7 @@ import { sm2Verify, sm4Decrypt } from '../core/crypto';
 import { XinfutongOaCredentialService } from '../core/credential.service';
 import {
   EVENT_CODE_OA_PROCESS_FINISH,
+  formKeyFromProcKey,
   type ApprovalCallbackPayload,
   type FinalProcStatus,
 } from './approval.types';
@@ -91,7 +92,7 @@ export class XinfutongOaApprovalCallbackService {
     const payload = this.parseAndValidate(rawPayload);
 
     XinfutongOaApprovalCallbackService.logger.log(
-      `收到流程结束事件：busKey=${payload.busKey}，procInstId=${payload.procInstId}，procStatus=${payload.procStatus}`,
+      `收到流程结束事件：formKey=${payload.formKey}，busKey=${payload.busKey}，procInstId=${payload.procInstId}，procStatus=${payload.procStatus}`,
     );
 
     return payload;
@@ -142,7 +143,14 @@ export class XinfutongOaApprovalCallbackService {
       );
     }
 
-    return { prjCod, procStatus, busKey, procInstId, procKey };
+    return {
+      prjCod,
+      procStatus,
+      busKey,
+      procInstId,
+      procKey,
+      formKey: formKeyFromProcKey(procKey),
+    };
   }
 
   // ==================== 辅助方法 ====================

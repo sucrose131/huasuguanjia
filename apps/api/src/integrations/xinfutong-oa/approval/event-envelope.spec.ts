@@ -2,6 +2,7 @@ import { sm2 } from 'sm-crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { sm2Sign, sm4Encrypt } from '../core/crypto';
 import { XinfutongOaApprovalCallbackService } from './approval-callback.service';
+import { formKeyFromProcKey } from './approval.types';
 import {
   buildEventCallbackSignText,
   oaEventAck,
@@ -57,6 +58,42 @@ describe('event envelope helpers', () => {
 
   it('returns the documented success ack', () => {
     expect(oaEventAck()).toEqual({ rtnCod: '200', errMsg: '' });
+  });
+});
+
+describe('formKeyFromProcKey', () => {
+  it('strips FORM_ prefix from decrypted procKey', () => {
+    expect(formKeyFromProcKey('FORM_AAC15400_NFORM_380014832305831937')).toBe(
+      'AAC15400_NFORM_380014832305831937',
+    );
+  });
+
+  it('returns procKey unchanged when the prefix is absent', () => {
+    expect(formKeyFromProcKey('AAC22502_NFORM_379451564510347266')).toBe(
+      'AAC22502_NFORM_379451564510347266',
+    );
+  });
+});
+
+describe('XinfutongOaApprovalCallbackService handleProcessFinishEvent', () => {
+  it('derives formKey from procKey', () => {
+    const service = new XinfutongOaApprovalCallbackService({} as never);
+    expect(
+      service.handleProcessFinishEvent({
+        prjCod: 'AAC15400',
+        procStatus: 'PASSED',
+        busKey: 'NFORM_1',
+        procInstId: 'PROC_1',
+        procKey: 'FORM_AAC15400_NFORM_380014832305831937',
+      }),
+    ).toEqual({
+      prjCod: 'AAC15400',
+      procStatus: 'PASSED',
+      busKey: 'NFORM_1',
+      procInstId: 'PROC_1',
+      procKey: 'FORM_AAC15400_NFORM_380014832305831937',
+      formKey: 'AAC15400_NFORM_380014832305831937',
+    });
   });
 });
 

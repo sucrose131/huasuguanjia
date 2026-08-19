@@ -539,6 +539,7 @@ describe('RequisitionService OA callback result handling', () => {
       busKey: 'requisition_application:7',
       procInstId: 'PROC-7',
       procKey: 'PROC-KEY',
+      formKey: 'PROC-KEY',
     };
 
     const result = await service.handleOaApprovalResult(payload, payload, 99n);

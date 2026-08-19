@@ -8,7 +8,8 @@ function fixture() {
     procStatus: 'PASSED',
     busKey: 'NFORM_1',
     procInstId: 'PROC_1',
-    procKey: 'KEY_1',
+    procKey: 'FORM_AAC15400_NFORM_380014832305831937',
+    formKey: 'AAC15400_NFORM_380014832305831937',
   } as const;
   const envelope = {
     eventId: 'XFTOAFPS',
@@ -48,6 +49,9 @@ function fixture() {
     hspsi_oa_approval_instance: {
       findFirst: vi.fn().mockResolvedValue({ business_type: 'requisition_application' }),
     },
+    hspsi_oa_form_template: {
+      findFirst: vi.fn().mockResolvedValue({ id: 1n }),
+    },
   };
   return {
     controller: new RequisitionOaCallbackController(
@@ -86,11 +90,41 @@ describe('RequisitionOaCallbackController', () => {
   });
 
   it('verifies, decrypts and dispatches a process-finish event', async () => {
-    const { controller, inner, envelope, requisition, callback } = fixture();
+    const { controller, inner, envelope, requisition, callback, prisma } = fixture();
     const result = await controller.receiveEvent(envelope);
     expect(callback.verifyAndDecryptEvent).toHaveBeenCalledWith(envelope, undefined);
+    expect(prisma.hspsi_oa_form_template.findFirst).toHaveBeenCalledWith({
+      where: {
+        form_key: 'AAC15400_NFORM_380014832305831937',
+        account_set_id: 1n,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
     expect(requisition.handleOaApprovalResult).toHaveBeenCalledWith(inner, envelope, 9n);
     expect(result).toEqual({ rtnCod: '200', errMsg: '' });
+  });
+
+  it('acks and skips business handling when the form is not in hspsi_oa_form_template', async () => {
+    const { controller, envelope, prisma, requisition, purchase } = fixture();
+    prisma.hspsi_oa_form_template.findFirst.mockResolvedValueOnce(null);
+
+    await expect(controller.receiveEvent(envelope)).resolves.toEqual({
+      rtnCod: '200',
+      errMsg: '',
+    });
+    expect(requisition.handleOaApprovalResult).not.toHaveBeenCalled();
+    expect(purchase.handleApplicationOaApprovalResult).not.toHaveBeenCalled();
+    expect(prisma.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
+      where: { id: 9n },
+      data: expect.objectContaining({
+        processed: 1,
+        process_result: '非本系统表单，已忽略：AAC15400_NFORM_380014832305831937',
+        proc_key: 'FORM_AAC15400_NFORM_380014832305831937',
+        account_set_id: 1n,
+      }),
+    });
   });
 
   it('dispatches a purchase application callback by the recorded business type', async () => {

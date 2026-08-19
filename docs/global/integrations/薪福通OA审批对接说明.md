@@ -86,7 +86,7 @@ POST /api/integrations/xinfutong-oa/events
 { "rtnCod": "200", "errMsg": "" }
 ```
 
-验签失败返回 `{ "rtnCod": "001", "errMsg": "验签失败" }`。`eventRcdInf` 解密后的业务字段见各事件文档；`XFTOAFPS` 的业务字段仍为 `prjCod` / `procStatus` / `busKey` / `procInstId` / `procKey`。
+验签失败返回 `{ "rtnCod": "001", "errMsg": "验签失败" }`。`eventRcdInf` 解密后的业务字段见各事件文档；`XFTOAFPS` 的业务字段仍为 `prjCod` / `procStatus` / `busKey` / `procInstId` / `procKey`。本系统用 `procKey` 去掉 `FORM_` 前缀得到 `form_key`，仅当该值在当前账套的 `hspsi_oa_form_template` 中存在时才进入业务处理，其余表单成功回包并记为忽略。
 
 ### 2.3 接口调用规范
 
@@ -223,8 +223,10 @@ Content-Type: multipart/form-data
   procStatus: string  // 终态：PASSED|REJECTED|CANCELED|DELETED
   busKey: string      // 业务编号
   procInstId: string  // 审批编号（流程实例id）
-  procKey: string     // 流程Key
+  procKey: string     // 流程Key，实测为 FORM_ + form_key
 ```
+
+本系统识别表单的方式：`form_key = procKey` 去掉前缀 `FORM_`（例如 `FORM_AAC15400_NFORM_380014832305831937` → `AAC15400_NFORM_380014832305831937`）。仅当该 `form_key` 在当前账套（由 `appId` 匹配）的 `hspsi_oa_form_template` 中且 `status=1` 时才分发业务处理；OA 推送的其他表单仍验签解密并写回调日志，但标记为「非本系统表单，已忽略」，并返回成功回包。
 
 华溯管家事件订阅回调入口：
 
