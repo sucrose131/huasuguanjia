@@ -60,6 +60,11 @@ export class PurchaseService {
       BigInt(String(warehouseIdValue)),
     );
   }
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
+  }
   private details(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
     return input as Body[];

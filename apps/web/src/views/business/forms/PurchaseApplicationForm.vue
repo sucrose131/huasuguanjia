@@ -33,6 +33,7 @@ function blankLine() {
     goodsName: '',
     skuSpec: '',
     remark: '',
+    goodsWarehouseType: 0,
   };
 }
 
@@ -50,24 +51,45 @@ async function loadOrgScopedOptions(orgId: unknown) {
   options.warehouses = warehouses as any[];
 }
 
-/** 按单据组织+仓库加载匹配商品（后端按分类仓库类型过滤），未选组织/仓库时清空 */
+/** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
 async function loadContextGoods() {
-  if (!form.value.orgId || !form.value.warehouseId) {
+  if (!form.value.orgId) {
     options.contextGoods = [];
     return;
   }
   options.contextGoods = (await api
-    .get('/purchase/product-options', {
-      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-    })
+    .get('/purchase/all-goods-options', { params: { orgId: String(form.value.orgId) } })
     .catch(() => [])) as any[];
 }
 
+/** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
+const documentWarehouseType = computed(() => {
+  const types = new Set(
+    (form.value.details ?? [])
+      .map((line: any) => Number(line.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  return types.size === 1 ? [...types][0] : 0;
+});
+
+/** 仓库选项：按明细商品分类类型过滤（先选商品后选仓库场景） */
+const warehouseOptions = computed(() =>
+  (options.warehouses ?? []).filter(
+    (w: any) =>
+      !documentWarehouseType.value ||
+      Number(w.raw?.warehouseType ?? w.warehouseType ?? 0) === documentWarehouseType.value,
+  ),
+);
+
 function warehouseChanged() {
-  if (!(form.value.details ?? []).length) return;
-  // 仓库变化后重新加载匹配商品，并清空已选明细（避免跨仓库类型残留）
-  loadContextGoods();
-  form.value.details = [blankLine()];
+  // 先选商品后选仓库：换仓库只校验兼容性，不清空明细
+  const current = warehouseOptions.value.find(
+    (w: any) => String(w.value) === String(form.value.warehouseId),
+  );
+  if (documentWarehouseType.value && !current) {
+    form.value.warehouseId = '';
+    ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
+  }
 }
 
 async function searchGoodsOptions(keyword: string) {
@@ -87,7 +109,12 @@ async function lineGoodsChanged(line: any) {
   line.goodsCode = '';
   line.goodsName = '';
   line.skuSpec = '';
+  line.goodsWarehouseType = 0;
   if (!line.goodsId) return;
+  const matched = (options.contextGoods ?? []).find(
+    (g: any) => String(g.id) === String(line.goodsId),
+  );
+  line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
@@ -95,6 +122,20 @@ async function lineGoodsChanged(line: any) {
   line.goodsCode = g.queryCode ?? '';
   line.goodsName = g.goodsName ?? '';
   line.skuSpec = sku?.specModels ?? '';
+  // 商品分类类型变化后，若已选仓库类型不匹配则清空仓库
+  if (form.value.warehouseId && documentWarehouseType.value) {
+    const current = (options.warehouses ?? []).find(
+      (w: any) => String(w.value) === String(form.value.warehouseId),
+    );
+    if (
+      !current ||
+      Number(current.raw?.warehouseType ?? current.warehouseType ?? 0) !==
+        documentWarehouseType.value
+    ) {
+      form.value.warehouseId = '';
+      ElMessage.warning('明细商品类型已变化，请重新选择匹配的仓库');
+    }
+  }
 }
 
 async function enrichLine(line: any) {
@@ -126,9 +167,29 @@ function removeLine(index: number) {
 }
 
 function validate() {
-  if (!form.value.orgId || !form.value.deptId || !form.value.warehouseId) {
-    ElMessage.warning('请选择所属组织、目标部门和目标仓库');
+  if (!form.value.orgId || !form.value.deptId) {
+    ElMessage.warning('请选择所属组织和目标部门');
     return false;
+  }
+  const hasGoods = (form.value.details ?? []).some((line: any) => line.goodsId);
+  if (!form.value.warehouseId) {
+    ElMessage.warning(
+      hasGoods ? '请选择与商品匹配的目标仓库' : '请选择所属组织、目标部门和目标仓库',
+    );
+    return false;
+  }
+  if (hasGoods && documentWarehouseType.value) {
+    const current = (options.warehouses ?? []).find(
+      (w: any) => String(w.value) === String(form.value.warehouseId),
+    );
+    if (
+      !current ||
+      Number(current.raw?.warehouseType ?? current.warehouseType ?? 0) !==
+        documentWarehouseType.value
+    ) {
+      ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
+      return false;
+    }
   }
   if (!String(form.value.reason ?? '').trim()) {
     ElMessage.warning('请输入申请原因');
@@ -199,6 +260,15 @@ onMounted(async () => {
   }
   await loadOrgScopedOptions(form.value.orgId);
   await loadContextGoods();
+  // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
+  for (const line of form.value.details ?? []) {
+    if (line.goodsId && !Number(line.goodsWarehouseType)) {
+      const matched = (options.contextGoods ?? []).find(
+        (g: any) => String(g.id) === String(line.goodsId),
+      );
+      line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+    }
+  }
 });
 </script>
 
@@ -218,12 +288,18 @@ onMounted(async () => {
       <el-form-item label="目标仓库" required>
         <el-select v-model="form.warehouseId" filterable :disabled="isView" @change="warehouseChanged">
           <el-option
-            v-for="x in options.warehouses"
+            v-for="x in warehouseOptions"
             :key="x.value"
             :label="x.label"
             :value="x.value"
           />
         </el-select>
+        <div
+          v-if="documentWarehouseType && form.details?.some((l: any) => l.goodsId)"
+          class="warehouse-hint"
+        >
+          已按明细商品类型匹配仓库
+        </div>
       </el-form-item>
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />
@@ -242,8 +318,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="!form.warehouseId"
-            placeholder="请先选择目标仓库，再搜索商品"
+            :disabled="!form.orgId"
+            placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
@@ -297,6 +373,11 @@ onMounted(async () => {
 }
 .span-2 {
   grid-column: 1 / -1;
+}
+.warehouse-hint {
+  font-size: 12px;
+  color: var(--hs-muted, #909399);
+  margin-top: 2px;
 }
 .details-header {
   display: flex;

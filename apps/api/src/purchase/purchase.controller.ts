@@ -61,6 +61,11 @@ export class PurchaseController {
     return this.service.productOptions(orgId, warehouseId);
   }
   @RequirePermissions('purchase')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId?: string) {
+    return this.service.allGoodsOptions(orgId);
+  }
+  @RequirePermissions('purchase')
   @Get('applications/:id')
   async application(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.protectPurchaseAmounts(await this.service.application(id), u.id);
