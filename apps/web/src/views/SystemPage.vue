@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Search } from '@element-plus/icons-vue';
+import { Plus, Refresh, Search, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
@@ -127,10 +127,31 @@ const menuTree = computed<any[]>(() => {
   return build('0');
 });
 
-// 树形默认仅展开一级
-const menuExpandedKeys = computed<string[]>(() =>
-  resource.value === 'config' ? menuTree.value.map((row) => String(row.id)) : [],
+// 树形展开状态（可点击切换），默认仅展开一级
+const menuExpandedKeys = ref<string[]>([]);
+watch(
+  () => resource.value,
+  (val) => {
+    if (val === 'config') menuExpandedKeys.value = menuTree.value.map((row) => String(row.id));
+    else menuExpandedKeys.value = [];
+  },
+  { immediate: true },
 );
+watch(
+  () => menuTree.value,
+  (tree) => {
+    if (resource.value === 'config' && !menuExpandedKeys.value.length)
+      menuExpandedKeys.value = tree.map((row) => String(row.id));
+  },
+);
+
+function toggleMenuExpand(row: any) {
+  if (!(row.children?.length)) return;
+  const key = String(row.id);
+  const index = menuExpandedKeys.value.indexOf(key);
+  if (index >= 0) menuExpandedKeys.value.splice(index, 1);
+  else menuExpandedKeys.value.push(key);
+}
 
 // 树形节点计数（含子级，供底部统计/空态判断）
 const menuRowCount = computed(() => {
@@ -762,72 +783,81 @@ onMounted(async () => {
           </el-table>
 
           <el-table
+          <el-table
             v-else
             :data="menuTree"
             row-key="id"
             :tree-props="{ children: 'children' }"
-            :default-expanded-keys="menuExpandedKeys"
+            v-model:expand-row-keys="menuExpandedKeys"
+            :indent="20"
             min-width="1180"
           >
-            <el-table-column prop="name" label="菜单名称" min-width="200"
-              ><template #default="{ row }"
-                ><strong v-if="row.typeValue === 1">{{ row.name }}</strong
-                ><span v-else-if="row.typeValue === 2">{{ row.name }}</span
-                ><span v-else class="menu-action-name">{{ row.name }}</span></template
-              ></el-table-column
-            >
+            <el-table-column width="44" align="center">
+              <template #default="{ row }">
+                <span
+                  v-if="row.children?.length"
+                  class="menu-expand-toggle"
+                  @click="toggleMenuExpand(row)"
+                >
+                  <el-icon :size="14">
+                    <ArrowDown v-if="menuExpandedKeys.includes(String(row.id))" />
+                    <ArrowRight v-else />
+                  </el-icon>
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="name" label="菜单名称" min-width="200">
+              <template #default="{ row }">
+                <strong v-if="row.typeValue === 1">{{ row.name }}</strong>
+                <span v-else-if="row.typeValue === 2">{{ row.name }}</span>
+                <span v-else class="menu-action-name">{{ row.name }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="id" label="ID" width="100" />
-            <el-table-column prop="type" label="菜单类型" width="90"
-              ><template #default="{ row }"
-                ><el-tag
+            <el-table-column prop="type" label="菜单类型" width="90">
+              <template #default="{ row }">
+                <el-tag
                   :type="row.typeValue === 1 ? 'primary' : row.typeValue === 2 ? '' : 'info'"
                   >{{ row.type }}</el-tag
-                ></template
-              ></el-table-column
-            >
-            <el-table-column prop="path" label="访问路径" min-width="180"
-              ><template #default="{ row }">{{ row.path || '—' }}</template></el-table-column
-            >
-            <el-table-column prop="permission" label="权限编码" min-width="160"
-              ><template #default="{ row }">{{ row.permission || '—' }}</template></el-table-column
-            >
-            <el-table-column label="权限类别" width="90"
-              ><template #default="{ row }"
-                ><el-tag :type="row.typeValue === 3 ? 'warning' : undefined">{{
-                  row.typeValue === 3 ? '操作' : '页面'
-                }}</el-tag></template
-              ></el-table-column
-            >
+                >
+              </template>
+            </el-table-column>
+            <el-table-column prop="path" label="访问路径" min-width="180">
+              <template #default="{ row }">{{ row.path || '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="permission" label="权限编码" min-width="160">
+              <template #default="{ row }">{{ row.permission || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="权限类别" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.typeValue === 3 ? 'warning' : undefined">
+                  {{ row.typeValue === 3 ? '操作' : '页面' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="sortOrder" label="显示顺序" width="90" />
             <el-table-column label="数据来源" width="90">MySQL</el-table-column>
-            <el-table-column prop="statusName" label="状态" width="90"
-              ><template #default="{ row }"
-                ><el-tag :type="row.visible ? 'success' : 'info'">{{
-                  row.statusName
-                }}</el-tag></template
-              ></el-table-column
-            >
-            <el-table-column label="操作" width="176" fixed="right" align="center"
-              ><template #default="{ row }"
-                ><TableRowActions :show-more="can('system:config:delete')"
-                  ><el-button link type="primary" @click="open('view', row)">查看</el-button
-                  ><el-button
-                    v-if="can('system:config:update')"
-                    link
-                    type="primary"
-                    @click="open('edit', row)"
-                    >编辑</el-button
-                  ><template #more
-                    ><el-dropdown-item
+            <el-table-column prop="statusName" label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.visible ? 'success' : 'info'">{{ row.statusName }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="176" fixed="right" align="center">
+              <template #default="{ row }">
+                <TableRowActions :show-more="can('system:config:delete')">
+                  <el-button link type="primary" @click="open('view', row)">查看</el-button>
+                  <el-button v-if="can('system:config:update')" link type="primary" @click="open('edit', row)">编辑</el-button>
+                  <template #more>
+                    <el-dropdown-item
                       v-if="can('system:config:delete')"
                       class="table-action-danger"
                       @click="removeMenu(row)"
                       >删除菜单</el-dropdown-item
-                    ></template
-                  ></TableRowActions
-                ></template
-              ></el-table-column
-            >
+                    >
+                  </template>
+                </TableRowActions>
+              </template>
+            </el-table-column>
           </el-table>
           <div
             v-if="!loading && !(resource === 'config' ? menuRowCount : filteredRows.length)"
@@ -1365,6 +1395,23 @@ onMounted(async () => {
 .menu-action-name {
   color: #8a94a6;
   font-size: 12px;
+}
+.menu-expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #687487;
+}
+.menu-expand-toggle:hover {
+  background: rgba(24, 104, 253, 0.08);
+  color: var(--hs-primary);
+}
+:deep(.el-table__expand-icon) {
+  display: none;
 }
 .system-toolbar {
   display: flex;
