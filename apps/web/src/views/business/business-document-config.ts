@@ -29,8 +29,8 @@ export type RowAction = {
   kind?: 'primary' | 'success' | 'warning' | 'danger' | 'info';
   /** 是否显示 */
   show?: (row: Record<string, any>) => boolean;
-  /** 操作前的确认文案 */
-  confirm?: string;
+  /** 操作前的确认文案（可动态按行生成） */
+  confirm?: string | ((row: Record<string, any>) => string);
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
 };

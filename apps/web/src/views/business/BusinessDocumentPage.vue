@@ -66,7 +66,10 @@ function displayCell(row: Record<string, any>, column: { prop: string; kind?: st
 
 async function runAction(action: RowAction, row: Record<string, any>) {
   try {
-    if (action.confirm) await ElMessageBox.confirm(action.confirm, '提示', { type: 'warning' });
+    if (action.confirm) {
+      const text = typeof action.confirm === 'function' ? action.confirm(row) : action.confirm;
+      await ElMessageBox.confirm(text, '提示', { type: 'warning' });
+    }
     await action.handler(row, ctx);
     await load();
   } catch (error) {
