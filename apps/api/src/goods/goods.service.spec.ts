@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GoodsService } from './goods.service';
 
+const amountAccess = {
+  forUser: vi.fn().mockResolvedValue({ canViewAmount: true, canEditAmount: true }),
+  maskFields: vi.fn((value: unknown) => value),
+};
+
 describe('GoodsService categories', () => {
   it('returns every matching category without pagination fields', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
@@ -16,7 +21,7 @@ describe('GoodsService categories', () => {
       hspsi_goods_info: { groupBy: vi.fn().mockResolvedValue([]) },
       $transaction: vi.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
     };
-    const service = new GoodsService(prisma as never);
+    const service = new GoodsService(prisma as never, amountAccess as never);
 
     const result = await service.categories({
       page: '3',
@@ -62,7 +67,7 @@ describe('GoodsService categories', () => {
       hspsi_goods_info: { groupBy: vi.fn().mockResolvedValue([]) },
       $transaction: vi.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
     };
-    const service = new GoodsService(prisma as never);
+    const service = new GoodsService(prisma as never, amountAccess as never);
 
     await service.categories(
       { status: '1' },
@@ -90,7 +95,7 @@ describe('GoodsService organization visibility', () => {
     const warehouseFindMany = vi.fn();
     const service = new GoodsService({
       hspsi_basic_warehouse: { findMany: warehouseFindMany },
-    } as never);
+    } as never, amountAccess as never);
 
     await expect(
       (service as any).visibleWarehouseTypes({
@@ -108,7 +113,7 @@ describe('GoodsService organization visibility', () => {
     const warehouseFindMany = vi.fn();
     const service = new GoodsService({
       hspsi_basic_warehouse: { findMany: warehouseFindMany },
-    } as never);
+    } as never, amountAccess as never);
 
     await expect(
       (service as any).visibleWarehouseTypes({
@@ -131,7 +136,7 @@ describe('GoodsService organization visibility', () => {
       },
       hspsi_goods_info_category: { findFirst: vi.fn().mockResolvedValue(null) },
       hspsi_goods_info_sku: { findMany: skuFindMany },
-    } as never);
+    } as never, amountAccess as never);
 
     await expect(
       service.detail('11', {
@@ -150,7 +155,7 @@ describe('GoodsService global name availability', () => {
   it('allows quick creation only when no global goods name exists', async () => {
     const service = new GoodsService({
       hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null) },
-    } as never);
+    } as never, amountAccess as never);
 
     await expect(
       service.nameAvailability('全局不存在商品', {
@@ -188,7 +193,7 @@ describe('GoodsService global name availability', () => {
         }),
       },
       hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue([{ warehouse_type: 2 }]) },
-    } as never);
+    } as never, amountAccess as never);
 
     const result = await service.nameAvailability('全局已有商品', {
       id: '9',
@@ -225,7 +230,7 @@ describe('GoodsService category selection', () => {
         count: childCount,
       },
       hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null) },
-    } as never);
+    } as never, amountAccess as never);
 
     await expect(
       (service as any).validate(
@@ -253,7 +258,7 @@ describe('GoodsService category selection', () => {
 
 describe('GoodsService default SKU preparation', () => {
   it('maps goods fields to a default SKU when no SKU was filled', () => {
-    const service = new GoodsService({} as never);
+    const service = new GoodsService({} as never, amountAccess as never);
     const body: Record<string, any> = {
       specModels: '整箱 12 件',
       unitType: 3,
@@ -281,7 +286,7 @@ describe('GoodsService default SKU preparation', () => {
   });
 
   it('uses 默认规格 when both goods and SKU specification are blank', () => {
-    const service = new GoodsService({} as never);
+    const service = new GoodsService({} as never, amountAccess as never);
     const body: Record<string, any> = {
       unitType: 1,
       costPrice: 0,
@@ -296,7 +301,7 @@ describe('GoodsService default SKU preparation', () => {
   });
 
   it('automatically selects the first explicit SKU when no default was selected', () => {
-    const service = new GoodsService({} as never);
+    const service = new GoodsService({} as never, amountAccess as never);
     const body: Record<string, any> = {
       skus: [
         { specModels: '小包', isDefault: 0 },

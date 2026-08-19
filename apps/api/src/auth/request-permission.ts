@@ -115,7 +115,15 @@ function customAction(segments: string[], method: string) {
 /**
  * 将业务请求映射为“菜单查看 + 页面操作”权限。
  * 只处理已纳入角色权限表的业务页面；选项、健康检查等辅助接口继续使用显式装饰器权限。
+ *
+ * 权限结果取值：
+ * - [PUBLIC_READ]：主数据（商品/基础资料）读取，任意登录用户可读（用于表单引用下拉），仅需登录。
+ * - []：下拉/选项辅助接口，回退到装饰器的模块目录 code。
+ * - [module]：业务单据读取，按模块目录 code。
+ * - [page, page:action]：写操作，按页面 + 操作 code。
  */
+export const PUBLIC_READ = '@public-read';
+
 export function inferRequestPermissions(request: PermissionRequest): string[] {
   const segments = normalizedSegments(request);
   // 下拉/选项辅助接口（*-options 或 /options）不绑定具体页面：
@@ -127,8 +135,11 @@ export function inferRequestPermissions(request: PermissionRequest): string[] {
   if (!context) return [];
   const method = String(request.method ?? 'GET').toUpperCase();
   if (method === 'GET') {
-    // 读取（列表/详情）按模块级判断：表单里引用其它单据（如生产出库选「生产计划」）只应要求
-    // 拥有该模块目录 code，而不是被引用单据的页面 code；页面入口由前端菜单/路由单独控制。
+    // 主数据（商品/基础资料）读取：不设权限校验，任意登录用户可读，
+    // 供各业务表单引用商品、分类、仓库、组织等下拉数据。
+    if (context.moduleName === 'goods' || context.moduleName === 'master-data')
+      return [PUBLIC_READ];
+    // 业务单据读取：按模块级判断，引用其它单据只要求拥有该模块目录 code。
     const required = new Set<string>([context.moduleName]);
     if (segments.includes('export')) required.add(`${context.pageCode}:export`);
     return [...required];

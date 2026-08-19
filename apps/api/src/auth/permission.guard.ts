@@ -8,7 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthRequest } from './auth.types';
 import { PERMISSIONS_KEY } from './permissions.decorator';
-import { inferRequestPermissions } from './request-permission';
+import { inferRequestPermissions, PUBLIC_READ } from './request-permission';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -25,6 +25,8 @@ export class PermissionGuard implements CanActivate {
     const permissions = request.user?.permissions ?? [];
     if (permissions.includes('*')) return true;
     const granular = inferRequestPermissions(request);
+    // 主数据（商品/基础资料）读取：任意登录用户可读，仅需登录、不做权限校验。
+    if (granular.includes(PUBLIC_READ)) return true;
     if (granular.length && granular.every((permission) => permissions.includes(permission)))
       return true;
     // 选项/辅助接口（无法映射到具体页面）使用显式装饰器权限，通常为模块目录 code（如 sales）。

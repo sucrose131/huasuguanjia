@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { inferRequestPermissions } from './request-permission';
+import { inferRequestPermissions, PUBLIC_READ } from './request-permission';
 
 describe('inferRequestPermissions', () => {
-  it('读取按模块级判定，写入按页面+操作判定', () => {
+  it('读取按模块级判定，主数据读取仅需登录', () => {
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/purchase/applications/7' }),
     ).toEqual(['purchase']);
@@ -11,7 +11,13 @@ describe('inferRequestPermissions', () => {
     ).toEqual(['production']);
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods/properties' }),
-    ).toEqual(['goods']);
+    ).toEqual([PUBLIC_READ]);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods' }),
+    ).toEqual([PUBLIC_READ]);
+    expect(
+      inferRequestPermissions({ method: 'GET', originalUrl: '/api/base-data/warehouses' }),
+    ).toEqual([PUBLIC_READ]);
     expect(
       inferRequestPermissions({
         method: 'POST',

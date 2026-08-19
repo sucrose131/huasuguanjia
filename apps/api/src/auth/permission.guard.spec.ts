@@ -63,4 +63,13 @@ describe('PermissionGuard 菜单内操作权限', () => {
     };
     expect(guard(['sales']).canActivate(context(request))).toBe(true);
   });
+
+  it('主数据读取（商品/基础资料）仅需登录，不校验权限', () => {
+    const request = {
+      method: 'GET',
+      originalUrl: '/api/goods',
+      user: { permissions: [] },
+    };
+    expect(guard(['goods']).canActivate(context(request))).toBe(true);
+  });
 });
