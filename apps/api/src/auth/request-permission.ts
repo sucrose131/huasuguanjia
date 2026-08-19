@@ -127,10 +127,13 @@ export const PUBLIC_READ = '@public-read';
 export function inferRequestPermissions(request: PermissionRequest): string[] {
   const segments = normalizedSegments(request);
   // 下拉/选项辅助接口（*-options 或 /options）不绑定具体页面：
-  // 统一回退到装饰器里的模块目录 code，由 PermissionGuard 按“目录或其下任一权限”判定，
-  // 避免「列表走页面 code、options 走目录 code」的不一致导致新角色 options 报 403。
-  if (segments.some((segment) => segment === 'options' || segment.endsWith('-options')))
+  // - 主数据（基础资料/商品）下拉仅需登录，供各业务表单引用仓库/组织/单位等；
+  // - 业务单据下拉（销售订单/库存批次等）回退到模块目录 code，由 PermissionGuard 判定。
+  if (segments.some((segment) => segment === 'options' || segment.endsWith('-options'))) {
+    const module = segments[0];
+    if (module === 'base-data' || module === 'goods') return [PUBLIC_READ];
     return [];
+  }
   const context = pageContext(segments);
   if (!context) return [];
   const method = String(request.method ?? 'GET').toUpperCase();
