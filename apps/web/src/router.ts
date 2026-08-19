@@ -17,6 +17,7 @@ import ProductionBomPage from '@/views/business/ProductionBomPage.vue';
 import ProductionInputPage from '@/views/business/ProductionInputPage.vue';
 import ProductionOutputPage from '@/views/business/ProductionOutputPage.vue';
 import ProductionShortagePage from '@/views/business/ProductionShortagePage.vue';
+import SalesOrderPage from '@/views/business/SalesOrderPage.vue';
 import SystemPage from '@/views/SystemPage.vue';
 import DashboardPage from '@/views/DashboardPage.vue';
 import ReportPage from '@/views/ReportPage.vue';
@@ -48,6 +49,7 @@ const routes = [
       { path: 'production/outputs', component: ProductionOutputPage },
       { path: 'production/shortages', component: ProductionShortagePage },
       { path: 'production/:resource', component: WorkflowPage },
+      { path: 'sales/orders', component: SalesOrderPage },
       { path: 'sales/:resource', component: WorkflowPage },
       { path: 'requisitions/applications', component: RequisitionApplicationPage },
       { path: 'requisitions/outputs', component: RequisitionOutputPage },
