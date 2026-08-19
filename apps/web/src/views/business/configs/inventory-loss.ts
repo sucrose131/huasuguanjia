@@ -6,6 +6,7 @@ import InventoryLossForm from '../forms/InventoryLossForm.vue';
 export const inventoryLossConfig: BusinessDocumentConfig = {
   key: 'inventory/losses',
   title: '报损/报亏单',
+  subtitle: '支持盘点损坏生成和日常独立报损，按处置方式完成库存闭环',
   endpoint: '/inventory/losses',
   no: 'businessNo',
   columns: [

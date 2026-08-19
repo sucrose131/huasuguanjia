@@ -26,6 +26,11 @@ export const salesPaymentConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['payment_channel', 'sales_payment_type'],
   summary: true,
+  summaryLabels: [
+    { label: '本期金额', key: 'periodAmount', kind: 'money' },
+    { label: '累计收款', key: 'receivedAmount', kind: 'money' },
+    { label: '累计退款', key: 'refundedAmount', kind: 'money' },
+  ],
   creatable: true,
   createText: '登记收款',
   formComponent: SalesPaymentForm,

@@ -14,6 +14,7 @@ import PurchaseApplicationForm from '../forms/PurchaseApplicationForm.vue';
 export const purchaseApplicationConfig: BusinessDocumentConfig = {
   key: 'purchase/applications',
   title: '采购申请单',
+  subtitle: '采购需求草稿、提交与审批管理',
   endpoint: '/purchase/applications',
   no: 'applicationNo',
   columns: [

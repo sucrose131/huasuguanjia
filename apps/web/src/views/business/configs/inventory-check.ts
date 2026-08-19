@@ -6,6 +6,7 @@ import InventoryCheckForm from '../forms/InventoryCheckForm.vue';
 export const inventoryCheckConfig: BusinessDocumentConfig = {
   key: 'inventory/checks',
   title: '库存盘点',
+  subtitle: '数量差异与损坏独立核算，同一批次可同时进入两条处理链',
   endpoint: '/inventory/checks',
   no: 'checkNo',
   columns: [

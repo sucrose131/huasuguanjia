@@ -51,6 +51,8 @@ export type BusinessDocumentConfig = {
   /** 业务 key，如 'requisitions/applications' */
   key: string;
   title: string;
+  /** 副标题（页面头部标题下方的小字），缺省用通用文案 */
+  subtitle?: string;
   /** 列表接口 */
   endpoint: string;
   /** 列表主编号字段 */
@@ -58,6 +60,8 @@ export type BusinessDocumentConfig = {
   columns: BusinessColumn[];
   dictionaries?: string[];
   summary?: boolean;
+  /** 摘要卡片映射（summary 为 true 时按此渲染头部卡片；key 对应列表接口返回的 summary 对象字段） */
+  summaryLabels?: Array<{ label: string; key: string; kind?: 'money' | 'number' }>;
   creatable?: boolean;
   createText?: string;
   /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */

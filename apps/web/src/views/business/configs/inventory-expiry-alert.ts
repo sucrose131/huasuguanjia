@@ -4,6 +4,7 @@ import InventoryExpiryAlertForm from '../forms/InventoryExpiryAlertForm.vue';
 export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
   key: 'inventory/expiry-alerts',
   title: '有效期预警',
+  subtitle: '依据效期预警配置识别临期和过期批次',
   endpoint: '/inventory/expiry-alerts',
   no: 'goodsName',
   columns: [

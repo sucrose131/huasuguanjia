@@ -6,6 +6,7 @@ import PurchaseReceiptForm from '../forms/PurchaseReceiptForm.vue';
 export const purchaseReceiptConfig: BusinessDocumentConfig = {
   key: 'purchase/receipts',
   title: '采购入库单',
+  subtitle: '按采购订单生成待入库单，补充库位与批次后执行库存过账',
   endpoint: '/purchase/receipts',
   no: 'receiptNo',
   columns: [

@@ -4,6 +4,7 @@ import InventoryQuantityAlertForm from '../forms/InventoryQuantityAlertForm.vue'
 export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   key: 'inventory/quantity-alerts',
   title: '数量预警',
+  subtitle: '按仓库监控安全库存、缺口及建议补货数量',
   endpoint: '/inventory/quantity-alerts',
   no: 'goodsName',
   columns: [

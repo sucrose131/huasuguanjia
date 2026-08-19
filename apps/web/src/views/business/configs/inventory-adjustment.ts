@@ -6,6 +6,7 @@ import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
 export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   key: 'inventory/adjustments',
   title: '库存调整',
+  subtitle: '通过审批流程修正账面库存并保留调整依据',
   endpoint: '/inventory/adjustments',
   no: 'adjustNo',
   columns: [

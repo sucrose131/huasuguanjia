@@ -15,6 +15,7 @@ const canEditAmount = () => useAuthStore().amountAccess.canEditAmount;
 export const purchaseOrderConfig: BusinessDocumentConfig = {
   key: 'purchase/orders',
   title: '采购订单',
+  subtitle: '管理直接采购和采购申请转入订单',
   endpoint: '/purchase/orders',
   no: 'orderNo',
   columns: [

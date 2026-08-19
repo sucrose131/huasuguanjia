@@ -6,6 +6,7 @@ import InventoryOverflowForm from '../forms/InventoryOverflowForm.vue';
 export const inventoryOverflowConfig: BusinessDocumentConfig = {
   key: 'inventory/overflows',
   title: '盘盈单',
+  subtitle: '仅由库存盘点的数量盘盈生成，审批后直接增加来源批次库存',
   endpoint: '/inventory/overflows',
   no: 'businessNo',
   columns: [

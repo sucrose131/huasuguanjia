@@ -6,6 +6,7 @@ import InventoryTransferForm from '../forms/InventoryTransferForm.vue';
 export const inventoryTransferConfig: BusinessDocumentConfig = {
   key: 'inventory/transfers',
   title: '库存调拨',
+  subtitle: '同类型仓库之间的双边库存调拨与审批',
   endpoint: '/inventory/transfers',
   no: 'transferNo',
   columns: [

@@ -10,6 +10,7 @@ import InventoryStockForm from '../forms/InventoryStockForm.vue';
 export const inventoryStockConfig: BusinessDocumentConfig = {
   key: 'inventory/stocks',
   title: '库存查询',
+  subtitle: '按仓库查看即时库存、库存金额及可追溯流水',
   endpoint: '/inventory/stocks',
   no: 'goodsName',
   columns: [

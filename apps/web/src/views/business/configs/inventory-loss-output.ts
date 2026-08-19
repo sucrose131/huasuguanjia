@@ -6,6 +6,7 @@ import InventoryLossOutputForm from '../forms/InventoryLossOutputForm.vue';
 export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   key: 'inventory/loss-outputs',
   title: '报损出库单',
+  subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
   no: 'businessNo',
   columns: [

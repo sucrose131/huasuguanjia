@@ -27,6 +27,11 @@ export const salesRefundConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['payment_channel', 'sales_payment_type'],
   summary: true,
+  summaryLabels: [
+    { label: '本期退款', key: 'periodAmount', kind: 'money' },
+    { label: '累计收款', key: 'receivedAmount', kind: 'money' },
+    { label: '累计退款', key: 'refundedAmount', kind: 'money' },
+  ],
   creatable: true,
   createText: '登记退款',
   formComponent: SalesRefundForm,

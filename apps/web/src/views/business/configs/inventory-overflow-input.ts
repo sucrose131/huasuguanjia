@@ -6,6 +6,7 @@ import InventoryOverflowInputForm from '../forms/InventoryOverflowInputForm.vue'
 export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
   key: 'inventory/overflow-inputs',
   title: '盘盈入库单',
+  subtitle: '查看由报盈单审批生成并完成过账的独立入库记录',
   endpoint: '/inventory/overflow-inputs',
   no: 'businessNo',
   columns: [

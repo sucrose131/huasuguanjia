@@ -6,6 +6,7 @@ import PurchasePaymentForm from '../forms/PurchasePaymentForm.vue';
 export const purchasePaymentConfig: BusinessDocumentConfig = {
   key: 'purchase/payments',
   title: '采购付款',
+  subtitle: '归集采购订单发起的付款流水并自动重算累计已付',
   endpoint: '/purchase/payments',
   no: 'paymentNo',
   columns: [
