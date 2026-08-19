@@ -13,7 +13,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
     { prop: 'sourceOrderNo', label: '关联销售订单', minWidth: 155 },
     { prop: 'bomNo', label: 'BOM编号', minWidth: 135 },
     { prop: 'goodsName', label: '生产成品', minWidth: 145 },
-    { prop: 'planQty', label: '生产数量', minWidth: 105, kind: 'number' },
+    { prop: 'planQty', label: '生产数量', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'deliveryProgress', label: '交付进度', minWidth: 120, kind: 'progress' },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'planDate', label: '日期', minWidth: 110, kind: 'date' },

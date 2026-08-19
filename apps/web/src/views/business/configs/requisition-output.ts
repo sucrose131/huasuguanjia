@@ -15,7 +15,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
     { prop: 'receiverIdName', label: '领用接收人', minWidth: 110 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'outDate', label: '出库日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '出库数量', minWidth: 105, kind: 'number' },
+    { prop: 'quantity', label: '出库数量', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'confirmStatusName', label: '确认状态', minWidth: 105, kind: 'status' },
     { prop: 'createdByName', label: '创建人', minWidth: 110 },
     { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },

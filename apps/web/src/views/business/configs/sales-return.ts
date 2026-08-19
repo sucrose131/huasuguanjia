@@ -15,7 +15,7 @@ export const salesReturnConfig: BusinessDocumentConfig = {
     { prop: 'customerName', label: '客户', minWidth: 130 },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'date', label: '退货日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '退货数量', minWidth: 105, kind: 'number' },
+    { prop: 'quantity', label: '退货数量', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'disposalTypeName', label: '退货后处理', minWidth: 105, kind: 'status' },
     { prop: 'confirmStatusName', label: '确认状态', minWidth: 105, kind: 'status' },
     { prop: 'createdByName', label: '创建人', minWidth: 110 },

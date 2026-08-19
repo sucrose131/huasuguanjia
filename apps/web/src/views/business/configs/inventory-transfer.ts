@@ -19,7 +19,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
     { prop: 'receiveByName', label: '接收人', minWidth: 90 },
     { prop: 'reason', label: '调拨理由', minWidth: 150 },
     { prop: 'transferDate', label: '调拨日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '调拨数量', minWidth: 100, kind: 'number' },
+    { prop: 'quantity', label: '调拨数量', minWidth: 100, kind: 'number', align: 'right' },
     { prop: 'approveStatus', label: '审批状态', minWidth: 100, kind: 'status' },
     { prop: 'createdByName', label: '创建人', minWidth: 100 },
     { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },

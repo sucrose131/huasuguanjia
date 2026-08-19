@@ -14,7 +14,7 @@ export const productionBomConfig: BusinessDocumentConfig = {
     { prop: 'goodsName', label: '生产成品', minWidth: 145 },
     { prop: 'categoryName', label: '分类', minWidth: 100 },
     { prop: 'unitName', label: '单位', minWidth: 65 },
-    { prop: 'materialCount', label: '原料种数', minWidth: 105, kind: 'number' },
+    { prop: 'materialCount', label: '原料种数', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'orgName', label: '所属组织', minWidth: 125 },
     { prop: 'warehouseName', label: '原料仓库', minWidth: 125 },
     { prop: 'statusName', label: '状态', minWidth: 105, kind: 'status' },

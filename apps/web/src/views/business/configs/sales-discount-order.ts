@@ -29,7 +29,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     { prop: 'goodsNames', label: '商品名称', minWidth: 180 },
     { prop: 'warehouseName', label: '仓库', minWidth: 120 },
     { prop: 'orderDate', label: '订单日期', minWidth: 110, kind: 'date' },
-    { prop: 'amount', label: '最终成交金额', minWidth: 120, kind: 'money' },
+    { prop: 'amount', label: '最终成交金额', minWidth: 120, kind: 'money', align: 'right' },
     { prop: 'createdByName', label: '创建人', minWidth: 110 },
     { prop: 'discountDisposalStatus', label: '处置状态', minWidth: 105, kind: 'status' },
   ],

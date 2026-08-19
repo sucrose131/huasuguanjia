@@ -15,7 +15,7 @@ export const productionOutputConfig: BusinessDocumentConfig = {
     { prop: 'planNo', label: '来源生产计划', minWidth: 150 },
     { prop: 'bomNo', label: 'BOM编号', minWidth: 140 },
     { prop: 'goodsName', label: '生产成品', minWidth: 140 },
-    { prop: 'materialCount', label: '原料种数', minWidth: 105, kind: 'number' },
+    { prop: 'materialCount', label: '原料种数', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'stockCheckStatusName', label: '库存校验', minWidth: 105, kind: 'status' },
     { prop: 'warehouseName', label: '仓库', minWidth: 125 },
     { prop: 'outDate', label: '日期', minWidth: 110, kind: 'date' },

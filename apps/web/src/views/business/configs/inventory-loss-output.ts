@@ -17,7 +17,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
     { prop: 'warehouseName', label: '仓库', minWidth: 120 },
     { prop: 'documentTypeName', label: '单据类型', minWidth: 110, kind: 'status' },
     { prop: 'date', label: '日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number' },
+    { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number', align: 'right' },
     { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status' },
     { prop: 'inputStatus', label: '入库状态', minWidth: 110, kind: 'status' },
     { prop: 'createdByName', label: '创建人', minWidth: 100 },
