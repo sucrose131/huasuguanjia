@@ -14,6 +14,8 @@ import {
 import { ShifangQingyuanService } from '../shifang-qingyuan.service';
 import type {
   GiveGoodsNum,
+  ShifangQingyuanCloudStockGiftPlan,
+  ShifangQingyuanCloudStockUpgradeBag,
   ShifangQingyuanGoodsAttr,
   ShifangQingyuanGoodsItem,
 } from '../shifang-qingyuan.types';
@@ -23,6 +25,24 @@ type Tx = Prisma.TransactionClient;
 
 /** 分页拉取每页条数（接口最大 100） */
 const PAGE_LIMIT = 100;
+
+/**
+ * 将 PHP/接口侧“数组字段”规范成记录数组。
+ * 空数组常被编成 `{}`；单条可能是对象；带数字键时是 `{ "0": record }`。
+ */
+export function asRecordArray<T extends object>(value: unknown): T[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value.filter((item): item is T => item != null && typeof item === 'object');
+  }
+  if (typeof value !== 'object') return [];
+  const values = Object.values(value as Record<string, unknown>);
+  if (values.length === 0) return [];
+  if (values.every((item) => item != null && typeof item === 'object' && !Array.isArray(item))) {
+    return values as T[];
+  }
+  return [value as T];
+}
 
 /**
  * 十方清源商品同步服务
@@ -43,6 +63,7 @@ const PAGE_LIMIT = 100;
 @Injectable()
 export class ShifangQingyuanGoodsSyncService {
   private static readonly logger = new Logger(ShifangQingyuanGoodsSyncService.name);
+  private running = false;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -53,6 +74,18 @@ export class ShifangQingyuanGoodsSyncService {
    * 手动触发全量商品同步
    */
   async syncGoods(userId = '0'): Promise<ShifangQingyuanGoodsSyncStats> {
+    if (this.running) {
+      throw new BadRequestException('十方清源商品同步仍在进行，请稍后再试');
+    }
+    this.running = true;
+    try {
+      return await this.syncGoodsUnlocked(userId);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async syncGoodsUnlocked(userId: string): Promise<ShifangQingyuanGoodsSyncStats> {
     const stats = this.emptyStats();
 
     // 1. 分页拉取全部商品（空页或不足一页则结束，避免 total 偏大时死循环）
@@ -61,7 +94,9 @@ export class ShifangQingyuanGoodsSyncService {
     let total = 0;
     for (;;) {
       const data = await this.shifangQingyuan.getGoodsList({ page, limit: PAGE_LIMIT });
-      const list = data.list ?? [];
+      const list = asRecordArray<ShifangQingyuanGoodsItem>(data.list).map((item) =>
+        this.normalizeGoodsItem(item),
+      );
       allItems.push(...list);
       total = data.pagination?.total ?? 0;
       page++;
@@ -190,7 +225,7 @@ export class ShifangQingyuanGoodsSyncService {
 
     const inactive = this.isSourceInactive(goods);
 
-    const attrs = item.qimall_goods_attr ?? [];
+    const attrs = asRecordArray<ShifangQingyuanGoodsAttr>(item.qimall_goods_attr);
     if (!attrs.length) {
       stats.goods.skipped += 1;
       stats.warnings.push(`商品 ${goods.id} 无 SKU，已跳过`);
@@ -200,7 +235,7 @@ export class ShifangQingyuanGoodsSyncService {
     const unitType = this.resolveUnitType(goods.unit, unitByName);
     const defaultAttr = this.pickDefaultAttr(attrs);
     const salePrice = this.yuanToDecimal(goods.price);
-    const defaultSpecModels = this.clip(defaultAttr.name || `规格${defaultAttr.id}`, 200);
+    const defaultSpecModels = this.resolveSpecName(defaultAttr.name);
 
     // 判断 source_type
     const hasMapping = this.hasGiftPlan(item) || this.hasUpgradeBag(item);
@@ -371,12 +406,14 @@ export class ShifangQingyuanGoodsSyncService {
   ): Array<{ goodsId: number; num: number }> {
     const entries: Array<{ goodsId: number; num: number }> = [];
 
-    for (const plan of item.cloud_stock_gift_plan ?? []) {
+    for (const plan of asRecordArray<ShifangQingyuanCloudStockGiftPlan>(item.cloud_stock_gift_plan)) {
       if (plan.status !== 1) continue;
       entries.push(...this.parseGiveGoodsNum(plan.give_goods_num));
     }
 
-    for (const bag of item.cloud_stock_upgrade_bag ?? []) {
+    for (const bag of asRecordArray<ShifangQingyuanCloudStockUpgradeBag>(
+      item.cloud_stock_upgrade_bag,
+    )) {
       if (bag.status !== 1 || bag.is_enable !== 1) continue;
       entries.push(...this.parseGiveGoodsNum(bag.give_goods_num));
     }
@@ -433,7 +470,7 @@ export class ShifangQingyuanGoodsSyncService {
 
     const skuData = {
       good_id: goodsId,
-      spec_models: this.clip(attr.name || `规格${attr.id}`, 200),
+      spec_models: this.resolveSpecName(attr.name),
       image: this.clip(attr.pic_url ?? '', 255),
       pcs_qty: 1, // 库存不同步，固定为1
       const_price: this.yuanToDecimal(attr.cost_price),
@@ -752,12 +789,26 @@ export class ShifangQingyuanGoodsSyncService {
     return sorted[0]!;
   }
 
+  private normalizeGoodsItem(item: ShifangQingyuanGoodsItem): ShifangQingyuanGoodsItem {
+    return {
+      ...item,
+      goods_cate: asRecordArray(item.goods_cate),
+      qimall_goods_attr: asRecordArray(item.qimall_goods_attr),
+      cloud_stock_gift_plan: asRecordArray(item.cloud_stock_gift_plan),
+      cloud_stock_upgrade_bag: asRecordArray(item.cloud_stock_upgrade_bag),
+    };
+  }
+
   private hasGiftPlan(item: ShifangQingyuanGoodsItem): boolean {
-    return (item.cloud_stock_gift_plan ?? []).some((p) => p.status === 1);
+    return asRecordArray<ShifangQingyuanCloudStockGiftPlan>(item.cloud_stock_gift_plan).some(
+      (p) => p.status === 1,
+    );
   }
 
   private hasUpgradeBag(item: ShifangQingyuanGoodsItem): boolean {
-    return (item.cloud_stock_upgrade_bag ?? []).some((b) => b.status === 1 && b.is_enable === 1);
+    return asRecordArray<ShifangQingyuanCloudStockUpgradeBag>(item.cloud_stock_upgrade_bag).some(
+      (b) => b.status === 1 && b.is_enable === 1,
+    );
   }
 
   private resolveUnitType(unitStr: string | undefined, unitByName: Map<string, number>): number {
@@ -775,6 +826,11 @@ export class ShifangQingyuanGoodsSyncService {
   private yuanToDecimal(yuan: number | null | undefined): Prisma.Decimal {
     if (yuan == null || isNaN(yuan)) return new Prisma.Decimal(0);
     return new Prisma.Decimal(yuan);
+  }
+
+  /** 规格名为空或仅空白时，与平台手工建档一致，写「默认规格」 */
+  private resolveSpecName(name: string | undefined): string {
+    return this.clip((name ?? '').trim() || '默认规格', 200);
   }
 
   private clip(value: string, max: number): string {

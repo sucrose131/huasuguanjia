@@ -9,7 +9,7 @@ import { ShifangQingyuanUserSyncService } from './sync/user-sync.service';
 /**
  * 十方清源对接模块。
  * 本期仅提供 Service 供内部调用 / 测试；HTTP 手动同步接口暂不挂载。
- * 用户同步不在进程内定时触发，后期改由外部定时任务调用。
+ * 用户、商品、订单同步由「系统管理 > 任务管理」调度。
  */
 @Module({
   imports: [BusinessNumberModule],

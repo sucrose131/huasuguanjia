@@ -6,6 +6,9 @@ export const SCHEDULED_TASK_CODE = {
   HUASU_USERS: 'huasu-home:users',
   HUASU_PRODUCTS: 'huasu-home:products',
   HUASU_ORDERS: 'huasu-home:orders',
+  SHIFANG_USERS: 'shifang-qingyuan:users',
+  SHIFANG_GOODS: 'shifang-qingyuan:goods',
+  SHIFANG_ORDERS: 'shifang-qingyuan:orders',
   OA_ORG: 'xinfutong-oa:org',
 } as const;
 
@@ -15,6 +18,9 @@ export const SCHEDULED_TASK_TYPES: Array<{ code: ScheduledTaskCode; name: string
   { code: SCHEDULED_TASK_CODE.HUASU_USERS, name: '华溯之家用户同步' },
   { code: SCHEDULED_TASK_CODE.HUASU_PRODUCTS, name: '华溯之家商品同步' },
   { code: SCHEDULED_TASK_CODE.HUASU_ORDERS, name: '华溯之家订单同步' },
+  { code: SCHEDULED_TASK_CODE.SHIFANG_USERS, name: '十方清源用户同步' },
+  { code: SCHEDULED_TASK_CODE.SHIFANG_GOODS, name: '十方清源商品同步' },
+  { code: SCHEDULED_TASK_CODE.SHIFANG_ORDERS, name: '十方清源订单同步' },
   { code: SCHEDULED_TASK_CODE.OA_ORG, name: '薪福通OA组织同步' },
 ];
 

@@ -64,6 +64,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'direct-output',
       label: '直接出库',
       show: (row) =>
+        Number(row.orderType) !== 4 &&
         Number(row.deliveryQty ?? 0) + 0.000001 < Number(row.quantity ?? 0) &&
         Number(row.orderStatus ?? 0) !== 3,
       handler: (row, ctx) =>

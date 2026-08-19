@@ -215,7 +215,7 @@ export class HuasuHomeProductSyncService {
     const unitType = this.resolveUnitType(product.unit_str, unitByName);
     const defaultSku = this.pickDefaultSku(product.skus);
     const salePrice = this.toDecimal(defaultSku.discount_price);
-    const defaultSpecModels = this.clip(defaultSku.name || `规格${defaultSku.number}`, 200);
+    const defaultSpecModels = this.resolveSpecName(defaultSku.name);
 
     let goodsId = await this.findMappedGoodsId({
       tx,
@@ -326,7 +326,7 @@ export class HuasuHomeProductSyncService {
 
     const skuData = {
       good_id: goodsId,
-      spec_models: this.clip(sku.name || `规格${sku.number}`, 200),
+      spec_models: this.resolveSpecName(sku.name),
       image: '',
       pcs_qty: Math.max(1, Number(sku.number) || 1),
       const_price: new Prisma.Decimal(0),
@@ -853,6 +853,11 @@ export class HuasuHomeProductSyncService {
     } catch {
       return new Prisma.Decimal(0);
     }
+  }
+
+  /** 规格名为空或仅空白时，与平台手工建档一致，写「默认规格」 */
+  private resolveSpecName(name: string | undefined): string {
+    return this.clip((name ?? '').trim() || '默认规格', 200);
   }
 
   private clip(value: string, max: number): string {

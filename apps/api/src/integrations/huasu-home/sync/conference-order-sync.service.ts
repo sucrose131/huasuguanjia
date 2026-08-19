@@ -172,7 +172,11 @@ export class HuasuHomeConferenceOrderSyncService {
       },
     });
 
-    if (this.shouldSkipUnchanged(existing, order, sourceUpdatedAt)) {
+    if (
+      existing &&
+      this.shouldSkipUnchanged(existing, order, sourceUpdatedAt) &&
+      !(await this.hasServiceMissingGoods(existing.so_id))
+    ) {
       stats.skipped += 1;
       return;
     }
@@ -255,25 +259,12 @@ export class HuasuHomeConferenceOrderSyncService {
         }
 
         if (
-          await this.ensureStatusEvent(tx, {
+          await this.ensureAfterSalesEvent(tx, {
             soId,
             sourceId,
             orderType,
             order,
-            customerId,
-            operatorId,
-            now,
-          })
-        ) {
-          delta.events += 1;
-        }
-
-        if (
-          await this.ensureTicketEvent(tx, {
-            soId,
-            sourceId,
-            orderType,
-            order,
+            lines,
             customerId,
             operatorId,
             now,
@@ -580,89 +571,50 @@ export class HuasuHomeConferenceOrderSyncService {
     return true;
   }
 
-  private async ensureStatusEvent(
+  /** 门票售后记录只写退款申请/已退款，不写下单和核销发货。 */
+  private async ensureAfterSalesEvent(
     tx: Tx,
     input: {
       soId: bigint;
       sourceId: bigint;
       orderType: string;
       order: HuasuHomeConferenceOrder;
+      lines: ResolvedOrderLine[];
       customerId: bigint;
       operatorId: bigint;
       now: Date;
     },
   ): Promise<boolean> {
     const status = Number(input.order.order_status);
-    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-STATUS-${status}`;
+    const refunded = this.isRefunded(input.order);
+    const applying = status === HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUND_APPLY;
+    if (!applying && !refunded) return false;
+
+    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-AS-${
+      applying ? 'PROCESSING' : 'DONE'
+    }`;
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
-    if (old) return false;
+    const goods = input.lines[0] ?? null;
+    if (old) {
+      await this.backfillServiceGoods(tx, old, goods, input.operatorId, input.now);
+      return false;
+    }
 
-    const eventType =
-      status === HUASU_HOME_CONFERENCE_ORDER_STATUS.PAID
-        ? 2
-        : status === HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUND_APPLY ||
-            status === HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUNDED
-          ? 4
-          : 11;
-    const eventStatus =
-      status === HUASU_HOME_CONFERENCE_ORDER_STATUS.REFUND_APPLY ? 1 : 2;
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
     await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
         customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
-        event_type: eventType,
+        goods_id: goods ? Number(goods.goodsId) : 0,
+        sku_id: goods ? Number(goods.skuId) : 0,
+        event_type: 4,
         event_content: this.resolveEventContent(input.order),
-        event_status: eventStatus,
+        event_status: applying ? 1 : 2,
         handler_id: input.operatorId,
         event_date: input.now,
-        remark: key,
-        created_by: input.operatorId,
-        updated_by: input.operatorId,
-        created_at: input.now,
-        updated_at: input.now,
-      },
-    });
-    return true;
-  }
-
-  private async ensureTicketEvent(
-    tx: Tx,
-    input: {
-      soId: bigint;
-      sourceId: bigint;
-      orderType: string;
-      order: HuasuHomeConferenceOrder;
-      customerId: bigint;
-      operatorId: bigint;
-      now: Date;
-    },
-  ): Promise<boolean> {
-    const verifyStatus = Number(input.order.verify_status);
-    const key = `HH-EVT-${input.sourceId}-${input.orderType}-${input.order.id}-TICKET-${verifyStatus}`;
-    const old = await tx.hspsi_sale_order_service.findFirst({
-      where: { so_id: input.soId, remark: key, deleted_at: null },
-    });
-    if (old) return false;
-
-    const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
-      data: {
-        service_no: serviceNo,
-        so_id: input.soId,
-        customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
-        event_type: verifyStatus === HUASU_HOME_CONFERENCE_VERIFY_STATUS.VERIFIED ? 3 : 2,
-        event_content: this.clip(input.order.remark ?? '', 255),
-        event_status: 2,
-        handler_id: input.operatorId,
-        event_date: this.parseDate(input.order.verify_time) ?? input.now,
         remark: key,
         created_by: input.operatorId,
         updated_by: input.operatorId,
@@ -922,6 +874,33 @@ export class HuasuHomeConferenceOrderSyncService {
       skuId: fallback.sku_id,
       unitType: Number(sku?.unit_type ?? 0),
     };
+  }
+
+  private async hasServiceMissingGoods(soId: bigint): Promise<boolean> {
+    const missing = await this.prisma.hspsi_sale_order_service.findFirst({
+      where: { so_id: soId, deleted_at: null, goods_id: 0, event_type: { in: [4, 5] } },
+      select: { service_id: true },
+    });
+    return Boolean(missing);
+  }
+
+  private async backfillServiceGoods(
+    tx: Tx,
+    existing: { service_id: bigint; goods_id: number },
+    goods: ResolvedOrderLine | null,
+    operatorId: bigint,
+    now: Date,
+  ) {
+    if (!goods || Number(existing.goods_id) !== 0) return;
+    await tx.hspsi_sale_order_service.update({
+      where: { service_id: existing.service_id },
+      data: {
+        goods_id: Number(goods.goodsId),
+        sku_id: Number(goods.skuId),
+        updated_by: operatorId,
+        updated_at: now,
+      },
+    });
   }
 
   private async resolveComboLine(

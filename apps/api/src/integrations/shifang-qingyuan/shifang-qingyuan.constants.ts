@@ -46,6 +46,18 @@ export const SHIFANG_QINGYUAN_ORDER_TYPE = {
   SALE_ORDER: 'SALE_ORDER',
 } as const;
 
+/**
+ * 快照级出库类型（list/detail 与 order 同级的 order_type，v8）
+ * 1=向云库存纯入库，无实体发货，平台不同步出库。
+ */
+export const SHIFANG_QINGYUAN_STOCK_FLOW = {
+  NONE: 0,
+  CLOUD_IN: 1,
+  CLOUD_OUT: 2,
+  WAREHOUSE_OUT: 3,
+  MIXED_OUT: 4,
+} as const;
+
 /** 订单映射同步状态 */
 export const SHIFANG_QINGYUAN_ORDER_SYNC_STATUS = {
   SUCCESS: 1,

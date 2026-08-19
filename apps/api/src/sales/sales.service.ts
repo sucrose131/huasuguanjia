@@ -24,6 +24,7 @@ import {
   assertDiscountOutputWithinSource,
   calculateDiscountSourceRemaining,
   discountGoodsKey,
+  salesOrderOutputBlockedMessage,
 } from './sales-helpers';
 
 export type { DiscountSourceLine };
@@ -1417,7 +1418,8 @@ export class SalesService {
         where: { so_id: orderId, deleted_at: null },
       });
       if (!order) throw new NotFoundException('销售订单不存在');
-      if (order.so_type === 2) throw new BadRequestException('虚拟订单不能创建实物出库');
+      const outputBlocked = salesOrderOutputBlockedMessage(order.so_type);
+      if (outputBlocked) throw new BadRequestException(outputBlocked);
       if (order.approve_status !== 1)
         throw new BadRequestException('仅审批通过的销售订单可创建出库单');
       isDiscount = order.so_property_type === 2;
