@@ -81,16 +81,7 @@ router.beforeEach((to) => {
         code?: string;
       }>;
       const pages = menus.filter((item) => item.route && item.type !== 3);
-      const organizationRoutes = [
-        '/base/organizations',
-        '/base/departments',
-        '/base/positions',
-        '/base/employees',
-      ];
-      const legacyOrganizationAllowed =
-        organizationRoutes.includes(to.path) &&
-        menus.some((item) => item.code === 'master-data:organizations');
-      const allowed = pages.some((item) => item.route === to.path) || legacyOrganizationAllowed;
+      const allowed = pages.some((item) => item.route === to.path);
       if (pages.length && !allowed) return pages[0]!.route!;
     } catch {}
   }

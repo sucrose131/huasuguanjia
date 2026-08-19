@@ -41,58 +41,7 @@ const iconMap: Record<string, any> = {
   Setting,
   Tickets,
 };
-const runtimeMenus = computed(() => {
-  const menus = auth.menus.map((menu) => ({ ...menu }));
-  const organizationDirectory = menus.find((menu) => menu.code === 'master-data:organizations');
-  if (organizationDirectory && !menus.some((menu) => menu.parent_id === organizationDirectory.id)) {
-    organizationDirectory.name = '组织';
-    organizationDirectory.route = null;
-    organizationDirectory.type = 1;
-    menus.push(
-      {
-        id: -9101,
-        parent_id: organizationDirectory.id,
-        name: '公司',
-        code: 'master-data:companies',
-        route: '/base/organizations',
-        icon: null,
-        sort: 1,
-        type: 2,
-      },
-      {
-        id: -9102,
-        parent_id: organizationDirectory.id,
-        name: '部门',
-        code: 'master-data:departments',
-        route: '/base/departments',
-        icon: null,
-        sort: 2,
-        type: 2,
-      },
-      {
-        id: -9103,
-        parent_id: organizationDirectory.id,
-        name: '职位',
-        code: 'master-data:positions',
-        route: '/base/positions',
-        icon: null,
-        sort: 3,
-        type: 2,
-      },
-      {
-        id: -9104,
-        parent_id: organizationDirectory.id,
-        name: '员工',
-        code: 'master-data:employees',
-        route: '/base/employees',
-        icon: null,
-        sort: 4,
-        type: 2,
-      },
-    );
-  }
-  return menus;
-});
+const runtimeMenus = computed(() => auth.menus.map((menu) => ({ ...menu })));
 const groups = computed(() =>
   runtimeMenus.value
     .filter((menu) => menu.parent_id === 0 && menu.type !== 3)
