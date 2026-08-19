@@ -41,58 +41,7 @@ const iconMap: Record<string, any> = {
   Setting,
   Tickets,
 };
-const runtimeMenus = computed(() => {
-  const menus = auth.menus.map((menu) => ({ ...menu }));
-  const organizationDirectory = menus.find((menu) => menu.code === 'master-data:organizations');
-  if (organizationDirectory && !menus.some((menu) => menu.parent_id === organizationDirectory.id)) {
-    organizationDirectory.name = '组织';
-    organizationDirectory.route = null;
-    organizationDirectory.type = 1;
-    menus.push(
-      {
-        id: -9101,
-        parent_id: organizationDirectory.id,
-        name: '公司',
-        code: 'master-data:companies',
-        route: '/base/organizations',
-        icon: null,
-        sort: 1,
-        type: 2,
-      },
-      {
-        id: -9102,
-        parent_id: organizationDirectory.id,
-        name: '部门',
-        code: 'master-data:departments',
-        route: '/base/departments',
-        icon: null,
-        sort: 2,
-        type: 2,
-      },
-      {
-        id: -9103,
-        parent_id: organizationDirectory.id,
-        name: '职位',
-        code: 'master-data:positions',
-        route: '/base/positions',
-        icon: null,
-        sort: 3,
-        type: 2,
-      },
-      {
-        id: -9104,
-        parent_id: organizationDirectory.id,
-        name: '员工',
-        code: 'master-data:employees',
-        route: '/base/employees',
-        icon: null,
-        sort: 4,
-        type: 2,
-      },
-    );
-  }
-  return menus;
-});
+const runtimeMenus = computed(() => auth.menus.map((menu) => ({ ...menu })));
 const groups = computed(() =>
   runtimeMenus.value
     .filter((menu) => menu.parent_id === 0 && menu.type !== 3)
@@ -173,10 +122,6 @@ watch(
 async function logout() {
   await auth.logout();
   router.push('/login');
-}
-async function switchOrganization(orgId: string) {
-  await auth.switchOrganization(orgId);
-  router.go(0);
 }
 function navigate(path?: string | null) {
   if (path) {
@@ -286,22 +231,12 @@ function navigate(path?: string | null) {
           >
         </div>
         <div class="top-actions">
-          <div class="organization-switcher desktop-only">
-            <span>当前组织</span>
-            <el-select
-              :model-value="auth.user?.currentOrgId"
-              :loading="auth.switchingOrganization"
-              :disabled="(auth.user?.authorizedOrganizations?.length ?? 0) <= 1"
-              size="small"
-              @change="switchOrganization"
-            >
-              <el-option
-                v-for="organization in auth.user?.authorizedOrganizations ?? []"
-                :key="organization.id"
-                :label="organization.name"
-                :value="organization.id"
-              />
-            </el-select>
+          <div
+            class="organization-switcher desktop-only"
+            title="固定所属组织由 OA 同步，不随数据访问授权变化"
+          >
+            <span>所属组织</span>
+            <strong>{{ auth.user?.orgName || auth.user?.currentOrgName || '未配置' }}</strong>
           </div>
           <button title="刷新数据" @click="router.go(0)">
             <el-icon><RefreshRight /></el-icon>
@@ -314,7 +249,7 @@ function navigate(path?: string | null) {
           <span class="avatar">{{ (auth.user?.username || 'U').slice(0, 1).toUpperCase() }}</span>
           <div class="user-copy desktop-only">
             <strong>{{ auth.user?.username || '加载中' }}</strong
-            ><small>系统管理员</small>
+            ><small>{{ auth.user?.roleName || '未配置角色' }}</small>
           </div>
           <button title="退出登录" @click="logout">
             <el-icon><SwitchButton /></el-icon>
@@ -584,9 +519,15 @@ function navigate(path?: string | null) {
   color: #8a94a4;
   font-size: 10px;
 }
-.organization-switcher :deep(.el-select) {
+.organization-switcher > strong {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
+  color: #3f4a5a;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .top-actions button,
 .mobile-menu {

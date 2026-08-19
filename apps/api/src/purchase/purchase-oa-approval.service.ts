@@ -7,13 +7,15 @@ import { Attachment, AttachmentsService } from '../attachments/attachments.servi
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalService } from '../integrations/xinfutong-oa/approval/approval.service';
 import { XinfutongOaCredentialService } from '../integrations/xinfutong-oa/core/credential.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
 const BUSINESS_TYPE = 'purchase_application';
-const FORM = OA_FORM_MAPPINGS.purchase_application;
-const FIELDS = Object.fromEntries(
-  Object.entries(FORM.fields).map(([key, value]) => [key, value.uniqueName]),
-) as { [K in keyof typeof FORM.fields]: string };
+
+const oaFields = (form: OaFormMapping) =>
+  Object.fromEntries(
+    Object.entries(form.fields).map(([key, value]) => [key, value.uniqueName]),
+  ) as Record<string, string>;
 
 type SubmissionResult = {
   instanceId: bigint;
@@ -32,10 +34,24 @@ export class PurchaseOaApprovalService {
     @Inject(XinfutongOaApprovalService)
     private readonly approval: XinfutongOaApprovalService,
     @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
   ) {}
 
   async submit(purId: bigint, userId: string): Promise<SubmissionResult> {
-    const context = await this.buildContext(purId, userId);
+    // 先解析账套：采购申请的 account_set_id 取所属组织
+    const appBrief = await this.prisma.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+      select: { org_id: true },
+    });
+    if (!appBrief) throw new BadRequestException('采购申请不存在');
+    const orgBrief = await this.prisma.hspsi_basic_organization.findFirst({
+      where: { org_id: appBrief.org_id, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!orgBrief?.account_set_id) throw new BadRequestException('采购申请所属组织未关联OA账套');
+    const form = await this.mappingService.getMapping(BUSINESS_TYPE, orgBrief.account_set_id);
+    const f = oaFields(form);
+    const context = await this.buildContext(purId, userId, form);
     const credential = await this.credentials.getById(context.accountSetId);
     if (!credential) throw new BadRequestException('采购申请所属OA账套未启用');
 
@@ -63,7 +79,7 @@ export class PurchaseOaApprovalService {
         return tx.hspsi_oa_approval_instance.update({
           where: { id: existing.id },
           data: {
-            form_key: FORM.formKey,
+            form_key: form.formKey,
             bus_key: context.busKey,
             proc_status: 'PENDING_PUSH',
             submitted_by: BigInt(userId),
@@ -78,7 +94,7 @@ export class PurchaseOaApprovalService {
         data: {
           business_type: BUSINESS_TYPE,
           business_id: purId,
-          form_key: FORM.formKey,
+          form_key: form.formKey,
           bus_key: context.busKey,
           proc_inst_id: '',
           proc_key: '',
@@ -104,12 +120,12 @@ export class PurchaseOaApprovalService {
     try {
       const files = await this.prepareAttachments(purId, context.accountSetId, credential);
       const response = await this.approval.startFormProcess(credential, {
-        formKey: FORM.formKey,
+        formKey: form.formKey,
         busKey: context.busKey,
         procStartType: 'trialStart',
         formData: JSON.stringify({
           ...context.formData,
-          ...(files.length ? { [FIELDS.attachments]: files } : {}),
+          ...(files.length ? { [f.attachments!]: files } : {}),
         }),
         starterId: context.starterId,
         starterOrgId: context.starterOrgId,
@@ -121,7 +137,7 @@ export class PurchaseOaApprovalService {
       const updated = await this.prisma.hspsi_oa_approval_instance.update({
         where: { id: instance.id },
         data: {
-          form_key: body.formKey || FORM.formKey,
+          form_key: body.formKey || form.formKey,
           bus_key: body.busKey || context.busKey,
           proc_inst_id: body.procInstId,
           proc_status: body.procStatus,
@@ -150,7 +166,8 @@ export class PurchaseOaApprovalService {
     }
   }
 
-  private async buildContext(purId: bigint, userId: string) {
+  private async buildContext(purId: bigint, userId: string, form: OaFormMapping) {
+    const f = oaFields(form);
     const application = await this.prisma.hspsi_purchase_approve.findFirst({
       where: { pur_id: purId, deleted_at: null },
     });
@@ -241,11 +258,11 @@ export class PurchaseOaApprovalService {
       const goodsName = goodsMap.get(String(item.goods_id));
       if (!goodsName) throw new BadRequestException(`商品 ${item.goods_id} 不存在`);
       return {
-        [FIELDS.goodsName]: goodsName,
-        [FIELDS.skuName]: skuMap.get(String(item.sku_id)) ?? '',
-        [FIELDS.quantity]: item.qty,
-        [FIELDS.unit]: unitMap.get(String(item.unit_type)) ?? '',
-        [FIELDS.detailRemark]: item.remark,
+        [f.goodsName!]: goodsName,
+        [f.skuName!]: skuMap.get(String(item.sku_id)) ?? '',
+        [f.quantity!]: item.qty,
+        [f.unit!]: unitMap.get(String(item.unit_type)) ?? '',
+        [f.detailRemark!]: item.remark,
       };
     });
     const source = sourcePlan?.plan_no
@@ -259,11 +276,11 @@ export class PurchaseOaApprovalService {
       starterOrgId: starterOrg.outer_ref_id,
       busKey: `${BUSINESS_TYPE}:${purId}`,
       formData: {
-        [FIELDS.reason]: application.pur_reson,
-        [FIELDS.warehouse]: warehouse.name,
-        [FIELDS.source]: source,
-        [FIELDS.remark]: application.remark,
-        [FIELDS.details]: detailData,
+        [f.reason!]: application.pur_reson,
+        [f.warehouse!]: warehouse.name,
+        [f.source!]: source,
+        [f.remark!]: application.remark,
+        [f.details!]: detailData,
       },
     };
   }

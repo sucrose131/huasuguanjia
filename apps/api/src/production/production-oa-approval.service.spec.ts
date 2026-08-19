@@ -48,11 +48,15 @@ describe('ProductionOaApprovalService', () => {
       resolve: vi.fn().mockResolvedValue({ accountSetId: 1n, starterId: 'U1', starterOrgId: 'O1' }),
     };
     const submissions = { submit: vi.fn().mockResolvedValue({ procStatus: 'RUNNING' }) };
+    const mappings = {
+      getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.production_plan),
+    };
     const service = new ProductionOaApprovalService(
       prisma as never,
       production as never,
       starters as never,
       submissions as never,
+      mappings as never,
     );
 
     await service.submitPlan(5n, '9');

@@ -43,17 +43,6 @@ async function get(token: string, path: string) {
   return body.data;
 }
 
-async function post(token: string, path: string, data: Record<string, unknown>) {
-  const response = await fetch(`${apiBase}${path}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const body = (await response.json()) as any;
-  assert(response.ok, `${path} 请求失败：${body.message ?? response.status}`);
-  return body.data;
-}
-
 async function main() {
   const organizations = await prisma.hspsi_basic_organization.findMany({
     where: { operation_status: 1, deleted_at: null },
@@ -61,7 +50,7 @@ async function main() {
     orderBy: { org_id: 'asc' },
     take: 3,
   });
-  assert(organizations.length >= 3, '至少需要三个启用组织验证切换和拒绝');
+  assert(organizations.length >= 3, '至少需要三个启用组织验证固定组织与授权范围');
   const purchaseMenu = await prisma.hspsi_sys_menu.findFirst({
     where: { code: 'purchase:applications', status: 1, deleted_at: null },
   });
@@ -125,17 +114,14 @@ async function main() {
     );
     assert(me.currentOrgId === String(fixture.orgId), '登录时没有默认选择主组织');
     if (fixture.authorized.length > 1) {
-      const targetOrgId = String(fixture.authorized[1]);
-      const switched = await post(token, '/auth/switch-organization', { orgId: targetOrgId });
-      assert(switched.user.currentOrgId === targetOrgId, '切换组织接口没有更新当前组织');
       const refreshed = await get(token, '/auth/me');
-      assert(refreshed.currentOrgId === targetOrgId, 'Redis 会话没有持久化当前组织');
-      const rejected = await fetch(`${apiBase}/auth/switch-organization`, {
+      assert(refreshed.currentOrgId === String(fixture.orgId), '额外授权组织改变了固定所属组织');
+      const removedSwitch = await fetch(`${apiBase}/auth/switch-organization`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ orgId: String(organizations[2]!.org_id) }),
+        body: JSON.stringify({ orgId: String(fixture.authorized[1]) }),
       });
-      assert(rejected.status === 403, '后端没有拒绝切换到未授权组织');
+      assert(removedSwitch.status === 404, '旧组织切换接口仍然存在');
     }
     results[fixture.name] = { authorizedOrganizationIds: [...actualIds], passed: true };
   }

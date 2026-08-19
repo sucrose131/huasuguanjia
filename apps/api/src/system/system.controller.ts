@@ -18,13 +18,13 @@ export class SystemController {
   }
 
   @Post('roles')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:roles:create')
   createRole(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.createRole(body, user.id);
   }
 
   @Put('roles/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:roles:update')
   updateRole(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -42,17 +42,19 @@ export class SystemController {
   @Get('user-options')
   @RequirePermissions('system:view', 'system:2:view')
   userOptions(@CurrentUser() user: AuthUser) {
-    return this.service.userOptions(user.authorizedOrganizations?.map((item) => item.id));
+    return this.service.userOptions(
+      user.isSuperAdmin === true ? undefined : user.authorizedOrganizations?.map((item) => item.id),
+    );
   }
 
   @Post('users')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:users:create')
   createUser(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.createUser(body, user.id, user.isSuperAdmin === true);
   }
 
   @Put('users/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:users:update')
   updateUser(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -62,7 +64,7 @@ export class SystemController {
   }
 
   @Put('users/:id/roles')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:users:authorize-role')
   updateUserRoles(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -72,7 +74,7 @@ export class SystemController {
   }
 
   @Put('users/:id/amount-access')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:users:configure-amount')
   updateUserAmountAccess(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -94,13 +96,13 @@ export class SystemController {
   }
 
   @Post('menus')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:config:create')
   createMenu(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.createMenu(body, user.id);
   }
 
   @Put('menus/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:config:update')
   updateMenu(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -110,7 +112,7 @@ export class SystemController {
   }
 
   @Delete('menus/:id')
-  @RequirePermissions('system:delete')
+  @RequirePermissions('system:config:delete')
   deleteMenu(@Param('id') id: string) {
     return this.service.deleteMenu(id);
   }

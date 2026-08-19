@@ -1,4 +1,4 @@
-import { ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compare } from 'bcryptjs';
@@ -16,7 +16,7 @@ export class AuthService {
     @Inject(JwtService) private jwt: JwtService,
     @Inject(ConfigService) private config: ConfigService,
   ) {}
-  private async sessionData(userId: string, requestedCurrentOrgId?: string | null) {
+  private async sessionData(userId: string) {
     const user = await this.prisma.hspsi_sys_user.findFirst({
       where: { id: BigInt(userId), deleted_at: null, status: 1 },
     });
@@ -111,19 +111,19 @@ export class AuthService {
     if (!authorizedOrganizations.length)
       throw new UnauthorizedException('账号没有已授权的启用组织');
     const ownOrgId = String(orgId);
-    const currentOrganization = (authorizedOrganizations.find(
-      (item) => item.id === requestedCurrentOrgId,
-    ) ??
-      authorizedOrganizations.find((item) => item.id === ownOrgId) ??
-      authorizedOrganizations[0])!;
+    const ownOrganization = organizations.find((item) => String(item.org_id) === ownOrgId);
+    const currentOrganization =
+      authorizedOrganizations.find((item) => item.id === ownOrgId) ?? authorizedOrganizations[0]!;
     const authUser: AuthUser = {
       id: user.id.toString(),
       username: user.username,
       orgId: orgId.toString(),
+      orgName: ownOrganization?.name ?? null,
       deptId: deptId?.toString() ?? null,
       staffId: staffId?.toString() ?? null,
       positionId: positionId?.toString() ?? null,
       positionName,
+      roleName: roles[0]?.name ?? null,
       currentOrgId: currentOrganization.id,
       currentOrgName: currentOrganization.name,
       authorizedOrganizations,
@@ -145,60 +145,29 @@ export class AuthService {
     await this.redis.ensureConnected();
     await this.redis.client.set(
       `session:${sid}`,
-      JSON.stringify({ userId: user.id.toString(), currentOrgId: authUser.currentOrgId }),
+      JSON.stringify({ userId: user.id.toString() }),
       'EX',
       ttl,
     );
     return { token: await this.jwt.signAsync({ ...authUser, sid }), user: authUser, menus };
   }
-  session(userId: string, currentOrgId?: string | null) {
-    return runWithoutDataScope(() => this.sessionData(userId, currentOrgId));
+  session(userId: string) {
+    return runWithoutDataScope(() => this.sessionData(userId));
   }
   async resolveSession(sid: string, tokenUserId: string) {
     await this.redis.ensureConnected();
     const stored = await this.redis.client.get(`session:${sid}`);
     if (!stored) throw new UnauthorizedException('登录已失效，请重新登录');
     let userId = stored;
-    let currentOrgId: string | null = null;
     try {
-      const parsed = JSON.parse(stored) as { userId?: string; currentOrgId?: string };
+      const parsed = JSON.parse(stored) as { userId?: string };
       if (parsed?.userId) userId = String(parsed.userId);
-      if (parsed?.currentOrgId) currentOrgId = String(parsed.currentOrgId);
     } catch {
       // 兼容改造前仅保存用户 ID 的会话。
     }
     if (userId !== String(tokenUserId)) throw new UnauthorizedException('登录会话无效');
-    const session = await this.sessionData(userId, currentOrgId);
-    if (session.user.currentOrgId !== currentOrgId) {
-      const ttl = await this.redis.client.ttl(`session:${sid}`);
-      await this.redis.client.set(
-        `session:${sid}`,
-        JSON.stringify({ userId, currentOrgId: session.user.currentOrgId }),
-        'EX',
-        ttl > 0 ? ttl : Number(this.config.get('SESSION_TTL_SECONDS') ?? 28800),
-      );
-    }
+    const session = await this.sessionData(userId);
     return session.user;
-  }
-  async switchOrganization(sid: string, userId: string, orgId: string) {
-    return runWithoutDataScope(async () => {
-      await this.redis.ensureConnected();
-      const sessionKey = `session:${sid}`;
-      const stored = await this.redis.client.get(sessionKey);
-      if (!stored) throw new UnauthorizedException('登录已失效，请重新登录');
-      const current = await this.sessionData(userId);
-      if (!current.user.authorizedOrganizations?.some((item) => item.id === orgId))
-        throw new ForbiddenException('不能切换到未授权的组织');
-      const switched = await this.sessionData(userId, orgId);
-      const ttl = await this.redis.client.ttl(sessionKey);
-      await this.redis.client.set(
-        sessionKey,
-        JSON.stringify({ userId, currentOrgId: switched.user.currentOrgId }),
-        'EX',
-        ttl > 0 ? ttl : Number(this.config.get('SESSION_TTL_SECONDS') ?? 28800),
-      );
-      return switched;
-    });
   }
   async logout(sid: string) {
     await this.redis.ensureConnected();

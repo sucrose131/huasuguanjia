@@ -314,6 +314,9 @@ describe('XinfutongOaSyncService.refreshUserAuthorization', () => {
       data: [{ user_id: 9n, org_id: 6n, created_by: 0n }],
       skipDuplicates: true,
     });
+    expect(prisma.hspsi_sys_user_authorized_org.deleteMany).toHaveBeenCalledWith({
+      where: { user_id: 9n, created_by: 0n },
+    });
     expect(prisma.hspsi_sys_user.update).toHaveBeenCalledWith({
       where: { id: 9n },
       data: expect.objectContaining({ status: 1 }),

@@ -925,7 +925,10 @@ export class XinfutongOaSyncService {
           where: { user_id: Number(input.userId) },
         });
       }
-      await tx.hspsi_sys_user_authorized_org.deleteMany({ where: { user_id: input.userId } });
+      // OA 只刷新 created_by=0 的自动组织范围；超级管理员人工增加的组织必须保留。
+      await tx.hspsi_sys_user_authorized_org.deleteMany({
+        where: { user_id: input.userId, created_by: 0n },
+      });
       if (authorizedOrgIds.length) {
         await tx.hspsi_sys_user_authorized_org.createMany({
           data: authorizedOrgIds.map((orgId) => ({

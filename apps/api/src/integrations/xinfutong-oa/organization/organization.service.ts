@@ -343,6 +343,10 @@ export class XinfutongOaOrganizationService extends XinfutongOaClient {
   ): Promise<MemberRecord[]> {
     params.pageSize = MEMBER_PAGE_SIZE_MAX;
     params.currentPage = 1;
+    // 同步需要成员-员工身份与岗位：idRelation.staffId → out_staff_id、post.id → post_id。
+    // 两者必须通过 extFields 请求才会返回（position 同时返回 idRelation 与 post；org 返回组织详情）。
+    // 缺省补齐；调用方显式传入时尊重调用方。
+    params.extFields = params.extFields ?? ['org', 'position'];
 
     const allRecords: MemberRecord[] = [];
     let hasNext = true;

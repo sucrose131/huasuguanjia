@@ -4,16 +4,26 @@ import { AuthUser } from '../auth/auth.types';
 export interface ActiveDataScope {
   userId: string;
   currentOrgId: string;
+  authorizedOrgIds: string[];
   isSuperAdmin: boolean;
 }
 
 const storage = new AsyncLocalStorage<ActiveDataScope | undefined>();
 
 export function runWithDataScope<T>(user: AuthUser, work: () => T): T {
+  const authorizedOrgIds = [
+    ...new Set(
+      [
+        user.orgId,
+        ...(user.authorizedOrganizations ?? []).map((organization) => organization.id),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  ];
   return storage.run(
     {
       userId: user.id,
       currentOrgId: user.currentOrgId ?? user.orgId ?? '',
+      authorizedOrgIds,
       isSuperAdmin: user.isSuperAdmin ?? user.permissions.includes('*'),
     },
     work,

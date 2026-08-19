@@ -2,13 +2,15 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { OaDocumentSubmissionService } from '../integrations/xinfutong-oa/approval/document-submission.service';
 import { OaStarterContextService } from '../integrations/xinfutong-oa/approval/starter-context.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
 const BUSINESS_TYPE = 'purchase_return';
-const FORM = OA_FORM_MAPPINGS.purchase_return;
-const FIELDS = Object.fromEntries(
-  Object.entries(FORM.fields).map(([key, value]) => [key, value.uniqueName]),
-) as { [K in keyof typeof FORM.fields]: string };
+
+const oaFields = (form: OaFormMapping) =>
+  Object.fromEntries(
+    Object.entries(form.fields).map(([key, value]) => [key, value.uniqueName]),
+  ) as Record<string, string>;
 
 @Injectable()
 export class PurchaseReturnOaApprovalService {
@@ -16,6 +18,7 @@ export class PurchaseReturnOaApprovalService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OaStarterContextService) private readonly starters: OaStarterContextService,
     @Inject(OaDocumentSubmissionService) private readonly submissions: OaDocumentSubmissionService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
   ) {}
 
   async submit(exitId: bigint, userId: string) {
@@ -46,6 +49,8 @@ export class PurchaseReturnOaApprovalService {
     if (!details.length) throw new BadRequestException('采购退货没有商品明细');
     if (!order) throw new BadRequestException('来源采购订单不存在');
     const starter = await this.starters.resolve(userId, order.org_id);
+    const form = await this.mappingService.getMapping(BUSINESS_TYPE, starter.accountSetId);
+    const f = oaFields(form);
     const [goods, skus, units] = await Promise.all([
       this.prisma.hspsi_goods_info.findMany({
         where: { goods_id: { in: details.map((item) => item.goods_id) } },
@@ -68,25 +73,25 @@ export class PurchaseReturnOaApprovalService {
       businessId: exitId,
       userId,
       accountSetId: starter.accountSetId,
-      form: FORM,
-      attachmentField: FIELDS.attachments,
+      form,
+      attachmentField: f.attachments!,
       busKey: `${BUSINESS_TYPE}:${exitId}`,
       starterId: starter.starterId,
       starterOrgId: starter.starterOrgId,
       formData: {
-        [FIELDS.returnDate]: this.formatDate(header.exit_date),
-        [FIELDS.returnType]: returnType,
-        [FIELDS.reason]: header.exit_reson,
-        [FIELDS.sourceReceipt]: receipt?.po_input_no ?? '',
-        [FIELDS.sourcePurchaseOrder]: order.po_no,
-        [FIELDS.remark]: header.remark,
-        [FIELDS.details]: details.map((item) => ({
-          [FIELDS.goodsName]: goodsMap.get(String(item.goods_id)) ?? '',
-          [FIELDS.skuName]: skuMap.get(String(item.sku_id)) ?? '',
-          [FIELDS.batchNo]: item.batch_no,
-          [FIELDS.quantity]: item.exit_qty,
-          [FIELDS.unit]: unitMap.get(String(item.unit_type)) ?? '',
-          [FIELDS.detailRemark]: item.remark,
+        [f.returnDate!]: this.formatDate(header.exit_date),
+        [f.returnType!]: returnType,
+        [f.reason!]: header.exit_reson,
+        [f.sourceReceipt!]: receipt?.po_input_no ?? '',
+        [f.sourcePurchaseOrder!]: order.po_no,
+        [f.remark!]: header.remark,
+        [f.details!]: details.map((item) => ({
+          [f.goodsName!]: goodsMap.get(String(item.goods_id)) ?? '',
+          [f.skuName!]: skuMap.get(String(item.sku_id)) ?? '',
+          [f.batchNo!]: item.batch_no,
+          [f.quantity!]: item.exit_qty,
+          [f.unit!]: unitMap.get(String(item.unit_type)) ?? '',
+          [f.detailRemark!]: item.remark,
         })),
       },
     });

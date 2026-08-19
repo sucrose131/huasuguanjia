@@ -12,10 +12,6 @@ class LoginDto {
   @IsString() @IsNotEmpty() @MaxLength(128) password!: string;
 }
 
-class SwitchOrganizationDto {
-  @IsString() @IsNotEmpty() @MaxLength(30) orgId!: string;
-}
-
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -30,15 +26,7 @@ export class AuthController {
     return user;
   }
   @UseGuards(AuthGuard) @Get('session') session(@CurrentUser() user: AuthUser) {
-    return this.service.session(user.id, user.currentOrgId);
-  }
-  @UseGuards(AuthGuard) @Post('switch-organization') switchOrganization(
-    @Headers('authorization') authorization: string,
-    @CurrentUser() user: AuthUser,
-    @Body() dto: SwitchOrganizationDto,
-  ) {
-    const payload = this.jwt.decode(authorization.replace(/^Bearer\s+/i, '')) as { sid: string };
-    return this.service.switchOrganization(payload.sid, user.id, dto.orgId);
+    return this.service.session(user.id);
   }
   @UseGuards(AuthGuard) @Get('amount-access') amountAccessState(@CurrentUser() user: AuthUser) {
     return this.amountAccess.forUser(user.id);

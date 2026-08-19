@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -752,6 +753,12 @@ export class PurchaseService {
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (query.approveStatus !== undefined) where.approve_status = Number(query.approveStatus);
+    if (query.createdStart || query.createdEnd) {
+      where.created_at = {
+        ...(query.createdStart ? { gte: new Date(String(query.createdStart)) } : {}),
+        ...(query.createdEnd ? { lte: new Date(`${String(query.createdEnd)}T23:59:59`) } : {}),
+      };
+    }
     if (query.keyword)
       where.OR = [
         { pur_no: { contains: String(query.keyword) } },
@@ -829,7 +836,11 @@ export class PurchaseService {
         createdAt: item.created_at,
       };
     });
-    return { items, total, page, pageSize };
+    const pending = records.filter(
+      (item) => Number(item.approve_status) === 0 && Number(item.status) === 1,
+    ).length;
+    const complete = records.filter((item) => Number(item.approve_status) === 1).length;
+    return { items, total, page, pageSize, summary: { total, pending, complete } };
   }
   async application(id: string) {
     const header = await this.prisma.hspsi_purchase_approve.findFirst({
@@ -926,13 +937,19 @@ export class PurchaseService {
       }),
     };
   }
-  async saveApplication(id: string | null, body: Body, userId: string, submit = false) {
+  async saveApplication(
+    id: string | null,
+    body: Body,
+    userId: string,
+    submit = false,
+    fixedOrgId?: string | null,
+  ) {
     const lines = this.details(body.details);
     let purId = id ? BigInt(id) : 0n;
     let businessNo = '';
     for (const line of lines) this.quantity(line.quantity, '采购申请数量');
     const data = {
-      org_id: BigInt(String(body.orgId)),
+      org_id: BigInt(String(fixedOrgId ?? body.orgId)),
       dept_id: BigInt(String(body.deptId)),
       pur_reson: String(body.reason ?? ''),
       warehouse_id: BigInt(String(body.warehouseId)),
@@ -958,6 +975,10 @@ export class PurchaseService {
           throw new BadRequestException('生产缺料采购申请由系统生成，不允许手工编辑');
         if (!([0, 2].includes(Number(existing.status)) || Number(existing.approve_status) === 2))
           throw new BadRequestException('当前状态不能编辑');
+        if (existing.created_by !== BigInt(userId))
+          throw new ForbiddenException('个人无权修改他人发起的采购申请');
+        if (existing.org_id !== data.org_id)
+          throw new ForbiddenException('采购申请的所属组织必须与发起人的OA所属组织一致');
         await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
         await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, lines);
         await tx.hspsi_purchase_approve.update({ where: { pur_id: purId }, data });
@@ -1006,6 +1027,8 @@ export class PurchaseService {
         throw new BadRequestException('生产缺料采购申请已由系统提交，不允许手工再次提交');
       if (![0, 2].includes(Number(application.status)) && Number(application.approve_status) !== 2)
         throw new BadRequestException('当前状态不能提交');
+      if (application.created_by !== BigInt(userId))
+        throw new ForbiddenException('个人无权提交他人发起的采购申请');
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
         data: {
@@ -1388,6 +1411,8 @@ export class PurchaseService {
         where: { pur_id: purId, deleted_at: null },
       });
       if (!item) throw new NotFoundException('采购申请不存在');
+      if (item.created_by !== BigInt(userId))
+        throw new ForbiddenException('个人无权删除他人发起的采购申请');
       if (item.status === 1 && item.approve_status !== 2)
         throw new BadRequestException('已提交申请不能删除');
       if (await tx.hspsi_purchase_order.count({ where: { pur_id: purId, deleted_at: null } }))
@@ -1490,6 +1515,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.status) === 1).length,
+        complete: items.filter((item) => Number(item.status) === 3).length,
+      },
     };
   }
   async order(id: string) {
@@ -2258,6 +2288,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.comfirm_status) === 0).length,
+        complete: items.filter((item) => Number(item.comfirm_status) === 1).length,
+      },
     };
   }
   async receipt(id: string) {
@@ -2933,6 +2968,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.approve_status) === 0).length,
+        complete: items.filter((item) => Number(item.approve_status) === 1).length,
+      },
     };
   }
   async returnDetail(id: string) {
@@ -3444,6 +3484,15 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pendingAmount: items.reduce(
+          (sum, item) =>
+            sum + Math.max(0, Number(item.refundable_amount) - Number(item.refunded_amount)),
+          0,
+        ),
+        refundedAmount: items.reduce((sum, item) => sum + Number(item.refunded_amount), 0),
+      },
     };
   }
   async refund(id: string) {
@@ -3792,6 +3841,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        paymentAmount: items.reduce((sum, item) => sum + Number(item.fact_pay_amount), 0),
+        orderCount: new Set(items.map((item) => String(item.po_id))).size,
+      },
     };
   }
   async payment(id: string) {

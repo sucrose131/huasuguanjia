@@ -18,6 +18,14 @@ function createPrisma() {
     hspsi_sys_user_role_override: {
       upsert: vi.fn(),
     },
+    hspsi_sys_user_authorized_org: {
+      findMany: vi.fn().mockResolvedValue([{ org_id: 2n }]),
+      deleteMany: vi.fn(),
+      createMany: vi.fn(),
+    },
+    hspsi_basic_organization: {
+      findMany: vi.fn().mockResolvedValue([{ org_id: 2n }, { org_id: 3n }]),
+    },
   };
   return Object.assign(prisma, {
     $transaction: vi.fn(async (work: (tx: typeof prisma) => unknown) => work(prisma)),
@@ -45,11 +53,12 @@ describe('SystemService.updateUserRoles', () => {
       id: 9n,
       username: '13812345678',
       staff_id: 10n,
+      org_id: 2n,
     });
     prisma.hspsi_sys_role.findFirst.mockResolvedValue({ id: 1n, code: 'admin' });
 
     await expect(
-      service.updateUserRoles('9', { roleId: '1' }, '1', true),
+      service.updateUserRoles('9', { roleId: '1', authorizedOrgIds: ['2', '3'] }, '1', true),
     ).resolves.toMatchObject({ roleId: '1' });
 
     expect(prisma.hspsi_sys_user_role.createMany).toHaveBeenCalledWith({
@@ -59,5 +68,12 @@ describe('SystemService.updateUserRoles', () => {
     expect(prisma.hspsi_sys_user_role_override.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { user_id: 9n } }),
     );
+    expect(prisma.hspsi_sys_user_authorized_org.createMany).toHaveBeenCalledWith({
+      data: [
+        { user_id: 9n, org_id: 2n, created_by: 0n },
+        { user_id: 9n, org_id: 3n, created_by: 1n },
+      ],
+      skipDuplicates: true,
+    });
   });
 });

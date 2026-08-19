@@ -83,7 +83,7 @@ export class SystemService {
         .filter((item) => item.role_id === role.id)
         .map((item) => Number(item.menu_id));
       const assigned = assignedIds.map((id) => menuMap.get(id)).filter(Boolean) as typeof menus;
-      const pageMenus = assigned.filter((menu) => menu.type !== 3 && menu.parent_id !== 0);
+      const pageMenus = assigned.filter((menu) => menu.type === 2);
       const menuPermissions =
         role.code === 'admin'
           ? ['全部']
@@ -100,9 +100,11 @@ export class SystemService {
         code: role.code,
         statusValue: role.status ?? 1,
         status: statusMap.get(String(role.status ?? 1)) ?? String(role.status ?? 1),
-        menuIds: assignedIds.filter((id) => menuMap.get(id)?.type !== 3),
+        menuIds: assignedIds.filter((id) => menuMap.get(id)?.type === 2),
         menuPermissions,
+        menuPermissionCount: pageMenus.length,
         actionPermissions,
+        actionPermissionCount: assigned.filter((menu) => menu.type === 3).length,
         actionPermissionCodes: assigned.filter((menu) => menu.type === 3).map((menu) => menu.code),
         userCount: userRoles.filter((item) => BigInt(item.role_id) === role.id).length,
         createdBy:
@@ -141,7 +143,23 @@ export class SystemService {
     });
     if (menus.length !== requested.size)
       throw new BadRequestException('包含不存在或已停用的菜单权限');
-    menus.filter((menu) => menu.parent_id > 0).forEach((menu) => requested.add(menu.parent_id));
+    // 逐级补齐全部祖先目录（不止一级）：报表/基础资料存在「目录→子目录→页面」的多层结构，
+    // 只补一级父目录会漏掉顶层目录 code，导致依赖目录 code 的接口（如 options）报无权限。
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      const parents = await this.prisma.hspsi_sys_menu.findMany({
+        where: { id: { in: [...requested] }, status: 1, deleted_at: null },
+        select: { id: true, parent_id: true },
+      });
+      for (const menu of parents) {
+        const parentId = Number(menu.parent_id);
+        if (parentId > 0 && !requested.has(parentId)) {
+          requested.add(parentId);
+          expanded = true;
+        }
+      }
+    }
     return [...requested].map(BigInt);
   }
 
@@ -222,6 +240,7 @@ export class SystemService {
       departments,
       amountAccessRows,
       authorizedOrgs,
+      roleOverrides,
       statusMap,
     ] = await Promise.all([
       this.prisma.hspsi_sys_user.findMany({
@@ -234,6 +253,7 @@ export class SystemService {
       this.prisma.hspsi_basic_dept.findMany({ where: { deleted_at: null } }),
       this.prisma.hspsi_sys_user_amount_access.findMany(),
       this.prisma.hspsi_sys_user_authorized_org.findMany(),
+      this.prisma.hspsi_sys_user_role_override.findMany(),
       this.dictionary('system_account_status'),
     ]);
     const staffIds = users.flatMap((user) => (user.staff_id ? [user.staff_id] : []));
@@ -253,6 +273,14 @@ export class SystemService {
     const roleMap = new Map(roles.map((role) => [Number(role.id), role]));
     const orgMap = new Map(organizations.map((org) => [String(org.org_id), org.name]));
     const deptMap = new Map(departments.map((dept) => [String(dept.dept_id), dept.name]));
+    const roleOverrideUsers = new Set(roleOverrides.map((item) => String(item.user_id)));
+    const authorizedOrgsByUser = new Map<string, typeof authorizedOrgs>();
+    for (const scope of authorizedOrgs) {
+      const userId = String(scope.user_id);
+      const values = authorizedOrgsByUser.get(userId) ?? [];
+      values.push(scope);
+      authorizedOrgsByUser.set(userId, values);
+    }
     const actorMap = await this.userNames(
       users.flatMap((user) => [user.created_by, user.updated_by]),
     );
@@ -263,6 +291,10 @@ export class SystemService {
         .find(Boolean);
       const configuredAmountAccess = amountAccessRows.find((item) => item.user_id === user.id);
       const staff = user.staff_id ? staffMap.get(String(user.staff_id)) : undefined;
+      const userAuthorizedOrgs = authorizedOrgsByUser.get(String(user.id)) ?? [];
+      const manualAuthorizedOrgs = userAuthorizedOrgs.filter(
+        (scope) => scope.created_by !== 0n && scope.org_id !== user.org_id,
+      );
       const amountAccess =
         user.status === 1 && configuredAmountAccess
           ? this.amountAccess.fromFlags(
@@ -274,6 +306,8 @@ export class SystemService {
         id: String(user.id),
         account: user.username,
         name: user.nickname || user.username,
+        fixedOrgId: user.org_id ? String(user.org_id) : '',
+        fixedOrgName: user.org_id ? (orgMap.get(String(user.org_id)) ?? '') : '',
         orgId: user.org_id ? String(user.org_id) : '',
         orgName: user.org_id ? (orgMap.get(String(user.org_id)) ?? '') : '',
         deptId: user.dept_id ? String(user.dept_id) : '',
@@ -283,19 +317,33 @@ export class SystemService {
         positionId: staff?.post_id ? String(staff.post_id) : '',
         positionName: staff?.post_id ? (positionMap.get(String(staff.post_id)) ?? '') : '',
         identitySource: user.staff_id ? 'OA同步人员' : '本地账号',
-        authorizedOrgIds: authorizedOrgs
-          .filter((scope) => scope.user_id === user.id)
-          .map((scope) => String(scope.org_id)),
-        authorizedOrgNames: authorizedOrgs
-          .filter((scope) => scope.user_id === user.id)
-          .map((scope) => orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`),
+        authorizedOrgIds: userAuthorizedOrgs.map((scope) => String(scope.org_id)),
+        authorizedOrgNames: userAuthorizedOrgs.map(
+          (scope) => orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`,
+        ),
+        manualAuthorizedOrgIds: manualAuthorizedOrgs.map((scope) => String(scope.org_id)),
+        manualAuthorizedOrgNames: manualAuthorizedOrgs.map(
+          (scope) => orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`,
+        ),
+        authorizedOrganizations: userAuthorizedOrgs.map((scope) => ({
+          id: String(scope.org_id),
+          name: orgMap.get(String(scope.org_id)) ?? `#${scope.org_id}`,
+          fixed: scope.org_id === user.org_id,
+          source:
+            scope.org_id === user.org_id ? (user.staff_id ? 'OA同步' : '本地账号') : '人工授权',
+        })),
         roleId: assignedRole ? String(assignedRole.id) : '',
         roleName: assignedRole?.name ?? '',
+        roleSource: roleOverrideUsers.has(String(user.id))
+          ? '本地人工授权'
+          : user.staff_id
+            ? 'OA岗位默认角色'
+            : '本地账号授权',
         amountAccess: amountAccess.level,
         canViewAmount: amountAccess.canViewAmount,
         canEditAmount: amountAccess.canEditAmount,
         amountGrantReason: configuredAmountAccess?.grant_reason ?? '',
-        authorizationSource: user.staff_id ? 'OA字典映射' : '本地系统账号',
+        authorizationSource: user.staff_id ? 'OA身份同步 + 本地业务授权' : '本地系统账号',
         phone: user.phone ?? '',
         statusValue: user.status ?? 1,
         status: statusMap.get(String(user.status ?? 1)) ?? String(user.status ?? 1),
@@ -389,7 +437,12 @@ export class SystemService {
         name: role.name,
         code: role.code,
       })),
-      organizations: organizations.map((org) => ({ id: String(org.org_id), name: org.name })),
+      organizations: organizations.map((org) => ({
+        id: String(org.org_id),
+        name: org.name,
+        parentId: String(org.parent_id),
+        sort: org.sort,
+      })),
       departments: departments.map((dept) => ({
         id: String(dept.dept_id),
         orgId: String(dept.org_id),
@@ -545,9 +598,10 @@ export class SystemService {
     const targetId = BigInt(this.integer(id, '用户ID', 1));
     const target = await this.prisma.hspsi_sys_user.findFirst({
       where: { id: targetId, deleted_at: null },
-      select: { id: true, username: true, staff_id: true },
+      select: { id: true, username: true, staff_id: true, org_id: true },
     });
     if (!target) throw new NotFoundException('用户不存在');
+    if (!target.org_id) throw new BadRequestException('该用户尚未配置固定所属组织');
     const roleId = this.integer(body.roleId, '所属角色', 1);
     const role = await this.prisma.hspsi_sys_role.findFirst({
       where: { id: BigInt(roleId), status: 1, deleted_at: null },
@@ -557,11 +611,56 @@ export class SystemService {
     if (target.id === BigInt(userId) && role.code !== 'admin')
       throw new BadRequestException('不能移除当前登录账号自己的超级管理员角色');
 
+    const currentAuthorizedOrgs = await this.prisma.hspsi_sys_user_authorized_org.findMany({
+      where: { user_id: targetId },
+      select: { org_id: true },
+    });
+    const requestedAuthorizedOrgIds = [
+      ...new Set(
+        (Array.isArray(body.authorizedOrgIds)
+          ? body.authorizedOrgIds
+          : currentAuthorizedOrgs.map((item) => String(item.org_id))
+        ).map((value: unknown) => this.integer(value, '数据访问组织', 1)),
+      ),
+    ];
+    const fixedOrgId = Number(target.org_id);
+    if (!requestedAuthorizedOrgIds.includes(fixedOrgId)) requestedAuthorizedOrgIds.push(fixedOrgId);
+    const organizations = await this.prisma.hspsi_basic_organization.findMany({
+      where: {
+        org_id: { in: requestedAuthorizedOrgIds.map(BigInt) },
+        operation_status: 1,
+        deleted_at: null,
+      },
+      select: { org_id: true },
+    });
+    if (organizations.length !== requestedAuthorizedOrgIds.length)
+      throw new BadRequestException('数据访问组织中包含不存在或已停用的组织');
+
     const actorId = BigInt(userId);
     await this.prisma.$transaction(async (tx) => {
       await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(targetId) } });
       await tx.hspsi_sys_user_role.createMany({
         data: [{ user_id: Number(targetId), role_id: roleId }],
+        skipDuplicates: true,
+      });
+      await tx.hspsi_sys_user_authorized_org.deleteMany({
+        where: { user_id: targetId, org_id: { not: target.org_id! } },
+      });
+      await tx.hspsi_sys_user_authorized_org.createMany({
+        data: [
+          {
+            user_id: targetId,
+            org_id: target.org_id!,
+            created_by: target.staff_id ? 0n : actorId,
+          },
+          ...requestedAuthorizedOrgIds
+            .filter((orgId) => orgId !== fixedOrgId)
+            .map((orgId) => ({
+              user_id: targetId,
+              org_id: BigInt(orgId),
+              created_by: actorId,
+            })),
+        ],
         skipDuplicates: true,
       });
       if (target.staff_id) {
@@ -579,7 +678,11 @@ export class SystemService {
     return {
       id,
       roleId: String(roleId),
-      message: target.staff_id ? '角色授权已保存，后续OA同步不会覆盖' : '角色授权已保存',
+      fixedOrgId: String(target.org_id),
+      authorizedOrgIds: requestedAuthorizedOrgIds.map(String),
+      message: target.staff_id
+        ? '角色和数据访问组织已保存；固定所属组织仍由OA维护'
+        : '角色和数据访问组织已保存',
     };
   }
 

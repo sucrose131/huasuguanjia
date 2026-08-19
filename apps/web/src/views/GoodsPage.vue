@@ -9,7 +9,9 @@ import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { buildCategoryTree } from '@/utils/category-tree';
 import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 const auth = useAuthStore();
+const canAction = (action: string) => canPageAction(auth.user, '/goods/products', action);
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const rows = ref<any[]>([]),
   total = ref(0),
@@ -226,7 +228,7 @@ onMounted(async () => {
         <p class="page-subtitle">维护商品主档、分类继承属性与 SKU 明细</p>
       </div>
       <div class="page-actions">
-        <el-button type="primary" @click="open('create')">新增商品</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="open('create')">新增商品</el-button>
       </div>
     </header>
     <div class="panel">
@@ -278,7 +280,7 @@ onMounted(async () => {
         :empty="!rows.length"
         :loading="loading"
         title="商品资料"
-        can-create
+        :can-create="canAction('create')"
         @retry="load"
         @create="open('create')"
       />
@@ -328,13 +330,14 @@ onMounted(async () => {
             ><template #default="s"
               ><TableRowActions
                 ><el-button link type="primary" @click="open('view', s.row)">查看</el-button
-                ><el-button link type="primary" @click="open('edit', s.row)">编辑</el-button
+                ><el-button v-if="canAction('update')" link type="primary" @click="open('edit', s.row)">编辑</el-button
                 ><template #more
                   ><el-dropdown-item
+                    v-if="canAction('status')"
                     :class="s.row.status === 1 ? 'table-action-warning' : 'table-action-success'"
                     @click="changeStatus(s.row)"
                     >{{ s.row.status === 1 ? '停用' : '启用' }}</el-dropdown-item
-                  ><el-dropdown-item class="table-action-danger" @click="remove(s.row)"
+                  ><el-dropdown-item v-if="canAction('delete')" class="table-action-danger" @click="remove(s.row)"
                     >删除</el-dropdown-item
                   ></template
                 ></TableRowActions
@@ -592,7 +595,7 @@ onMounted(async () => {
       ><template #footer
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><el-button
-          v-if="mode !== 'view'"
+          v-if="mode !== 'view' && canAction(mode === 'create' ? 'create' : 'update')"
           type="primary"
           :loading="saving"
           :disabled="saving"

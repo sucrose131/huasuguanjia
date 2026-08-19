@@ -124,11 +124,12 @@ describe('RequisitionService locked requisition mutations', () => {
         drawType: 2,
         reason: '借用测试',
         signatureContent: 'data:image/png;base64,YWJj',
-        signedBy: 3,
+        signedBy: 9,
         details: [{ goodsId: 4, skuId: 5, quantity: 1, returnable: true }],
       },
       '3',
       false,
+      { orgId: '8', staffId: '9' },
     );
 
     expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
@@ -137,6 +138,8 @@ describe('RequisitionService locked requisition mutations', () => {
           signature_content: null,
           signature_attachment: 'signature-1',
           attachments: [signature],
+          org_id: 8n,
+          applicant_id: 9n,
         }),
       }),
     );

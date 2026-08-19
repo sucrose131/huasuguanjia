@@ -8,6 +8,8 @@ import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 type InputType =
   | 'text'
   | 'textarea'
@@ -295,6 +297,8 @@ const configs: Record<
 const route = useRoute(),
   resource = computed(() => String(route.params.resource)),
   config = computed(() => configs[resource.value] ?? configs.vendors!);
+const auth = useAuthStore();
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const rows = ref<any[]>([]),
   total = ref(0),
   loading = ref(false),
@@ -535,7 +539,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle }}</p>
       </div>
       <div class="page-actions">
-        <el-button type="primary" @click="open('create')">新增{{ config.title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="open('create')">新增{{ config.title }}</el-button>
       </div>
     </header>
     <div class="panel">
@@ -616,7 +620,7 @@ onMounted(async () => {
         :empty="!rows.length"
         :loading="loading"
         :title="config.title"
-        can-create
+          :can-create="canAction('create')"
         @retry="load"
         @create="open('create')"
       />
@@ -651,14 +655,14 @@ onMounted(async () => {
               ><TableRowActions
                 ><el-button link type="primary" @click="open('view', scope.row)">查看</el-button
                 ><el-button
-                  v-if="!scope.row.derived"
+                  v-if="!scope.row.derived && canAction('update')"
                   link
                   type="primary"
                   @click="open('edit', scope.row)"
                   >编辑</el-button
                 ><template #more
                   ><el-dropdown-item
-                    v-if="resource !== 'vendors' && !scope.row.derived"
+                    v-if="resource !== 'vendors' && !scope.row.derived && canAction('status')"
                     :class="
                       (resource === 'organizations'
                         ? scope.row.operationStatus
@@ -677,7 +681,7 @@ onMounted(async () => {
                           : '启用'
                     }}</el-dropdown-item
                   ><el-dropdown-item
-                    v-if="resource === 'vendors'"
+                    v-if="resource === 'vendors' && canAction('delete')"
                     class="table-action-danger"
                     @click="remove(scope.row)"
                     >删除</el-dropdown-item
@@ -835,7 +839,7 @@ onMounted(async () => {
       ><template #footer
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><el-button
-          v-if="mode !== 'view'"
+          v-if="mode !== 'view' && canAction(mode === 'create' ? 'create' : 'update')"
           type="primary"
           :loading="saving"
           :disabled="saving"
