@@ -71,6 +71,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'receive',
       label: '登记收款',
       kind: 'success',
+      primary: false,
       show: (row) =>
         Math.max(
           0,
@@ -84,6 +85,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'refund',
       label: '登记退款',
       kind: 'warning',
+      primary: false,
       show: (row) =>
         Number(row.receivedAmount ?? 0) - Number(row.refundedAmount ?? 0) > 0.000001,
       handler: (row, ctx) =>
@@ -107,6 +109,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       confirm: '确认删除该销售订单？',
       handler: async (row) => {
         const result: any = await api.delete(`/sales/orders/${row.id}`);

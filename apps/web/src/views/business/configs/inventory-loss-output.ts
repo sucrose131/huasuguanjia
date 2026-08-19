@@ -38,6 +38,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '审核通过将按来源批次扣减库存，是否继续？',
       handler: async (row) => {
@@ -49,6 +50,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       key: 'confirm',
       label: '确认出库',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 1,
       confirm: '确认后将扣减库存，是否继续？',
       handler: async (row) => {
@@ -60,6 +62,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '确认删除该报损出库单？',
       handler: async (row) => {

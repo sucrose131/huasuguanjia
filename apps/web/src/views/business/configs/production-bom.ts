@@ -43,6 +43,7 @@ export const productionBomConfig: BusinessDocumentConfig = {
       key: 'toggle-bom',
       label: (row) => (Number(row.status) === 1 ? '停用' : '启用'),
       kind: 'warning',
+      primary: false,
       confirm: (row) =>
         Number(row.status) === 1 ? '停用后不可用于新生产计划，是否继续？' : '启用该BOM，是否继续？',
       handler: async (row) => {
@@ -57,6 +58,7 @@ export const productionBomConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       confirm: '确认删除该BOM？',
       handler: async (row) => {
         const result: any = await api.delete(`/production/boms/${row.id}`);

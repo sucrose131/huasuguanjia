@@ -8,6 +8,28 @@ import type { BusinessColumn } from '../business-config';
  * 一个引擎，每个业务类型用一份「完整配置」+「薄壳页面」+「专属表单组件」表达。
  */
 
+/** 列渲染上下文：提供与旧页一致的名称反查、字典、创建人等能力 */
+export type ColumnRenderContext = {
+  /** 按 options 集合反查名称（orgs/warehouses/depts/vendors/users/units/goods 等） */
+  lookup: (name: string, value: unknown) => string;
+  /** 按 id 取 options 集合中的原始条目（可再取 goodsName/queryCode 等字段） */
+  byId: (name: string, value: unknown) => Record<string, any> | undefined;
+  /** 字典 label */
+  dictLabel: (code: string, value: unknown) => string;
+  /** 创建人（当前用户显示用户名，否则 —） */
+  creator: (row: Record<string, any>) => string;
+};
+
+/** 引擎加载的公共 options 集合名 */
+export type OptionBagName =
+  | 'orgs'
+  | 'warehouses'
+  | 'depts'
+  | 'vendors'
+  | 'users'
+  | 'units'
+  | 'goods';
+
 /** 查询字段 */
 export type QueryField = {
   key: string;
@@ -31,6 +53,8 @@ export type RowAction = {
   show?: (row: Record<string, any>) => boolean;
   /** 操作前的确认文案（可动态按行生成） */
   confirm?: string | ((row: Record<string, any>) => string);
+  /** 是否作为主操作平铺展示（默认 true：平铺在操作列；false 时收进“更多”下拉） */
+  primary?: boolean;
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
 };
@@ -58,6 +82,8 @@ export type BusinessDocumentConfig = {
   /** 列表主编号字段 */
   no: string;
   columns: BusinessColumn[];
+  /** 引擎需要预加载的公共 options 集合（供列 render 的 lookup/byId 使用） */
+  optionBags?: OptionBagName[];
   dictionaries?: string[];
   summary?: boolean;
   /** 摘要卡片映射（summary 为 true 时按此渲染头部卡片；key 对应列表接口返回的 summary 对象字段） */

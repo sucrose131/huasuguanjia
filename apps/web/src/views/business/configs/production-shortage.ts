@@ -32,6 +32,7 @@ export const productionShortageConfig: BusinessDocumentConfig = {
       key: 'terminate',
       label: '终止生产',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.status) === 0,
       confirm: '终止后将关闭未执行出库和未处理缺料，是否继续？',
       handler: async (row) => {

@@ -36,6 +36,7 @@ export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
       key: 'confirm',
       label: '确认入库',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.status) === 0,
       confirm: '确认后将库存过账，是否继续？',
       handler: async (row) => {

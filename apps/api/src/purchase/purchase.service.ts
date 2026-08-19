@@ -830,7 +830,11 @@ export class PurchaseService {
         createdAt: item.created_at,
       };
     });
-    return { items, total, page, pageSize };
+    const pending = records.filter(
+      (item) => Number(item.approve_status) === 0 && Number(item.status) === 1,
+    ).length;
+    const complete = records.filter((item) => Number(item.approve_status) === 1).length;
+    return { items, total, page, pageSize, summary: { total, pending, complete } };
   }
   async application(id: string) {
     const header = await this.prisma.hspsi_purchase_approve.findFirst({
@@ -1505,6 +1509,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.status) === 1).length,
+        complete: items.filter((item) => Number(item.status) === 3).length,
+      },
     };
   }
   async order(id: string) {
@@ -2273,6 +2282,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.comfirm_status) === 0).length,
+        complete: items.filter((item) => Number(item.comfirm_status) === 1).length,
+      },
     };
   }
   async receipt(id: string) {
@@ -2948,6 +2962,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pending: items.filter((item) => Number(item.approve_status) === 0).length,
+        complete: items.filter((item) => Number(item.approve_status) === 1).length,
+      },
     };
   }
   async returnDetail(id: string) {
@@ -3459,6 +3478,15 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        pendingAmount: items.reduce(
+          (sum, item) =>
+            sum + Math.max(0, Number(item.refundable_amount) - Number(item.refunded_amount)),
+          0,
+        ),
+        refundedAmount: items.reduce((sum, item) => sum + Number(item.refunded_amount), 0),
+      },
     };
   }
   async refund(id: string) {
@@ -3807,6 +3835,11 @@ export class PurchaseService {
       total,
       page,
       pageSize,
+      summary: {
+        total,
+        paymentAmount: items.reduce((sum, item) => sum + Number(item.fact_pay_amount), 0),
+        orderCount: new Set(items.map((item) => String(item.po_id))).size,
+      },
     };
   }
   async payment(id: string) {

@@ -4,6 +4,8 @@ export type BusinessColumn = {
   width?: number;
   minWidth?: number;
   kind?: 'date' | 'datetime' | 'money' | 'number' | 'status' | 'progress' | 'text';
+  /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */
+  render?: (row: Record<string, any>, ctx: any) => string;
 };
 export type BusinessConfig = {
   title: string;

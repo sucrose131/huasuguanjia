@@ -48,6 +48,7 @@ export const salesPaymentConfig: BusinessDocumentConfig = {
       key: 'void',
       label: '作废',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.amount) > 0,
       confirm: '确认作废该收款记录？',
       handler: async (row) => {

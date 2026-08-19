@@ -47,6 +47,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       key: 'submit',
       label: '提交',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '提交后进入审批，是否继续？',
       handler: async (row) => {
@@ -58,6 +59,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后将立即调拨过账并调整两边库存，是否继续？',
       handler: async (row) => {
@@ -69,6 +71,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       key: 'reject',
       label: '驳回',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '确认驳回该调拨单？',
       handler: async (row) => {
@@ -80,6 +83,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '确认删除该调拨单？',
       handler: async (row) => {

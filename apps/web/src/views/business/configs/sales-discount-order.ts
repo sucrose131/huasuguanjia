@@ -62,6 +62,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: (row) => (hasSource(row) ? '确认销售并出库' : '通过'),
       kind: 'success',
+      primary: false,
       show: canDispose,
       confirm: (row) =>
         hasSource(row)
@@ -79,6 +80,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'reject',
       label: (row) => (hasSource(row) ? '确认未售出' : '驳回'),
       kind: 'danger',
+      primary: false,
       show: canDispose,
       confirm: (row) =>
         hasSource(row)
@@ -96,6 +98,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'create-output',
       label: '生成折价出库',
       kind: 'success',
+      primary: false,
       show: (row) => approveStatus(row) === 1 && !hasSource(row) && deliveryStatus(row) !== 3,
       handler: (row, ctx) =>
         ctx.navigate('/sales/outputs', { orderId: String(row.id) }),
@@ -104,6 +107,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'receive',
       label: '登记收款',
       kind: 'success',
+      primary: false,
       show: (row) =>
         Math.max(
           0,
@@ -117,6 +121,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'refund',
       label: '登记退款',
       kind: 'warning',
+      primary: false,
       show: (row) => Number(row.netAmount ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/refunds', { create: '1', orderId: String(row.id) }),
@@ -125,6 +130,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => !hasSource(row),
       confirm: '确认删除该折价销售单？',
       handler: async (row) => {

@@ -61,6 +61,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
       key: 'retry-oa',
       label: '重新提交OA',
       kind: 'warning',
+      primary: false,
       show: (row) => row.oaStatus === 'PUSH_FAILED',
       handler: async (row) => {
         const result: any = await api.post(`/requisitions/applications/${row.id}/submit-oa`, {});
@@ -72,6 +73,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => row.approveStatus === 0,
       confirm: '确认删除该领用申请？',
       handler: async (row) => {

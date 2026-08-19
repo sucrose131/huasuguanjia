@@ -4,12 +4,21 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { moneyText } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
-import type { BusinessDocumentConfig, BusinessDocumentContext, RowAction } from './business-document-config';
+import TableRowActions from '@/components/business/TableRowActions.vue';
+import type {
+  BusinessDocumentConfig,
+  BusinessDocumentContext,
+  ColumnRenderContext,
+  OptionBagName,
+  RowAction,
+} from './business-document-config';
 
 const props = defineProps<{ config: BusinessDocumentConfig }>();
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 
 const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
@@ -17,6 +26,7 @@ const loading = ref(false);
 const summary = reactive<Record<string, any>>({});
 const dicts = reactive<Record<string, any[]>>({});
 const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20 });
+const options = reactive<Record<string, any[]>>({});
 
 // 表单对话框
 const formDialog = ref(false);
@@ -54,6 +64,49 @@ async function loadDicts() {
   }
 }
 
+// 预加载公共 options 集合（供列 render 的 lookup/byId 使用）
+const OPTION_BAG_ENDPOINTS: Record<OptionBagName, string> = {
+  orgs: '/base-data/organizations/options',
+  warehouses: '/base-data/warehouses/options',
+  depts: '/base-data/departments/options',
+  vendors: '/base-data/vendors/options',
+  users: '/base-data/users/options',
+  units: '/base-data/units/options',
+  goods: '/goods',
+};
+
+async function loadOptionBags() {
+  const bags = props.config.optionBags ?? [];
+  const results = await Promise.all(
+    bags.map((name) =>
+      api
+        .get(OPTION_BAG_ENDPOINTS[name], {
+          ...(name === 'goods' ? { params: { pageSize: 200, status: 1 } } : {}),
+        })
+        .catch(() => []),
+    ),
+  );
+  bags.forEach((name, index) => {
+    const data: any = results[index];
+    options[name] = (Array.isArray(data) ? data : data?.items ?? []) as any[];
+  });
+}
+
+const columnRenderCtx: ColumnRenderContext = {
+  lookup: (name: string, value: unknown) =>
+    (options[name] ?? []).find(
+      (item: any) => String(item.value ?? item.id) === String(value),
+    )?.label ?? '—',
+  byId: (name: string, value: unknown) =>
+    (options[name] ?? []).find(
+      (item: any) => String(item.id ?? item.value) === String(value),
+    ),
+  dictLabel: (code: string, value: unknown) =>
+    (dicts[code] ?? []).find((item) => String(item.value) === String(value))?.label ?? '—',
+  creator: (row: Record<string, any>) =>
+    String(row.createdBy) === String(auth.user?.id) ? auth.user?.username ?? '' : '—',
+};
+
 async function load() {
   loading.value = true;
   try {
@@ -68,7 +121,11 @@ async function load() {
   }
 }
 
-function displayCell(row: Record<string, any>, column: { prop: string; kind?: string }) {
+function displayCell(
+  row: Record<string, any>,
+  column: { prop: string; kind?: string; render?: (row: Record<string, any>, ctx: ColumnRenderContext) => string },
+) {
+  if (column.render) return column.render(row, columnRenderCtx);
   const value = row[column.prop];
   if (value === null || value === undefined) return '—';
   if (column.kind === 'date') return String(value).slice(0, 10);
@@ -90,6 +147,17 @@ async function runAction(action: RowAction, row: Record<string, any>) {
     if (error !== 'cancel') ElMessage.error(error instanceof Error ? error.message : String(error));
   }
 }
+
+const visibleActions = (row: Record<string, any>) =>
+  (props.config.rowActions ?? []).filter((action) =>
+    action.show ? action.show(row) : true,
+  );
+
+// 主操作平铺（默认），次要操作收进“更多”下拉（primary: false）
+const primaryActions = (row: Record<string, any>) =>
+  visibleActions(row).filter((action) => action.primary !== false);
+const moreActions = (row: Record<string, any>) =>
+  visibleActions(row).filter((action) => action.primary === false);
 
 function openCreate(initial: Record<string, any> = {}) {
   formMode.value = 'create';
@@ -127,12 +195,14 @@ watch(
     Object.assign(query, { keyword: '', page: 1, pageSize: 20 });
     for (const field of props.config.queryFields ?? []) query[field.key] = '';
     await loadDicts();
+    await loadOptionBags();
     await load();
   },
 );
 
 onMounted(async () => {
   await loadDicts();
+  await loadOptionBags();
   await load();
   if (String(route.query.create ?? '') === '1') {
     const initial: Record<string, any> = { ...route.query };
@@ -223,20 +293,30 @@ onMounted(async () => {
           <el-table-column
             v-if="(config.rowActions ?? []).length"
             label="操作"
-            width="200"
+            width="220"
             fixed="right"
             align="center"
           >
             <template #default="s">
-              <el-button
-                v-for="action in config.rowActions ?? []"
-                :key="action.key"
-                v-show="action.show ? action.show(s.row) : true"
-                link
-                :type="action.kind ?? 'primary'"
-                @click="runAction(action, s.row)"
-                >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-button
-              >
+              <TableRowActions>
+                <el-button
+                  v-for="action in primaryActions(s.row)"
+                  :key="action.key"
+                  link
+                  :type="action.kind ?? 'primary'"
+                  @click="runAction(action, s.row)"
+                  >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-button
+                >
+                <template v-if="moreActions(s.row).length" #more>
+                  <el-dropdown-item
+                    v-for="action in moreActions(s.row)"
+                    :key="action.key"
+                    :class="action.kind === 'danger' ? 'table-action-danger' : action.kind === 'warning' ? 'table-action-warning' : action.kind === 'success' ? 'table-action-success' : ''"
+                    @click="runAction(action, s.row)"
+                    >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-dropdown-item
+                  >
+                </template>
+              </TableRowActions>
             </template>
           </el-table-column>
         </el-table>

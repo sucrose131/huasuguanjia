@@ -48,6 +48,7 @@ export const salesReturnConfig: BusinessDocumentConfig = {
       key: 'confirm',
       label: '确认',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 0,
       confirm: '确认后将执行退货返库/冲销，是否继续？',
       handler: async (row) => {
@@ -59,6 +60,7 @@ export const salesReturnConfig: BusinessDocumentConfig = {
       key: 'undo-confirm',
       label: '撤销确认',
       kind: 'warning',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 1 && Number(row.disposalType) === 1,
       confirm: '撤销后将回退相关库存/冲销，是否继续？',
       handler: async (row) => {
@@ -70,6 +72,7 @@ export const salesReturnConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 0,
       confirm: '确认删除该销售退货单？',
       handler: async (row) => {

@@ -55,6 +55,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
       key: 'confirm',
       label: '确认',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 0,
       confirm: '确认后会立即改变真实库存，是否继续？',
       handler: async (row) => {
@@ -66,6 +67,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
       key: 'undo-confirm',
       label: '撤销确认',
       kind: 'warning',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 1,
       confirm: '撤销后将回退库存，是否继续？',
       handler: async (row) => {
@@ -87,6 +89,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
       key: 'create-return',
       label: '生成退回',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 1 && Boolean(row.hasReturnableItems),
       handler: (row, ctx) =>
         ctx.navigate('/requisitions/returns', { outputId: String(row.id) }),
@@ -95,6 +98,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.confirmStatus) === 0 && !row.autoCreated,
       confirm: '确认删除该领用出库单？',
       handler: async (row) => {

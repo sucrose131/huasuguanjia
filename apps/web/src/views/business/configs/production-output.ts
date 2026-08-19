@@ -56,6 +56,7 @@ export const productionOutputConfig: BusinessDocumentConfig = {
       key: 'confirm',
       label: '确认出库',
       kind: 'success',
+      primary: false,
       show: (row) =>
         Number(row.outType) !== 1 && Number(row.confirmStatus ?? row.status) === 0,
       confirm: '确认后将立即扣减库存，是否继续？',
@@ -70,6 +71,7 @@ export const productionOutputConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.confirmStatus ?? row.status) === 0,
       confirm: '确认删除该出库草稿？',
       handler: async (row) => {

@@ -52,6 +52,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.planStatus) === 1,
       confirm: '通过后将检查库存并生成缺料清单，是否继续？',
       handler: async (row) => {
@@ -67,6 +68,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'reject',
       label: '驳回',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.planStatus) === 1,
       confirm: '驳回后计划将回到草稿状态，是否继续？',
       handler: async (row) => {
@@ -81,6 +83,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'recheck',
       label: '重校库存',
       kind: 'warning',
+      primary: false,
       show: (row) =>
         Number(row.approveStatus) === 0 &&
         Number(row.planStatus) === 7 &&
@@ -96,6 +99,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'create-output',
       label: '生成BOM出库',
       kind: 'success',
+      primary: false,
       show: (row) =>
         Number(row.approveStatus) === 1 &&
         Number(row.planStatus) === 3 &&
@@ -112,6 +116,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'terminate',
       label: '终止',
       kind: 'danger',
+      primary: false,
       show: (row) => ![5, 6].includes(Number(row.planStatus)) && Number(row.outboundStatus) !== 2,
       confirm: '终止后将关闭未执行出库和未处理缺料，是否继续？',
       handler: async (row) => {
@@ -123,6 +128,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       confirm: '确认删除该生产计划？',
       handler: async (row) => {
         const result: any = await api.delete(`/production/plans/${row.id}`);

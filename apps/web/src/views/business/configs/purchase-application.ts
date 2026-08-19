@@ -19,14 +19,60 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   no: 'applicationNo',
   columns: [
     { prop: 'applicationNo', label: '申请单号', minWidth: 165 },
-    { prop: 'reason', label: '申请原因', minWidth: 170 },
-    { prop: 'quantity', label: '申请总量', minWidth: 105, kind: 'number' },
-    { prop: 'generationStatus', label: '生成状态', minWidth: 135, kind: 'status' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 105, kind: 'status' },
-    { prop: 'createdBy', label: '创建人', minWidth: 110 },
-    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+    {
+      prop: 'orgId',
+      label: '组织',
+      minWidth: 160,
+      render: (row, ctx) => ctx.lookup('orgs', row.orgId),
+    },
+    {
+      prop: 'deptId',
+      label: '申请部门',
+      minWidth: 128,
+      render: (row, ctx) => ctx.lookup('depts', row.deptId),
+    },
+    {
+      prop: 'warehouseId',
+      label: '目标仓库',
+      minWidth: 144,
+      render: (row, ctx) => ctx.lookup('warehouses', row.warehouseId),
+    },
+    { prop: 'reason', label: '申请原因', minWidth: 200 },
+    { prop: 'quantity', label: '申请数量', width: 104, kind: 'number' },
+    {
+      prop: 'generationStatus',
+      label: '生成状态',
+      minWidth: 120,
+      render: (row) =>
+        row.generationStatus === 'fully_generated'
+          ? '已生成订单'
+          : row.generationStatus === 'partially_generated'
+            ? '部分生成'
+            : row.generationStatus === 'not_generated'
+              ? '未生成'
+              : String(row.generationStatus ?? '—'),
+    },
+    {
+      prop: 'createdBy',
+      label: '创建人',
+      width: 96,
+      render: (row, ctx) => ctx.creator(row),
+    },
+    { prop: 'createdAt', label: '创建时间', width: 160, kind: 'datetime' },
+    {
+      prop: 'approveStatus',
+      label: '审批状态',
+      width: 96,
+      render: (row, ctx) => ctx.dictLabel('approval_status', row.approveStatus),
+    },
   ],
   dictionaries: ['approval_status'],
+  optionBags: ['orgs', 'depts', 'warehouses'],
+  summaryLabels: [
+    { label: '申请单总数', key: 'total', kind: 'number' },
+    { label: '待审批数', key: 'pending', kind: 'number' },
+    { label: '已审批数', key: 'complete', kind: 'number' },
+  ],
   creatable: true,
   createText: '新增采购申请单',
   formComponent: PurchaseApplicationForm,
@@ -49,6 +95,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       key: 'submit',
       label: '提交',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '提交后将进入审批流程，是否继续？',
       handler: async (row) => {
@@ -60,6 +107,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后进入采购流程，是否继续？',
       handler: async (row) => {
@@ -74,6 +122,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       key: 'reject',
       label: '驳回',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '驳回后申请将退回，是否继续？',
       handler: async (row) => {
@@ -88,6 +137,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       key: 'generate-order',
       label: '生成订单',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 1 && Number(row.remainingDetailCount) > 0,
       confirm: '按申请整单生成采购订单，是否继续？',
       // 后端 generate-order 需要供应商与每行金额（原页面用专用弹窗收集），
@@ -98,6 +148,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '确认删除该采购申请单？',
       handler: async (row) => {

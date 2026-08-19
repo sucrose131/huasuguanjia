@@ -47,6 +47,7 @@ export const inventoryCheckConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后将按盘盈盘亏生成对应单据，是否继续？',
       handler: async (row) => {
@@ -58,6 +59,7 @@ export const inventoryCheckConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '确认删除该盘点单？',
       handler: async (row) => {

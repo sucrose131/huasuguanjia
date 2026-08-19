@@ -11,16 +11,58 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
   no: 'returnNo',
   columns: [
     { prop: 'returnNo', label: '退货单号', minWidth: 160 },
-    { prop: 'orderNo', label: '采购订单', minWidth: 155 },
-    { prop: 'sourceTypeLabel', label: '退货来源', minWidth: 110, kind: 'status' },
-    { prop: 'reason', label: '原因', minWidth: 160 },
-    { prop: 'returnDate', label: '退货日期', minWidth: 110, kind: 'date' },
-    { prop: 'returnQty', label: '退货数量', minWidth: 100, kind: 'number' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 105, kind: 'status' },
-    { prop: 'createdBy', label: '创建人', minWidth: 110 },
-    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+    {
+      prop: 'sourceTypeLabel',
+      label: '退货来源',
+      width: 120,
+      render: (row) => row.sourceTypeLabel || (row.sourceType === 'receipt' ? '已入库退货' : '未入库退货'),
+    },
+    {
+      prop: 'orderNo',
+      label: '采购订单',
+      minWidth: 160,
+      render: (row) => row.orderNo || String(row.orderId ?? '—'),
+    },
+    {
+      prop: 'receiptId',
+      label: '来源入库单',
+      minWidth: 160,
+      render: (row) =>
+        row.sourceType === 'receipt' ? (row.receiptNo ?? `GA${row.receiptId}`) : '—',
+    },
+    { prop: 'returnQty', label: '退货数量', width: 104, kind: 'number' },
+    {
+      prop: 'affectsInventory',
+      label: '库存影响',
+      width: 96,
+      render: (row) => (row.affectsInventory ? '扣减库存' : '不影响库存'),
+    },
+    {
+      prop: 'returnDate',
+      label: '退货日期',
+      width: 112,
+      kind: 'date',
+      render: (row) => String(row.returnDate ?? '').slice(0, 10),
+    },
+    {
+      prop: 'approveStatus',
+      label: '处理状态',
+      width: 96,
+      render: (row, ctx) => ctx.dictLabel('purchase_return_status', row.approveStatus),
+    },
+    {
+      prop: 'createdBy',
+      label: '创建人',
+      width: 96,
+      render: (row, ctx) => ctx.creator(row),
+    },
   ],
-  dictionaries: ['approval_status'],
+  dictionaries: ['approval_status', 'purchase_return_status'],
+  summaryLabels: [
+    { label: '退货记录总数', key: 'total', kind: 'number' },
+    { label: '待处理数', key: 'pending', kind: 'number' },
+    { label: '已完成数', key: 'complete', kind: 'number' },
+  ],
   creatable: false,
   formComponent: PurchaseReturnForm,
   openFromRoute: async (query, ctx) => {
@@ -43,6 +85,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       key: 'submit',
       label: '提交',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '提交后将进入审批流程，是否继续？',
       handler: async (row) => {
@@ -54,6 +97,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       key: 'approve',
       label: '通过',
       kind: 'success',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '审批通过将立即扣减库存，是否继续？',
       handler: async (row) => {
@@ -68,6 +112,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       key: 'reject',
       label: '驳回',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       handler: async (row) => {
         const result = await ElMessageBox.prompt('请输入驳回原因', '驳回审批', {
@@ -84,6 +129,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '确认删除该采购退货记录？',
       handler: async (row) => {

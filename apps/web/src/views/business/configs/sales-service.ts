@@ -53,6 +53,7 @@ export const salesServiceConfig: BusinessDocumentConfig = {
               ? '办理退货'
               : '处理完成',
       kind: 'success',
+      primary: false,
       show: (row) =>
         Number(row.eventStatus) === 1 &&
         (!row.successorId || row.successorType === 'sales_return'),
@@ -71,6 +72,7 @@ export const salesServiceConfig: BusinessDocumentConfig = {
       key: 'exchange-output',
       label: '办理换货出库',
       kind: 'success',
+      primary: false,
       show: (row) => row.successorType === 'sales_exchange_output' && Boolean(row.successorId),
       handler: (row, ctx) =>
         ctx.navigate('/sales/outputs', { documentId: String(row.successorId) }),
@@ -79,6 +81,7 @@ export const salesServiceConfig: BusinessDocumentConfig = {
       key: 'delete',
       label: '删除',
       kind: 'danger',
+      primary: false,
       show: (row) => Number(row.eventStatus) !== 2,
       confirm: '确认删除该售后记录？',
       handler: async (row) => {

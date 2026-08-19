@@ -49,6 +49,7 @@ export const salesRefundConfig: BusinessDocumentConfig = {
       key: 'void',
       label: '作废',
       kind: 'danger',
+      primary: false,
       confirm: '确认作废该退款记录？',
       handler: async (row) => {
         const result: any = await api.delete(`/sales/refunds/${row.id}`);
