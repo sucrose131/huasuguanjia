@@ -10,6 +10,7 @@ import InventoryPage from '@/views/InventoryPage.vue';
 import InventoryGeneralPage from '@/views/InventoryGeneralPage.vue';
 import WorkflowPage from '@/views/WorkflowPage.vue';
 import RequisitionApplicationPage from '@/views/business/RequisitionApplicationPage.vue';
+import ProductionShortagePage from '@/views/business/ProductionShortagePage.vue';
 import SystemPage from '@/views/SystemPage.vue';
 import DashboardPage from '@/views/DashboardPage.vue';
 import ReportPage from '@/views/ReportPage.vue';
@@ -35,6 +36,7 @@ const routes = [
         path: 'inventory/:resource(stocks|transfers|adjustments|losses|loss-outputs|overflows|overflow-inputs|checks|quantity-alerts|expiry-alerts)',
         component: InventoryPage,
       },
+      { path: 'production/shortages', component: ProductionShortagePage },
       { path: 'production/:resource', component: WorkflowPage },
       { path: 'sales/:resource', component: WorkflowPage },
       { path: 'requisitions/applications', component: RequisitionApplicationPage },
