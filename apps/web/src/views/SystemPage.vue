@@ -769,8 +769,6 @@ onMounted(async () => {
             :default-expanded-keys="menuExpandedKeys"
             min-width="1180"
           >
-            <el-table-column type="index" label="序号" width="65" />
-            <el-table-column prop="id" label="ID" width="100" />
             <el-table-column prop="name" label="菜单名称" min-width="200"
               ><template #default="{ row }"
                 ><strong v-if="row.typeValue === 1">{{ row.name }}</strong
@@ -778,6 +776,7 @@ onMounted(async () => {
                 ><span v-else class="menu-action-name">{{ row.name }}</span></template
               ></el-table-column
             >
+            <el-table-column prop="id" label="ID" width="100" />
             <el-table-column prop="type" label="菜单类型" width="90"
               ><template #default="{ row }"
                 ><el-tag
