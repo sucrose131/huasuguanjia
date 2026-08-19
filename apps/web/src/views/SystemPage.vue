@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Search, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
+import { Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
@@ -145,13 +145,6 @@ watch(
   },
 );
 
-function toggleMenuExpand(row: any) {
-  if (!(row.children?.length)) return;
-  const key = String(row.id);
-  const index = menuExpandedKeys.value.indexOf(key);
-  if (index >= 0) menuExpandedKeys.value.splice(index, 1);
-  else menuExpandedKeys.value.push(key);
-}
 
 // 树形节点计数（含子级，供底部统计/空态判断）
 const menuRowCount = computed(() => {
@@ -788,24 +781,10 @@ onMounted(async () => {
             :data="menuTree"
             row-key="id"
             :tree-props="{ children: 'children' }"
-            v-model:expand-row-keys="menuExpandedKeys"
-            :indent="20"
+            :default-expanded-keys="menuExpandedKeys"
+
             min-width="1180"
           >
-            <el-table-column width="44" align="center">
-              <template #default="{ row }">
-                <span
-                  v-if="row.children?.length"
-                  class="menu-expand-toggle"
-                  @click="toggleMenuExpand(row)"
-                >
-                  <el-icon :size="14">
-                    <ArrowDown v-if="menuExpandedKeys.includes(String(row.id))" />
-                    <ArrowRight v-else />
-                  </el-icon>
-                </span>
-              </template>
-            </el-table-column>
             <el-table-column prop="name" label="菜单名称" min-width="200">
               <template #default="{ row }">
                 <strong v-if="row.typeValue === 1">{{ row.name }}</strong>
@@ -1395,23 +1374,6 @@ onMounted(async () => {
 .menu-action-name {
   color: #8a94a6;
   font-size: 12px;
-}
-.menu-expand-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  cursor: pointer;
-  color: #687487;
-}
-.menu-expand-toggle:hover {
-  background: rgba(24, 104, 253, 0.08);
-  color: var(--hs-primary);
-}
-:deep(.el-table__expand-icon) {
-  display: none;
 }
 .system-toolbar {
   display: flex;
