@@ -1,4 +1,5 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
+import { api } from '@/api';
 import InventoryExpiryAlertForm from '../forms/InventoryExpiryAlertForm.vue';
 
 export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
@@ -7,6 +8,23 @@ export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
   subtitle: '依据效期预警配置识别临期和过期批次',
   endpoint: '/inventory/expiry-alerts',
   no: 'goodsName',
+  optionBags: ['orgs'],
+  queryFields: [
+    { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
+    {
+      key: 'warehouseId',
+      label: '仓库',
+      type: 'select',
+      dependsOn: 'orgId',
+      width: 180,
+      loadOptions: async (deps) => {
+        if (!deps.orgId) return [];
+        return (await api.get('/base-data/warehouses/options', {
+          params: { orgId: deps.orgId },
+        })) as any[];
+      },
+    },
+  ],
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 125 },
     { prop: 'goodsName', label: '商品名称', minWidth: 150, tooltip: true },

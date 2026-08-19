@@ -42,6 +42,7 @@ function blankLine() {
     adjustType: dicts.adjustTypes?.[0]?.value ?? 1,
     quantity: 1,
     remark: '',
+    stocks: [],
   };
 }
 
@@ -57,7 +58,8 @@ function stockKeyOf(stock: any) {
 }
 
 function lineStocks(line: any) {
-  return (options.stocks ?? []).filter(
+  const pool = Array.isArray(line.stocks) && line.stocks.length ? line.stocks : options.stocks;
+  return pool.filter(
     (s: any) =>
       (!line.goodsId || String(s.goodsId) === String(line.goodsId)) &&
       (!line.warehouseId || String(s.warehouseId) === String(line.warehouseId)),
@@ -82,12 +84,44 @@ function stockChanged(line: any) {
   });
 }
 
-async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+async function searchGoodsOptions(line: any, keyword: string) {
+  // 商品选项取自该行仓库库存（按 orgId+warehouseId 后端过滤），未选仓库时为空
+  if (!form.value.orgId || !line.warehouseId) return [];
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const pool = Array.isArray(line.stocks) && line.stocks.length ? line.stocks : options.stocks;
+  const seen = new Map<string, any>();
+  for (const s of pool ?? []) {
+    if (String(s.warehouseId) !== String(line.warehouseId)) continue;
+    if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
+    if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
+  }
+  return [...seen.values()].map((s: any) => ({
+    value: s.goodsId,
+    label: `${s.goodsCode || ''} ${s.goodsName || ''}`.trim(),
   }));
+}
+
+async function loadLineStocks(line: any) {
+  if (!form.value.orgId || !line.warehouseId) {
+    line.stocks = [];
+    return;
+  }
+  line.stocks = (await api
+    .get('/inventory/stock-options', {
+      params: { orgId: form.value.orgId, warehouseId: line.warehouseId },
+    })
+    .catch(() => [])) as any[];
+}
+
+async function warehouseChanged(line: any) {
+  line.stockKey = '';
+  line.inventoryQty = 0;
+  line.goodsId = '';
+  line.skuId = '';
+  line.goodsCode = '';
+  line.goodsName = '';
+  line.skuSpec = '';
+  await loadLineStocks(line);
 }
 
 async function lineGoodsChanged(line: any) {
@@ -100,11 +134,6 @@ async function lineGoodsChanged(line: any) {
   line.goodsName = g.goodsName ?? '';
   line.skuSpec = sku?.specModels ?? '';
   line.stockKey = '';
-}
-
-function warehouseChanged(line: any) {
-  line.stockKey = '';
-  line.inventoryQty = 0;
 }
 
 function addLine() {
@@ -209,6 +238,7 @@ onMounted(async () => {
       inventoryQty: Number(line.beforeQty ?? 0),
       stockKey: `${line.goodsId}-${line.skuId}-${line.warehouseId}-${line.batchNo ?? ''}`,
     }));
+    await Promise.all(form.value.details.map((line: any) => loadLineStocks(line)));
   }
 });
 </script>
@@ -242,8 +272,10 @@ onMounted(async () => {
           <RemoteSelect
             v-if="!isView"
             v-model="s.row.goodsId"
-            :fetch="searchGoodsOptions"
+            :fetch="(kw: string) => searchGoodsOptions(s.row, kw)"
             :current-label="s.row.goodsName"
+            :disabled="!s.row.warehouseId"
+            placeholder="请先选择仓库，再搜索库存商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>

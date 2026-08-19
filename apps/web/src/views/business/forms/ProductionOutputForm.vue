@@ -379,7 +379,7 @@ watch(
         />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">
+        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId" @change="reloadStocks">
           <el-option v-for="x in warehouseOptions" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>

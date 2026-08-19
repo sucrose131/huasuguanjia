@@ -21,6 +21,7 @@ const options = reactive<Record<string, any>>({
   warehouses: [],
   vendors: [],
   units: [],
+  contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
@@ -77,12 +78,35 @@ async function loadOrgScopedOptions(orgId: unknown) {
 function organizationChanged() {
   form.value.deptId = '';
   form.value.warehouseId = '';
+  form.value.details = [blankLine()];
+  options.contextGoods = [];
   loadOrgScopedOptions(form.value.orgId);
 }
 
+/** 按单据组织+仓库加载匹配商品（后端按分类仓库类型过滤），未选组织/仓库时清空 */
+async function loadContextGoods() {
+  if (!form.value.orgId || !form.value.warehouseId) {
+    options.contextGoods = [];
+    return;
+  }
+  options.contextGoods = (await api
+    .get('/purchase/product-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    })
+    .catch(() => [])) as any[];
+}
+
+function warehouseChanged() {
+  loadContextGoods();
+  form.value.details = [blankLine()];
+}
+
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const list = options.contextGoods.filter((g: any) =>
+    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  );
+  return list.map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
   }));
@@ -169,6 +193,7 @@ async function applicationChanged() {
     remark: line.remark ?? '',
   }));
   await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
+  await loadContextGoods();
 }
 
 function addLine() {
@@ -282,6 +307,7 @@ onMounted(async () => {
     }
     await loadOrgScopedOptions(form.value.orgId);
   }
+  await loadContextGoods();
 });
 </script>
 
@@ -318,7 +344,8 @@ onMounted(async () => {
         <el-select
           v-model="form.warehouseId"
           filterable
-          :disabled="isView || Boolean(form.applicationId)"
+          :disabled="isView || Boolean(form.applicationId) || !form.orgId"
+          @change="warehouseChanged"
         >
           <el-option
             v-for="x in options.warehouses"
@@ -393,6 +420,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || s.row.goodsId"
+            :disabled="!form.warehouseId"
+            placeholder="请先选择目标仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>

@@ -1432,6 +1432,7 @@ export class InventoryService {
   async checks(query: Body) {
     const { page, pageSize } = this.page(query);
     const where: Prisma.hspsi_inventory_checkWhereInput = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_check.findMany({
@@ -2092,6 +2093,7 @@ export class InventoryService {
           : this.prisma.hspsi_inventory_overflow;
     const key = type === 'overflow' ? 'overflow_id' : 'loss_id';
     const where: Body = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (type === 'loss') where.business_kind = Number(query.businessKind ?? 2);
     if (type === 'overflow' && query.onlyInputs) Object.assign(where, { input_no: { not: null } });

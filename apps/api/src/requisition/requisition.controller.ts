@@ -40,10 +40,10 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Get('product-options')
   productOptions(
+    @Query('orgId') orgId: string | undefined,
     @Query('warehouseId') warehouseId: string | undefined,
-    @CurrentUser() user: AuthUser,
   ) {
-    return this.service.productOptions(user.orgId, warehouseId);
+    return this.service.productOptions(orgId, warehouseId);
   }
 
   @RequirePermissions('requisitions')

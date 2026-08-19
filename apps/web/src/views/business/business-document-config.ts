@@ -42,6 +42,10 @@ export type QueryField = {
   dictionary?: string;
   /** options 集合名（tree-select/select 从引擎预加载的 optionBags 取数据） */
   optionBag?: OptionBagName;
+  /** 依赖字段：该字段值变化时，清空本字段值并重新加载选项、重新查询（如 仓库 依赖 组织） */
+  dependsOn?: string;
+  /** 动态选项加载（走后端）：返回 {value,label,raw?}[]，优先于 optionBag/options/dictionary；常用于按依赖字段过滤的选项 */
+  loadOptions?: (deps: Record<string, any>) => Promise<Array<{ value: string | number; label: string; raw?: any }>>;
   /** 远程搜索（remote-select 用）：返回 {value,label}[] */
   fetch?: (keyword: string) => Promise<Array<{ value: string | number; label: string }>>;
   /** 已选值回显标签（remote-select 用） */

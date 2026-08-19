@@ -125,11 +125,34 @@ async function applicationChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+  // 商品选项取自按 orgId+warehouseId 加载的库存（后端已过滤仓库类型），未选仓库时为空
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const seen = new Map<string, any>();
+  for (const s of options.stocks ?? []) {
+    if (
+      form.value.warehouseId &&
+      String(s.warehouseId) !== String(form.value.warehouseId)
+    )
+      continue;
+    if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
+    if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
+  }
+  return [...seen.values()].map((s: any) => ({
+    value: s.goodsId,
+    label: `${s.goodsCode || ''} ${s.goodsName || ''}`.trim(),
   }));
+}
+
+async function loadStocks() {
+  if (!form.value.orgId || !form.value.warehouseId) {
+    options.stocks = [];
+    return;
+  }
+  options.stocks = (await api
+    .get('/inventory/stock-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    })
+    .catch(() => [])) as any[];
 }
 
 async function lineGoodsChanged(line: any) {
@@ -244,6 +267,7 @@ onMounted(async () => {
       stockKey: stockKeyOf(line, form.value.warehouseId),
     }));
     await loadRequisitionOptions(form.value.orgId);
+    if (form.value.directOutput) await loadStocks();
   }
 });
 </script>
@@ -270,6 +294,12 @@ onMounted(async () => {
           v-model="form.warehouseId"
           filterable
           :disabled="isView || !form.orgId || !form.directOutput"
+          @change="
+            if (form.directOutput) {
+              form.details = [{ ...blankLine(), returnable: true }];
+              loadStocks();
+            }
+          "
         >
           <el-option
             v-for="x in options.requisitionWarehouses"
@@ -306,7 +336,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
-            :disabled="isView"
+            :disabled="isView || !form.warehouseId"
+            placeholder="请先选择仓库，再搜索库存商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ goodsOf(s.row).goodsName || s.row.goodsName || s.row.goodsId }}</span>

@@ -29,6 +29,8 @@ const summary = reactive<Record<string, any>>({});
 const dicts = reactive<Record<string, any[]>>({});
 const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20 });
 const options = reactive<Record<string, any[]>>({});
+/** 按依赖字段动态加载的选项（如 仓库按组织、商品按组织+仓库），key 为 queryField.key */
+const dynamicOptions = reactive<Record<string, any[]>>({});
 
 // 表单对话框
 const formDialog = ref(false);
@@ -46,6 +48,11 @@ const queryOptions = (field: { type?: string; options?: Array<{ value: string | 
   if (field.dictionary) return dicts[field.dictionary] ?? [];
   if (field.optionBag) return options[field.optionBag] ?? [];
   return field.options ?? [];
+};
+/** 字段选项：有 dependsOn 时用动态加载的选项，否则用静态选项 */
+const fieldOptions = (field: any) => {
+  if (field.dependsOn) return dynamicOptions[field.key] ?? [];
+  return queryOptions(field);
 };
 
 // 摘要卡片（对齐旧页 summary-strip 三列布局）
@@ -93,6 +100,44 @@ async function loadOptionBags() {
     const data: any = results[index];
     options[name] = (Array.isArray(data) ? data : data?.items ?? []) as any[];
   });
+}
+
+/** 按依赖字段值加载动态选项（如 仓库按组织、商品按组织+仓库），依赖值为空时选项清空 */
+async function loadFieldOptions(field: any) {
+  if (!field?.dependsOn) return;
+  const depValue = query[field.dependsOn];
+  if (depValue === undefined || depValue === null || depValue === '') {
+    dynamicOptions[field.key] = [];
+    return;
+  }
+  try {
+    if (field.loadOptions) {
+      dynamicOptions[field.key] = await field.loadOptions({ [field.dependsOn]: depValue });
+      return;
+    }
+    if (field.optionBag) {
+      const endpoint = OPTION_BAG_ENDPOINTS[field.optionBag as OptionBagName];
+      const data: any = await api.get(endpoint, {
+        params: { [field.dependsOn]: depValue },
+      });
+      dynamicOptions[field.key] = (Array.isArray(data) ? data : data?.items ?? []) as any[];
+    }
+  } catch {
+    dynamicOptions[field.key] = [];
+  }
+}
+
+/** 字段联动：依赖字段变化时，清空下游字段值并递归处理更下游、刷新查询 */
+async function handleQueryFieldChange(field: any) {
+  for (const f of props.config.queryFields ?? []) {
+    if (f.dependsOn === field.key) {
+      query[f.key] = '';
+      await handleQueryFieldChange(f);
+    }
+  }
+  await loadFieldOptions(field);
+  query.page = 1;
+  await load();
 }
 
 const columnRenderCtx: ColumnRenderContext = {
@@ -232,8 +277,13 @@ watch(
     for (const key of Object.keys(query)) delete query[key];
     Object.assign(query, { keyword: '', page: 1, pageSize: 20 });
     for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
+    for (const key of Object.keys(dynamicOptions)) delete dynamicOptions[key];
     await loadDicts();
     await loadOptionBags();
+    // 深链/回显场景：依赖字段已有值时先加载下游选项
+    for (const field of props.config.queryFields ?? []) {
+      if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+    }
     await load();
   },
 );
@@ -241,6 +291,10 @@ watch(
 onMounted(async () => {
   await loadDicts();
   await loadOptionBags();
+  // 深链/回显场景：依赖字段已有值时先加载下游选项
+  for (const field of props.config.queryFields ?? []) {
+    if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+  }
   await load();
   if (String(route.query.create ?? '') === '1') {
     const initial: Record<string, any> = { ...route.query };
@@ -292,6 +346,7 @@ onMounted(async () => {
             node-key="value"
             :props="{ label: 'label', children: 'children' }"
             :placeholder="field.label"
+            @change="handleQueryFieldChange(field)"
           />
           <el-date-picker
             v-else-if="field.type === 'date-range'"
@@ -311,6 +366,7 @@ onMounted(async () => {
             :current-label="field.currentLabel ? field.currentLabel(query[field.key]) : ''"
             clearable
             :placeholder="field.label"
+            @change="handleQueryFieldChange(field)"
           />
           <el-select
             v-else
@@ -319,9 +375,10 @@ onMounted(async () => {
             clearable
             filterable
             :placeholder="field.label"
+            @change="handleQueryFieldChange(field)"
           >
             <el-option
-              v-for="item in queryOptions(field)"
+              v-for="item in fieldOptions(field)"
               :key="item.value"
               :label="item.label"
               :value="item.value"
@@ -338,6 +395,7 @@ onMounted(async () => {
               query.keyword = '';
               query.status = '';
               for (const field of config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
+              for (const key of Object.keys(dynamicOptions)) delete dynamicOptions[key];
               load();
             "
             >重置</el-button

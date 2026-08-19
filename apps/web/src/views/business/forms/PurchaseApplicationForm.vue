@@ -19,6 +19,7 @@ const options = reactive<Record<string, any>>({
   depts: [],
   warehouses: [],
   units: [],
+  contextGoods: [],
 });
 const isView = computed(() => props.mode === 'view');
 
@@ -49,9 +50,32 @@ async function loadOrgScopedOptions(orgId: unknown) {
   options.warehouses = warehouses as any[];
 }
 
+/** 按单据组织+仓库加载匹配商品（后端按分类仓库类型过滤），未选组织/仓库时清空 */
+async function loadContextGoods() {
+  if (!form.value.orgId || !form.value.warehouseId) {
+    options.contextGoods = [];
+    return;
+  }
+  options.contextGoods = (await api
+    .get('/purchase/product-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    })
+    .catch(() => [])) as any[];
+}
+
+function warehouseChanged() {
+  if (!(form.value.details ?? []).length) return;
+  // 仓库变化后重新加载匹配商品，并清空已选明细（避免跨仓库类型残留）
+  loadContextGoods();
+  form.value.details = [blankLine()];
+}
+
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const list = options.contextGoods.filter((g: any) =>
+    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  );
+  return list.map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
   }));
@@ -174,6 +198,7 @@ onMounted(async () => {
     }
   }
   await loadOrgScopedOptions(form.value.orgId);
+  await loadContextGoods();
 });
 </script>
 
@@ -191,7 +216,7 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="目标仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView">
+        <el-select v-model="form.warehouseId" filterable :disabled="isView" @change="warehouseChanged">
           <el-option
             v-for="x in options.warehouses"
             :key="x.value"
@@ -217,6 +242,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName || s.row.goodsId"
+            :disabled="!form.warehouseId"
+            placeholder="请先选择目标仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>

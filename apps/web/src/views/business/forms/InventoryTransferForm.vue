@@ -100,11 +100,34 @@ function stockChanged(line: any) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+  // 商品选项取自调出仓库库存（stock-options 已按 orgId+warehouseId 后端过滤），未选仓库时为空
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const seen = new Map<string, any>();
+  for (const s of options.stocks ?? []) {
+    if (
+      form.value.warehouseId &&
+      String(s.warehouseId) !== String(form.value.warehouseId)
+    )
+      continue;
+    if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
+    if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
+  }
+  return [...seen.values()].map((s: any) => ({
+    value: s.goodsId,
+    label: `${s.goodsCode || ''} ${s.goodsName || ''}`.trim(),
   }));
+}
+
+async function loadStocks() {
+  if (!form.value.orgId || !form.value.warehouseId) {
+    options.stocks = [];
+    return;
+  }
+  options.stocks = (await api
+    .get('/inventory/stock-options', {
+      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
+    })
+    .catch(() => [])) as any[];
 }
 
 async function lineGoodsChanged(line: any) {
@@ -236,6 +259,7 @@ onMounted(async () => {
       stockKey: `${line.goodsId}-${line.skuId}-${form.value.warehouseId}-${line.batchNo ?? ''}`,
     }));
   }
+  await loadStocks();
 });
 </script>
 
@@ -251,7 +275,12 @@ onMounted(async () => {
           node-key="value"
           :props="{ label: 'label', children: 'children' }"
           :disabled="isView"
-          @change="form.warehouseId = ''; form.toWarehouseId = ''"
+          @change="
+            form.warehouseId = '';
+            form.toWarehouseId = '';
+            form.details = [blankLine()];
+            loadStocks();
+          "
         />
       </el-form-item>
       <el-form-item label="调出仓库" required>
@@ -259,7 +288,11 @@ onMounted(async () => {
           v-model="form.warehouseId"
           filterable
           :disabled="isView || !form.orgId"
-          @change="form.toWarehouseId = ''"
+          @change="
+            form.toWarehouseId = '';
+            form.details = [blankLine()];
+            loadStocks();
+          "
         >
           <el-option
             v-for="x in outWarehouses"
@@ -343,6 +376,8 @@ onMounted(async () => {
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
             :current-label="s.row.goodsName"
+            :disabled="!form.warehouseId"
+            placeholder="请先选择调出仓库，再搜索库存商品"
             @change="lineGoodsChanged(s.row)"
           />
           <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>
