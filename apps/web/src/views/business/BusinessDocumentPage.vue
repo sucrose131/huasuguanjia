@@ -366,9 +366,9 @@ onMounted(async () => {
               />
               <StatusTag
                 v-else-if="column.kind === 'status'"
-                :value="s.row[column.prop]"
+                :value="column.statusDict && column.render ? displayCell(s.row, column) : s.row[column.prop]"
                 :dict-code="column.statusDict"
-                :label="column.render ? displayCell(s.row, column) : undefined"
+                :label="column.render && !column.statusDict ? displayCell(s.row, column) : undefined"
               />
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
