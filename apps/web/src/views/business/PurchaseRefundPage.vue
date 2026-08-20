@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import BusinessDocumentPage from './BusinessDocumentPage.vue';
+import PurchaseDocumentPage from './PurchaseDocumentPage.vue';
 import { purchaseRefundConfig } from './configs/purchase-refund';
 </script>
 
 <template>
-  <BusinessDocumentPage :config="purchaseRefundConfig" />
+  <PurchaseDocumentPage :config="purchaseRefundConfig" resource="refunds" />
 </template>

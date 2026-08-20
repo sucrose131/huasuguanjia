@@ -7,6 +7,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
   key: 'requisitions/applications',
   title: '领用申请单',
   endpoint: '/requisitions/applications',
+  documentType: 'requisition_application',
   no: 'applicationNo',
   columns: [
     { prop: 'applicationNo', label: '申请单号', minWidth: 160, tooltip: true },
@@ -48,6 +49,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
     {
       key: 'auto-output',
       label: (row) => (Number(row.autoOutputConfirmStatus) === 1 ? '查看出库' : '办理出库'),
+      permission: 'requisitions:outputs',
       show: (row) =>
         Boolean(row.autoOutputId) &&
         (Number(row.approveStatus) === 1 || Boolean(row.reverseGenerated)),
@@ -60,6 +62,7 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
     {
       key: 'retry-oa',
       label: '重新提交OA',
+      permission: 'submit',
       kind: 'warning',
       primary: false,
       show: (row) => row.oaStatus === 'PUSH_FAILED',

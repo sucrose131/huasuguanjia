@@ -1,6 +1,6 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import PurchaseApplicationForm from '../forms/PurchaseApplicationForm.vue';
 
 /**
@@ -16,6 +16,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   title: '采购申请单',
   subtitle: '采购需求草稿、提交与审批管理',
   endpoint: '/purchase/applications',
+  documentType: 'purchase_application',
   no: 'applicationNo',
   columns: [
     { prop: 'applicationNo', label: '申请单号', minWidth: 165, tooltip: true },
@@ -103,6 +104,8 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增采购申请单',
   formComponent: PurchaseApplicationForm,
+  dialog: { width: '920px', className: 'purchase-application-form-dialog' },
+  loadDetail: async (id) => (await api.get(`/purchase/applications/${id}`)) as Record<string, any>,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
       const detail: any = await api.get(`/purchase/applications/${String(query.documentId)}`);
@@ -151,25 +154,16 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
-      confirm: '驳回后申请将退回，是否继续？',
       handler: async (row) => {
+        const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回采购申请', {
+          inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+        });
         const result: any = await api.post(`/purchase/applications/${row.id}/approve`, {
           approved: false,
-          comment: '驳回',
+          comment: String(prompt.value).trim(),
         });
         ElMessage.success(result?.message ?? '已驳回');
       },
-    },
-    {
-      key: 'generate-order',
-      label: '生成订单',
-      kind: 'success',
-      primary: false,
-      show: (row) => Number(row.approveStatus) === 1 && Number(row.remainingDetailCount) > 0,
-      confirm: '按申请整单生成采购订单，是否继续？',
-      // 后端 generate-order 需要供应商与每行金额（原页面用专用弹窗收集），
-      // 引擎行操作无法承载该弹窗，故保留入口：跳转到采购订单页按申请预填。
-      handler: (row, ctx) => ctx.navigate('/purchase/orders', { applicationId: String(row.id) }),
     },
     {
       key: 'delete',

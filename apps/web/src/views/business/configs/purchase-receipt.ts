@@ -8,6 +8,7 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
   title: '采购入库单',
   subtitle: '按采购订单生成待入库单，补充库位与批次后执行库存过账',
   endpoint: '/purchase/receipts',
+  documentType: 'purchase_receipt',
   no: 'receiptNo',
   columns: [
     { prop: 'receiptNo', label: '入库单号', minWidth: 160 },

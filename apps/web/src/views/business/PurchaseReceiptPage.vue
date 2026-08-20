@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import BusinessDocumentPage from './BusinessDocumentPage.vue';
+import PurchaseDocumentPage from './PurchaseDocumentPage.vue';
 import { purchaseReceiptConfig } from './configs/purchase-receipt';
 </script>
 
 <template>
-  <BusinessDocumentPage :config="purchaseReceiptConfig" />
+  <PurchaseDocumentPage :config="purchaseReceiptConfig" resource="receipts" />
 </template>

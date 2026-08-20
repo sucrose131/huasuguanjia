@@ -67,6 +67,8 @@ export type RowAction = {
   confirm?: string | ((row: Record<string, any>) => string);
   /** 是否作为主操作平铺展示（默认 true：平铺在操作列；false 时收进“更多”下拉） */
   primary?: boolean;
+  /** 菜单内操作权限；支持 create/update/delete，或完整权限码。缺省按 action key 推导。 */
+  permission?: string;
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
 };
@@ -91,6 +93,8 @@ export type BusinessDocumentConfig = {
   subtitle?: string;
   /** 列表接口 */
   endpoint: string;
+  /** 单据中心类型；配置后统一提供附件与全链路追溯。 */
+  documentType?: string;
   /** 列表主编号字段 */
   no: string;
   columns: BusinessColumn[];
@@ -103,6 +107,9 @@ export type BusinessDocumentConfig = {
   /** 摘要卡片映射（summary 为 true 时按此渲染头部卡片；key 对应列表接口返回的 summary 对象字段） */
   summaryLabels?: Array<{ label: string; key: string; kind?: 'money' | 'number' }>;
   creatable?: boolean;
+  /** 页面及新增权限。缺省按当前路由和 create 操作判断。 */
+  pagePermission?: string;
+  createPermission?: string;
   createText?: string;
   /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */
   createPreset?: () => Record<string, any>;
@@ -110,6 +117,10 @@ export type BusinessDocumentConfig = {
   rowActions?: RowAction[];
   /** 专属表单组件（v-model 接收 form、emit save/cancel），可为空（只读业务） */
   formComponent?: Component;
+  /** 通用表单弹框布局；复杂业务弹框仍由薄页面通过 business-dialogs 插槽挂载。 */
+  dialog?: { width?: string; top?: string; className?: string };
+  /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
+  loadDetail?: (id: string | number) => Promise<Record<string, any>>;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */
   openFromRoute?: (
     query: Record<string, any>,

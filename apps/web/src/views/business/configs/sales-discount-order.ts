@@ -1,6 +1,6 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import SalesDiscountOrderForm from '../forms/SalesDiscountOrderForm.vue';
 
 type Row = Record<string, any>;
@@ -82,14 +82,23 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
       kind: 'danger',
       primary: false,
       show: canDispose,
-      confirm: (row) =>
-        hasSource(row)
-          ? '确认未售出后本单将关闭且不改变库存，是否继续？'
-          : '驳回后本单将关闭，是否继续？',
       handler: async (row) => {
+        let comment = '确认未售出';
+        if (hasSource(row)) {
+          await ElMessageBox.confirm(
+            '确认未售出后本单将关闭且不改变库存，是否继续？',
+            '确认未售出',
+            { type: 'warning' },
+          );
+        } else {
+          const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回折价销售单', {
+            inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+          });
+          comment = String(prompt.value).trim();
+        }
         const result: any = await api.post(`/sales/discount-orders/${row.id}/approve`, {
           approved: false,
-          comment: hasSource(row) ? '确认未售出' : '驳回',
+          comment,
         });
         ElMessage.success(result?.message ?? '操作成功');
       },
@@ -97,6 +106,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     {
       key: 'create-output',
       label: '生成折价出库',
+      permission: 'sales:outputs:create',
       kind: 'success',
       primary: false,
       show: (row) => approveStatus(row) === 1 && !hasSource(row) && deliveryStatus(row) !== 3,
@@ -106,6 +116,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     {
       key: 'receive',
       label: '登记收款',
+      permission: 'sales:payments:create',
       kind: 'success',
       primary: false,
       show: (row) =>
@@ -120,6 +131,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     {
       key: 'refund',
       label: '登记退款',
+      permission: 'sales:refunds:create',
       kind: 'warning',
       primary: false,
       show: (row) => Number(row.netAmount ?? 0) > 0.000001,

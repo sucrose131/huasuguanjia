@@ -7,6 +7,7 @@ export const productionShortageConfig: BusinessDocumentConfig = {
   key: 'production/shortages',
   title: '生产缺料清单',
   endpoint: '/production/shortages',
+  documentType: 'production_shortage',
   no: 'shortageNo',
   creatable: false,
   columns: [
@@ -31,6 +32,7 @@ export const productionShortageConfig: BusinessDocumentConfig = {
     {
       key: 'terminate',
       label: '终止生产',
+      permission: 'production:plans:terminate',
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.status) === 0,

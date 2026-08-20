@@ -6,6 +6,7 @@ import type { BusinessDocumentConfig, RowAction } from './business-document-conf
 import ExecuteOutDialog from '@/components/production/ExecuteOutDialog.vue';
 import TempSupplementDialog from '@/components/production/TempSupplementDialog.vue';
 import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
+import SupplementHistoryDialog from '@/components/production/SupplementHistoryDialog.vue';
 
 type B = Record<string, any>;
 
@@ -13,6 +14,7 @@ const selectedOutRow = ref<B | null>(null);
 const executeOutVisible = ref(false);
 const tempSupplVisible = ref(false);
 const bomReturnVisible = ref(false);
+const supplementHistoryVisible = ref(false);
 
 let resolveExecute: (() => void) | null = null;
 let resolveTempSuppl: (() => void) | null = null;
@@ -82,12 +84,14 @@ const shellActions: RowAction[] = [
     show: (row) =>
       Number(row.outType) === 1 && Number(row.confirmStatus ?? row.status) === 0,
     handler: (row) => openDialog('execute', row),
+    permission: 'confirm',
   },
   {
     key: 'temp-suppl',
     label: '临时补料',
     show: (row) => Number(row.outType) === 1 && Number(row.confirmStatus) === 1,
     handler: (row) => openDialog('temp-suppl', row),
+    permission: 'create-material-return',
   },
   {
     key: 'bom-return',
@@ -95,6 +99,18 @@ const shellActions: RowAction[] = [
     show: (row) =>
       Number(row.outType) === 1 && Number(row.confirmStatus) === 1,
     handler: (row) => openDialog('bom-return', row),
+    permission: 'create-material-return',
+  },
+  {
+    key: 'supplement-history',
+    label: '补料明细',
+    primary: false,
+    show: (row) => Number(row.outType) === 1,
+    permission: 'production:outputs',
+    handler: (row) => {
+      selectedOutRow.value = row;
+      supplementHistoryVisible.value = true;
+    },
   },
 ];
 
@@ -120,5 +136,9 @@ const config = computed<BusinessDocumentConfig>(() => ({
     v-model="bomReturnVisible"
     :out-row="selectedOutRow ?? {}"
     @done="onDialogDone('bom-return')"
+  />
+  <SupplementHistoryDialog
+    v-model="supplementHistoryVisible"
+    :out-doc="selectedOutRow ?? {}"
   />
 </template>

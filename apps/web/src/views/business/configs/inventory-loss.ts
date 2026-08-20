@@ -8,6 +8,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
   title: '报损/报亏单',
   subtitle: '支持盘点损坏生成和日常独立报损，按处置方式完成库存闭环',
   endpoint: '/inventory/losses',
+  documentType: 'inventory_loss',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '单号', minWidth: 165 },

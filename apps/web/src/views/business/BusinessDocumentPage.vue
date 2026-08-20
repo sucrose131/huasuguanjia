@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { moneyText } from '@/utils/format';
 import { useAuthStore } from '@/stores/auth';
+import { canPageAction, hasPermission } from '@/utils/permission';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import StatusTag from '@/components/StatusTag.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
 import type {
   BusinessDocumentConfig,
   BusinessDocumentContext,
@@ -21,6 +24,7 @@ const props = defineProps<{ config: BusinessDocumentConfig }>();
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const slots = useSlots();
 
 const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
@@ -36,6 +40,33 @@ const dynamicOptions = reactive<Record<string, any[]>>({});
 const formDialog = ref(false);
 const formMode = ref<'create' | 'edit' | 'view'>('create');
 const form = ref<Record<string, any>>({});
+const detailLoading = ref(false);
+const traceVisible = ref(false);
+const traceRow = ref<Record<string, any>>({});
+
+const hasConfiguredPermission = (permission?: string, fallbackAction?: string) => {
+  if (permission?.includes(':')) return hasPermission(auth.user, permission);
+  return canPageAction(auth.user, route.path, permission || fallbackAction);
+};
+const canViewPage = () =>
+  props.config.pagePermission
+    ? hasConfiguredPermission(props.config.pagePermission)
+    : canPageAction(auth.user, route.path);
+const canCreate = computed(
+  () => props.config.creatable !== false && hasConfiguredPermission(props.config.createPermission, 'create'),
+);
+
+function defaultActionPermission(action: RowAction) {
+  if (action.key === 'view') return undefined;
+  if (action.key === 'edit') return 'update';
+  if (['delete', 'remove'].includes(action.key)) return 'delete';
+  if (action.key === 'reject') return 'approve';
+  return action.key;
+}
+const canRunAction = (action: RowAction) => {
+  const permission = action.permission ?? defaultActionPermission(action);
+  return permission ? hasConfiguredPermission(permission) : canViewPage();
+};
 
 for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
 
@@ -233,7 +264,7 @@ async function runAction(action: RowAction, row: Record<string, any>) {
 
 const visibleActions = (row: Record<string, any>) =>
   (props.config.rowActions ?? []).filter((action) =>
-    action.show ? action.show(row) : true,
+    canRunAction(action) && (action.show ? action.show(row) : true),
   );
 
 // 主操作平铺（默认），次要操作收进“更多”下拉（primary: false）
@@ -241,20 +272,38 @@ const primaryActions = (row: Record<string, any>) =>
   visibleActions(row).filter((action) => action.primary !== false);
 const moreActions = (row: Record<string, any>) =>
   visibleActions(row).filter((action) => action.primary === false);
+const hasMoreActions = (row: Record<string, any>) =>
+  moreActions(row).length > 0 || Boolean(slots['more-actions']) || Boolean(props.config.documentType);
+
+function openTrace(row: Record<string, any>) {
+  traceRow.value = row;
+  traceVisible.value = true;
+}
 
 function openCreate(initial: Record<string, any> = {}) {
   formMode.value = 'create';
   form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
   formDialog.value = true;
 }
-function openEdit(row: Record<string, any>) {
+async function resolveDetail(row: Record<string, any>) {
+  if (!props.config.loadDetail || row.id == null) return { ...row };
+  detailLoading.value = true;
+  try {
+    const detail = await props.config.loadDetail(row.id);
+    // 部分旧详情接口仅返回数据库原始主键名；统一保留列表标准 id，避免编辑和附件丢失单据身份。
+    return { ...detail, id: detail.id ?? row.id };
+  } finally {
+    detailLoading.value = false;
+  }
+}
+async function openEdit(row: Record<string, any>) {
   formMode.value = 'edit';
-  form.value = { ...row };
+  form.value = await resolveDetail(row);
   formDialog.value = true;
 }
-function openView(row: Record<string, any>) {
+async function openView(row: Record<string, any>) {
   formMode.value = 'view';
-  form.value = { ...row };
+  form.value = await resolveDetail(row);
   formDialog.value = true;
 }
 function closeForm() {
@@ -314,8 +363,9 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle || '真实业务数据、来源追溯与库存事务处理' }}</p>
       </div>
       <div class="page-actions">
+        <slot name="page-actions" :refresh="load" :open-create="openCreate" />
         <el-button
-          v-if="config.creatable !== false"
+          v-if="canCreate"
           type="primary"
           @click="openCreate()"
           >{{ config.createText || '新增' + config.title }}</el-button
@@ -446,9 +496,16 @@ onMounted(async () => {
                   link
                   :type="action.kind ?? 'primary'"
                   @click="runAction(action, s.row)"
-                  >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-button
+                >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-button
                 >
-                <template v-if="moreActions(s.row).length" #more>
+                <slot
+                  name="row-actions"
+                  :row="s.row"
+                  :refresh="load"
+                  :open-view="openView"
+                  :open-edit="openEdit"
+                />
+                <template v-if="hasMoreActions(s.row)" #more>
                   <el-dropdown-item
                     v-for="action in moreActions(s.row)"
                     :key="action.key"
@@ -456,6 +513,11 @@ onMounted(async () => {
                     @click="runAction(action, s.row)"
                     >{{ typeof action.label === 'function' ? action.label(s.row) : action.label }}</el-dropdown-item
                   >
+                  <slot name="more-actions" :row="s.row" :refresh="load" />
+                  <el-dropdown-item
+                    v-if="config.documentType"
+                    @click="openTrace(s.row)"
+                  >全链路追溯</el-dropdown-item>
                 </template>
               </TableRowActions>
             </template>
@@ -480,8 +542,9 @@ onMounted(async () => {
     <el-dialog
       v-model="formDialog"
       :title="config.title"
-      width="720px"
-      top="3vh"
+      :width="config.dialog?.width || '720px'"
+      :top="config.dialog?.top || '3vh'"
+      :class="config.dialog?.className"
       :close-on-click-modal="false"
     >
       <component
@@ -492,6 +555,20 @@ onMounted(async () => {
         @saved="closeForm(); load()"
         @cancel="closeForm"
       />
+      <slot name="form-extra" :form="form" :mode="formMode" />
+      <DocumentAttachments
+        v-if="formMode !== 'create' && config.documentType && form.id"
+        :document-type="config.documentType"
+        :document-id="form.id"
+      />
     </el-dialog>
+    <slot name="business-dialogs" :refresh="load" />
+    <DocumentTraceDialog
+      v-if="config.documentType"
+      v-model="traceVisible"
+      :document-type="config.documentType"
+      :document-id="traceRow.id || ''"
+      :document-no="String(traceRow[config.no] ?? '')"
+    />
   </section>
 </template>

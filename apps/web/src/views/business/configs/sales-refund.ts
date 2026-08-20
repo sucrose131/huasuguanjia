@@ -7,6 +7,7 @@ export const salesRefundConfig: BusinessDocumentConfig = {
   key: 'sales/refunds',
   title: '销售退款',
   endpoint: '/sales/refunds',
+  documentType: 'sales_refund',
   no: 'paymentNo',
   columns: [
     { prop: 'paymentNo', label: '退款单号', minWidth: 160 },
@@ -48,6 +49,7 @@ export const salesRefundConfig: BusinessDocumentConfig = {
     {
       key: 'void',
       label: '作废',
+      permission: 'delete',
       kind: 'danger',
       primary: false,
       confirm: '确认作废该退款记录？',

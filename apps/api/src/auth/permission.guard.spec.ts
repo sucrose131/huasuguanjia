@@ -72,4 +72,13 @@ describe('PermissionGuard 菜单内操作权限', () => {
     };
     expect(guard(['goods']).canActivate(context(request))).toBe(true);
   });
+
+  it('模块目录权限不能代替具体业务页面权限', () => {
+    const request = {
+      method: 'GET',
+      originalUrl: '/api/purchase/orders',
+      user: { permissions: ['purchase', 'purchase:applications'] },
+    };
+    expect(() => guard().canActivate(context(request))).toThrow(ForbiddenException);
+  });
 });

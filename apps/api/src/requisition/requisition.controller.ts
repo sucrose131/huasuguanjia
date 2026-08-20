@@ -65,13 +65,13 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Post('applications')
   createApplication(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(null, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(null, body, user.id, Boolean(body.submit), user.orgId);
   }
 
   @RequirePermissions('requisitions')
   @Patch('applications/:id')
   updateApplication(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(id, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(id, body, user.id, Boolean(body.submit), user.orgId);
   }
 
   @RequirePermissions('requisitions')

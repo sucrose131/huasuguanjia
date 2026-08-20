@@ -142,6 +142,7 @@ describe('RequisitionService locked requisition mutations', () => {
       },
       '3',
       false,
+      '1',
     );
 
     expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(

@@ -19,7 +19,7 @@ import { PurchaseService } from './purchase.service';
 import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
 import { AmountAccessService } from '../amount-access/amount-access.service';
-import { PURCHASE_ORDER_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
+import { GLOBAL_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
 import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
@@ -36,7 +36,7 @@ export class PurchaseController {
     const access = await this.amountAccess.forUser(userId);
     const protectedValue = access.canViewAmount
       ? value
-      : this.amountAccess.maskFields(value, PURCHASE_ORDER_AMOUNT_FIELDS);
+      : this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
     if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
       return protectedValue;
     return {
@@ -301,18 +301,19 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Get('refunds')
-  refunds(@Query() q: Record<string, string>) {
-    return this.service.refunds(q);
+  async refunds(@Query() q: Record<string, string>, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refunds(q), u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Delete('refunds/flows/:id')
   voidRefundFlow(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.service.voidRefundFlow(id, u.id);
   }
   @RequirePermissions('purchase')
   @Get('refunds/:id')
-  refund(@Param('id') id: string) {
-    return this.service.refund(id);
+  async refund(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refund(id), u.id);
   }
   @RequirePermissions('purchase')
   @RequireAmountEdit()

@@ -1,6 +1,6 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
 
 export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
@@ -8,6 +8,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   title: '库存调整',
   subtitle: '通过审批流程修正账面库存并保留调整依据',
   endpoint: '/inventory/adjustments',
+  documentType: 'inventory_adjust',
   no: 'adjustNo',
   columns: [
     { prop: 'adjustNo', label: '调整单号', minWidth: 150 },
@@ -85,9 +86,14 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
-      confirm: '确认驳回该调整单？',
       handler: async (row) => {
-        await api.post(`/inventory/adjustments/${row.id}/approve`, { approved: false, comment: '' });
+        const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回库存调整', {
+          inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+        });
+        await api.post(`/inventory/adjustments/${row.id}/approve`, {
+          approved: false,
+          comment: String(prompt.value).trim(),
+        });
         ElMessage.success('已驳回');
       },
     },

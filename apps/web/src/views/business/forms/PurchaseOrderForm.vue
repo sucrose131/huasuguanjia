@@ -26,6 +26,7 @@ const options = reactive<Record<string, any>>({
 const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
 
 function blankLine() {
   return {
@@ -33,7 +34,7 @@ function blankLine() {
     skuId: '',
     unitType: 0,
     quantity: 1,
-    price: 0,
+    totalAmount: 0,
     goodsCode: '',
     goodsName: '',
     skuSpec: '',
@@ -43,7 +44,12 @@ function blankLine() {
 }
 
 function lineAmount(line: any) {
-  return Number((Number(line.quantity ?? 0) * Number(line.price ?? 0)).toFixed(2));
+  return Number(Number(line.totalAmount ?? 0).toFixed(2));
+}
+
+function lineUnitPrice(line: any) {
+  const quantity = Number(line.quantity ?? 0);
+  return quantity > 0 ? Number((lineAmount(line) / quantity).toFixed(2)) : 0;
 }
 
 const orderTotal = computed(() =>
@@ -156,8 +162,10 @@ async function lineGoodsChanged(line: any) {
   line.goodsCode = g.queryCode ?? '';
   line.goodsName = g.goodsName ?? '';
   line.skuSpec = sku?.specModels ?? '';
-  if (canEditAmount.value && !Number(line.price)) {
-    line.price = Number(sku?.costPrice ?? g.costPrice ?? 0);
+  if (canEditAmount.value && !Number(line.totalAmount)) {
+    line.totalAmount = Number(
+      (Number(sku?.costPrice ?? g.costPrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2),
+    );
   }
   // 商品分类类型变化后，若已选仓库类型不匹配则清空仓库
   if (form.value.warehouseId && documentWarehouseType.value) {
@@ -233,7 +241,9 @@ async function applicationChanged() {
     skuId: line.skuId,
     unitType: line.unitType,
     quantity: Number(line.quantity ?? 0),
-    price: Number(line.referencePrice ?? 0),
+    totalAmount: Number(
+      (Number(line.referencePrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2),
+    ),
     remark: line.remark ?? '',
     goodsWarehouseType: Number(line.goodsWarehouseType ?? 0),
   }));
@@ -294,8 +304,8 @@ function validate() {
       ElMessage.warning('明细数量必须大于 0');
       return false;
     }
-    if (!(Number(line.price) > 0)) {
-      ElMessage.warning('明细单价必须大于 0');
+    if (!(Number(line.totalAmount) > 0)) {
+      ElMessage.warning('明细总金额必须大于 0');
       return false;
     }
   }
@@ -313,6 +323,7 @@ async function save() {
         ...line,
         quantity: Number(line.quantity),
         totalAmount: lineAmount(line),
+        unitPrice: lineUnitPrice(line),
       })),
     };
     const result: any =
@@ -364,7 +375,9 @@ onMounted(async () => {
       Object.assign(form.value, normalizeOrder(detail));
       form.value.details = (form.value.details ?? []).map((line: any) => ({
         ...line,
-        price: Number(line.unitPrice ?? 0),
+        totalAmount: Number(
+          line.totalAmount ?? Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0),
+        ),
       }));
     }
     if (Array.isArray(form.value.details)) {
@@ -524,21 +537,23 @@ onMounted(async () => {
           />
         </template>
       </el-table-column>
-      <el-table-column label="单价" width="140">
+      <el-table-column label="总金额" width="155" align="right">
         <template #default="s">
           <el-input-number
-            v-model="s.row.price"
+            v-if="canViewAmount"
+            v-model="s.row.totalAmount"
             :min="0"
             :precision="2"
             :step="1"
             controls-position="right"
             :disabled="isView || !canEditAmount"
           />
+          <span v-else>****</span>
         </template>
       </el-table-column>
-      <el-table-column label="金额" width="120" align="right">
+      <el-table-column label="计算单价" width="120" align="right">
         <template #default="s">
-          {{ lineAmount(s.row).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+          {{ canViewAmount ? lineUnitPrice(s.row).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '****' }}
         </template>
       </el-table-column>
       <el-table-column label="备注" min-width="130">
@@ -552,7 +567,7 @@ onMounted(async () => {
     </el-table>
 
     <div class="form-total">
-      合计：{{ orderQuantity }} 件　订单金额 ¥ {{ orderTotal.toFixed(2) }}
+      合计：{{ orderQuantity }} 件　订单金额 {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
     </div>
 
     <div v-if="!isView" class="form-actions">

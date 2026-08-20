@@ -8,6 +8,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   title: '报损出库单',
   subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
+  documentType: 'inventory_loss_output',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '单号', minWidth: 165 },

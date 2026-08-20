@@ -1,12 +1,13 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import ProductionPlanForm from '../forms/ProductionPlanForm.vue';
 
 export const productionPlanConfig: BusinessDocumentConfig = {
   key: 'production/plans',
   title: '生产计划单',
   endpoint: '/production/plans',
+  documentType: 'production_plan',
   no: 'planNo',
   columns: [
     { prop: 'planNo', label: '生产计划单号', minWidth: 155, tooltip: true },
@@ -70,11 +71,13 @@ export const productionPlanConfig: BusinessDocumentConfig = {
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.planStatus) === 1,
-      confirm: '驳回后计划将回到草稿状态，是否继续？',
       handler: async (row) => {
+        const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回生产计划', {
+          inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+        });
         const result: any = await api.post(`/production/plans/${row.id}/approve`, {
           approved: false,
-          comment: '驳回',
+          comment: String(prompt.value).trim(),
         });
         ElMessage.success(result?.message ?? '已驳回');
       },
@@ -98,6 +101,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
     {
       key: 'create-output',
       label: '生成BOM出库',
+      permission: 'production:outputs:create',
       kind: 'success',
       primary: false,
       show: (row) =>

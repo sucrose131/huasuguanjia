@@ -1,6 +1,6 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import InventoryTransferForm from '../forms/InventoryTransferForm.vue';
 
 export const inventoryTransferConfig: BusinessDocumentConfig = {
@@ -8,6 +8,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
   title: '库存调拨',
   subtitle: '同类型仓库之间的双边库存调拨与审批',
   endpoint: '/inventory/transfers',
+  documentType: 'inventory_transfer',
   no: 'transferNo',
   columns: [
     { prop: 'transferNo', label: '调拨单号', minWidth: 150 },
@@ -90,9 +91,14 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
-      confirm: '确认驳回该调拨单？',
       handler: async (row) => {
-        await api.post(`/inventory/transfers/${row.id}/approve`, { approved: false, comment: '' });
+        const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回库存调拨', {
+          inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+        });
+        await api.post(`/inventory/transfers/${row.id}/approve`, {
+          approved: false,
+          comment: String(prompt.value).trim(),
+        });
         ElMessage.success('已驳回');
       },
     },

@@ -19,7 +19,8 @@ const options = reactive<Record<string, any>>({ orgs: [], warehouses: [] });
 const dicts = reactive<Record<string, any[]>>({ checkTypes: [] });
 
 const isView = computed(() => props.mode === 'view');
-const isCreate = computed(() => props.mode === 'create');
+/** 新增成功后仍停留在同一弹框，取得 id 即进入实盘录入阶段。 */
+const isCreate = computed(() => props.mode === 'create' && !form.value.id);
 const organizationTree = computed(() =>
   buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
 );
@@ -90,7 +91,11 @@ async function save() {
         checkDate: form.value.checkDate,
         remark: form.value.remark,
       });
-      ElMessage.success(result?.message ?? '盘点单已创建');
+      const detail: any = await api.get(`${url}/${result.id}`);
+      Object.assign(form.value, detail);
+      (form.value.details ?? []).forEach(recalcCheckLine);
+      ElMessage.success('库存已载入，请继续录入实盘数量');
+      return;
     } else {
       (form.value.details ?? []).forEach(recalcCheckLine);
       const result: any = await api.patch(`${url}/${form.value.id}`, {
@@ -199,7 +204,7 @@ onMounted(async () => {
     </div>
 
     <div v-if="isCreate" class="load-hint">
-      选择组织、仓库、盘点类型和日期后点击「保存」，系统将按该仓库全部在库商品批次自动生成盘点明细；保存后请回到列表点击「编辑」录入实盘数量。
+      选择组织、仓库、盘点类型和日期后点击「载入盘点明细」，系统将在当前弹框载入该仓库全部在库商品批次，可直接继续录入实盘数量。
     </div>
 
     <template v-if="!isCreate">
@@ -281,7 +286,9 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button type="primary" :loading="saving" @click="save">
+        {{ isCreate ? '载入盘点明细' : '保存并提交' }}
+      </el-button>
     </div>
   </el-form>
 </template>
