@@ -1,24 +1,22 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import PurchaseDocumentPage from './PurchaseDocumentPage.vue';
 import { purchaseApplicationConfig } from './configs/purchase-application';
 import PurchaseApplicationOrderPreviewDialog from '@/components/purchase/PurchaseApplicationOrderPreviewDialog.vue';
 import { useAuthStore } from '@/stores/auth';
-import { canPageAction } from '@/utils/permission';
+import { hasPermission } from '@/utils/permission';
 
 type PreviewMode = 'all' | 'partial' | 'related';
 const auth = useAuthStore();
-const route = useRoute();
 const previewVisible = ref(false);
 const applicationId = ref('');
 const previewMode = ref<PreviewMode>('all');
 const refreshAfterGenerate = ref<null | (() => Promise<void>)>(null);
 
-const canUpdate = () => canPageAction(auth.user, route.path, 'update');
 const canGenerate = (row: Record<string, any>) =>
-  canUpdate() && Number(row.approveStatus) === 1;
+  hasPermission(auth.user, 'purchase:applications:generate-order') &&
+  Number(row.approveStatus) === 1;
 
 function openPreview(row: Record<string, any>, mode: PreviewMode, refresh: () => Promise<void>) {
   if (mode !== 'related' && !auth.amountAccess.canEditAmount) {

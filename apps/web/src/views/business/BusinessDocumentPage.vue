@@ -5,18 +5,18 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { moneyText } from '@/utils/format';
 import { useAuthStore } from '@/stores/auth';
-import { canPageAction, hasPermission } from '@/utils/permission';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
-import DocumentTraceDialog from '@/components/DocumentTraceDialog.vue';
+import { useBusinessDocumentPermissions } from './use-business-document-permissions';
+import { useBusinessDocumentOptions } from './use-business-document-options';
 import type {
   BusinessDocumentConfig,
   BusinessDocumentContext,
   ColumnRenderContext,
-  OptionBagName,
   RowAction,
 } from './business-document-config';
 
@@ -30,61 +30,29 @@ const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const summary = reactive<Record<string, any>>({});
-const dicts = reactive<Record<string, any[]>>({});
 const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20 });
-const options = reactive<Record<string, any[]>>({});
-/** 按依赖字段动态加载的选项（如 仓库按组织、商品按组织+仓库），key 为 queryField.key */
-const dynamicOptions = reactive<Record<string, any[]>>({});
 
 // 表单对话框
 const formDialog = ref(false);
 const formMode = ref<'create' | 'edit' | 'view'>('create');
 const form = ref<Record<string, any>>({});
 const detailLoading = ref(false);
-const traceVisible = ref(false);
-const traceRow = ref<Record<string, any>>({});
-
-const hasConfiguredPermission = (permission?: string, fallbackAction?: string) => {
-  if (permission?.includes(':')) return hasPermission(auth.user, permission);
-  return canPageAction(auth.user, route.path, permission || fallbackAction);
-};
-const canViewPage = () =>
-  props.config.pagePermission
-    ? hasConfiguredPermission(props.config.pagePermission)
-    : canPageAction(auth.user, route.path);
-const canCreate = computed(
-  () => props.config.creatable !== false && hasConfiguredPermission(props.config.createPermission, 'create'),
-);
-
-function defaultActionPermission(action: RowAction) {
-  if (action.key === 'view') return undefined;
-  if (action.key === 'edit') return 'update';
-  if (['delete', 'remove'].includes(action.key)) return 'delete';
-  if (action.key === 'reject') return 'approve';
-  return action.key;
-}
-const canRunAction = (action: RowAction) => {
-  const permission = action.permission ?? defaultActionPermission(action);
-  return permission ? hasConfiguredPermission(permission) : canViewPage();
-};
+const traceRef = ref<InstanceType<typeof BusinessDocumentTrace>>();
+const { canCreate, canRunAction } = useBusinessDocumentPermissions(() => props.config);
+const {
+  dicts,
+  options,
+  dynamicOptions,
+  statusOptions,
+  organizationTree,
+  fieldOptions,
+  loadDicts,
+  loadOptionBags,
+  loadFieldOptions,
+  clearDynamicOptions,
+} = useBusinessDocumentOptions(() => props.config, query);
 
 for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
-
-const statusOptions = computed(() => {
-  if (props.config.autoStatusFilter === false) return [];
-  const code = (props.config.dictionaries ?? []).find((item) => item.includes('status'));
-  return code ? (dicts[code] ?? []) : [];
-});
-const queryOptions = (field: { type?: string; options?: Array<{ value: string | number; label: string }>; dictionary?: string; optionBag?: string }) => {
-  if (field.dictionary) return dicts[field.dictionary] ?? [];
-  if (field.optionBag) return options[field.optionBag] ?? [];
-  return field.options ?? [];
-};
-/** 字段选项：有 dependsOn 时用动态加载的选项，否则用静态选项 */
-const fieldOptions = (field: any) => {
-  if (field.dependsOn) return dynamicOptions[field.key] ?? [];
-  return queryOptions(field);
-};
 
 // 摘要卡片（对齐旧页 summary-strip 三列布局）
 const summaryItems = computed<Array<{ label: string; value: number | string }>>(() => {
@@ -97,66 +65,6 @@ const summaryItems = computed<Array<{ label: string; value: number | string }>>(
     return { label: item.label, value: String(raw ?? '0') };
   });
 });
-
-async function loadDicts() {
-  for (const code of props.config.dictionaries ?? []) {
-    if (dicts[code]) continue;
-    dicts[code] = (await api.get(`/dictionaries/${code}`).catch(() => [])) as any[];
-  }
-}
-
-// 预加载公共 options 集合（供列 render 的 lookup/byId 使用）
-const OPTION_BAG_ENDPOINTS: Record<OptionBagName, string> = {
-  orgs: '/base-data/organizations/options',
-  warehouses: '/base-data/warehouses/options',
-  depts: '/base-data/departments/options',
-  vendors: '/base-data/vendors/options',
-  users: '/base-data/users/options',
-  units: '/base-data/units/options',
-  goods: '/goods',
-};
-
-async function loadOptionBags() {
-  const bags = props.config.optionBags ?? [];
-  const results = await Promise.all(
-    bags.map((name) =>
-      api
-        .get(OPTION_BAG_ENDPOINTS[name], {
-          ...(name === 'goods' ? { params: { pageSize: 200, status: 1 } } : {}),
-        })
-        .catch(() => []),
-    ),
-  );
-  bags.forEach((name, index) => {
-    const data: any = results[index];
-    options[name] = (Array.isArray(data) ? data : data?.items ?? []) as any[];
-  });
-}
-
-/** 按依赖字段值加载动态选项（如 仓库按组织、商品按组织+仓库），依赖值为空时选项清空 */
-async function loadFieldOptions(field: any) {
-  if (!field?.dependsOn) return;
-  const depValue = query[field.dependsOn];
-  if (depValue === undefined || depValue === null || depValue === '') {
-    dynamicOptions[field.key] = [];
-    return;
-  }
-  try {
-    if (field.loadOptions) {
-      dynamicOptions[field.key] = await field.loadOptions({ [field.dependsOn]: depValue });
-      return;
-    }
-    if (field.optionBag) {
-      const endpoint = OPTION_BAG_ENDPOINTS[field.optionBag as OptionBagName];
-      const data: any = await api.get(endpoint, {
-        params: { [field.dependsOn]: depValue },
-      });
-      dynamicOptions[field.key] = (Array.isArray(data) ? data : data?.items ?? []) as any[];
-    }
-  } catch {
-    dynamicOptions[field.key] = [];
-  }
-}
 
 /** 字段联动：依赖字段变化时，清空下游字段值并递归处理更下游、刷新查询 */
 async function handleQueryFieldChange(field: any) {
@@ -213,19 +121,6 @@ async function load() {
   }
 }
 
-// 组织树（tree-select 用）：由 orgs options 构建
-const organizationTree = computed(() => {
-  const build = (items: any[], parentId?: string): any[] =>
-    items
-      .filter((item: any) => (item.raw?.parentId ?? item.parentId ?? null) === (parentId ?? null))
-      .map((item: any) => ({
-        value: item.value,
-        label: item.label,
-        children: build(items, item.value),
-      }));
-  return build(options.orgs ?? []);
-});
-
 function displayCell(
   row: Record<string, any>,
   column: { prop: string; kind?: string; render?: (row: Record<string, any>, ctx: ColumnRenderContext) => string },
@@ -275,11 +170,6 @@ const moreActions = (row: Record<string, any>) =>
 const hasMoreActions = (row: Record<string, any>) =>
   moreActions(row).length > 0 || Boolean(slots['more-actions']) || Boolean(props.config.documentType);
 
-function openTrace(row: Record<string, any>) {
-  traceRow.value = row;
-  traceVisible.value = true;
-}
-
 function openCreate(initial: Record<string, any> = {}) {
   formMode.value = 'create';
   form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
@@ -326,7 +216,7 @@ watch(
     for (const key of Object.keys(query)) delete query[key];
     Object.assign(query, { keyword: '', page: 1, pageSize: 20 });
     for (const field of props.config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
-    for (const key of Object.keys(dynamicOptions)) delete dynamicOptions[key];
+    clearDynamicOptions();
     await loadDicts();
     await loadOptionBags();
     // 深链/回显场景：依赖字段已有值时先加载下游选项
@@ -445,7 +335,7 @@ onMounted(async () => {
               query.keyword = '';
               query.status = '';
               for (const field of config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
-              for (const key of Object.keys(dynamicOptions)) delete dynamicOptions[key];
+              clearDynamicOptions();
               load();
             "
             >重置</el-button
@@ -516,7 +406,7 @@ onMounted(async () => {
                   <slot name="more-actions" :row="s.row" :refresh="load" />
                   <el-dropdown-item
                     v-if="config.documentType"
-                    @click="openTrace(s.row)"
+                    @click="traceRef?.open(s.row)"
                   >全链路追溯</el-dropdown-item>
                 </template>
               </TableRowActions>
@@ -563,12 +453,11 @@ onMounted(async () => {
       />
     </el-dialog>
     <slot name="business-dialogs" :refresh="load" />
-    <DocumentTraceDialog
+    <BusinessDocumentTrace
       v-if="config.documentType"
-      v-model="traceVisible"
+      ref="traceRef"
       :document-type="config.documentType"
-      :document-id="traceRow.id || ''"
-      :document-no="String(traceRow[config.no] ?? '')"
+      :document-no-field="config.no"
     />
   </section>
 </template>
