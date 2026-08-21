@@ -349,6 +349,10 @@ function createContext() {
         ...data,
       })),
     },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn(),
+    },
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockResolvedValue(null),
       count: vi.fn().mockResolvedValue(0),
@@ -409,6 +413,12 @@ function createContext() {
     $transaction: vi
       .fn()
       .mockImplementation(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
+    hspsi_sale_order_service: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   };
 
   const shifangQingyuan = {
@@ -723,6 +733,17 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(afterSale.event_date).toEqual(new Date(1723536000 * 1000));
     expect(afterSale.created_at).toEqual(new Date(1723536000 * 1000));
     expect(afterSale.updated_at).not.toEqual(new Date(1723536000 * 1000));
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: GOODS_ID,
+          sku_id: SKU_ID,
+          service_qty: 1,
+          batch_no: '',
+          source_output_id: 0n,
+        }),
+      ],
+    });
   });
 
   it('机构未映射：mall_id 无 organization_mapping → failed', async () => {

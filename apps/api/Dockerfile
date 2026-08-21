@@ -20,6 +20,13 @@ RUN CI=true pnpm --filter @hspsi/api install --prod --no-frozen-lockfile
 
 FROM node:22-bookworm-slim AS runtime
 
+# ========== 新增时区配置 runtime ==========
+ENV TZ=Asia/Shanghai
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone
+
 # 安装 OpenSSL 1.1 兼容库（Prisma 5.22 引擎依赖）
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates wget gnupg \

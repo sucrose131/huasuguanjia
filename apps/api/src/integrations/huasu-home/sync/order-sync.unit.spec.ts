@@ -201,6 +201,10 @@ function createService() {
       })),
       update: vi.fn(),
     },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn(),
+    },
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockResolvedValue(null),
       count: vi.fn().mockResolvedValue(0),
@@ -271,6 +275,10 @@ function createService() {
       .fn()
       .mockImplementation(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
     hspsi_sale_order_service: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    hspsi_sale_order_service_detail: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
   };
@@ -529,6 +537,15 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
         sku_id: 201,
       }),
     });
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 101n,
+          sku_id: 201n,
+          service_qty: 1,
+        }),
+      ],
+    });
   });
 
   it('机构未映射时失败', async () => {
@@ -603,6 +620,16 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
         event_status: 2,
       }),
     });
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 101n,
+          sku_id: 201n,
+          service_qty: 4,
+          batch_no: '',
+        }),
+      ],
+    });
     expect(ctx.tx.hspsi_sale_order_exit_detail.createMany).toHaveBeenCalled();
 
     const detailArg = ctx.tx.hspsi_sale_order_exit_detail.createMany.mock.calls[0]![0].data;
@@ -648,6 +675,15 @@ describe('HuasuHomeOrderSyncService 单元测试', () => {
     expect(stats.failed).toBe(0);
     expect(stats.exits).toBe(0);
     expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 101n,
+          sku_id: 201n,
+          service_qty: 1,
+        }),
+      ],
+    });
   });
 
   it('分页拉列表：按返回 total 翻页', async () => {
