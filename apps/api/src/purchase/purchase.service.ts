@@ -75,6 +75,45 @@ export class PurchaseService {
       throw new BadRequestException(`${label}必须为${allowZero ? '非负' : '正'}整数`);
     return quantity;
   }
+  /** sku_id 缺失(0)的明细回填商品默认/第一个有效 SKU，保证下游单据可过账 */
+  private async resolveLineSkus(lines: Body[], db: PurchaseDb = this.prisma) {
+    const missing = lines.filter(
+      (line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n,
+    );
+    if (!missing.length) return;
+    const goodsIds = [...new Set(missing.map((line) => String(line.goodsId ?? line.goods_id)))];
+    const goodsList = await db.hspsi_goods_info.findMany({
+      where: { goods_id: { in: goodsIds.map(BigInt) } },
+      select: { goods_id: true, unit_type: true },
+    });
+    const defaultSkus = await db.hspsi_goods_info_sku.findMany({
+      where: {
+        good_id: { in: goodsIds.map(BigInt) },
+        status: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ is_default: 'desc' }, { sku_id: 'asc' }],
+    });
+    const skuByGoods = new Map<string, (typeof defaultSkus)[number]>();
+    for (const sku of defaultSkus) {
+      const key = String(sku.good_id);
+      if (!skuByGoods.has(key)) skuByGoods.set(key, sku);
+    }
+    const unitTypeByGoods = new Map(goodsList.map((g) => [String(g.goods_id), g.unit_type]));
+    for (const line of missing) {
+      const goodsId = String(line.goodsId ?? line.goods_id);
+      const sku = skuByGoods.get(goodsId);
+      if (!sku) throw new BadRequestException(`商品 ${goodsId} 没有可用的SKU`);
+      if (Object.prototype.hasOwnProperty.call(line, 'sku_id')) line.sku_id = sku.sku_id;
+      else line.skuId = sku.sku_id;
+      const currentUnit = Number(line.unitType ?? line.unit_type ?? 0);
+      if (!currentUnit) {
+        const resolved = Number(sku.unit_type) || Number(unitTypeByGoods.get(goodsId) ?? 0);
+        if (Object.prototype.hasOwnProperty.call(line, 'unit_type')) line.unit_type = resolved;
+        else line.unitType = resolved;
+      }
+    }
+  }
   private orderLineUnitPrice(line: {
     qty: number;
     unit_price: Prisma.Decimal | number;
@@ -961,6 +1000,7 @@ export class PurchaseService {
     fixedOrgId?: string | null,
   ) {
     const lines = this.details(body.details);
+    await this.resolveLineSkus(lines);
     let purId = id ? BigInt(id) : 0n;
     let businessNo = '';
     for (const line of lines) this.quantity(line.quantity, '采购申请数量');
@@ -1186,6 +1226,20 @@ export class PurchaseService {
         orderBy: { id: 'asc' },
       });
       if (!applicationLines.length) throw new BadRequestException('采购申请没有可生成的明细');
+      // sku_id 缺失(0)的申请明细回填商品默认/第一个 SKU 并持久化，避免下游入库过账失败
+      const missingSkuLines = applicationLines.filter((line) => line.sku_id <= 0n);
+      await this.resolveLineSkus(applicationLines, tx);
+      await Promise.all(
+        missingSkuLines.map((line) =>
+          tx.hspsi_purchase_approve_detail.update({
+            where: { id: line.id },
+            data: {
+              sku_id: BigInt(String(line.sku_id)),
+              ...(line.unit_type <= 0n ? { unit_type: Number(line.unit_type ?? 0) } : {}),
+            },
+          }),
+        ),
+      );
       const applicationLineById = new Map(applicationLines.map((line) => [String(line.id), line]));
       const selectedLines = requestedIds.map((lineId) => {
         const line = applicationLineById.get(String(lineId));

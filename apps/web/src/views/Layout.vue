@@ -125,7 +125,8 @@ async function logout() {
 }
 function navigate(path?: string | null) {
   if (path) {
-    router.push(path);
+    // 显式清空 query，避免 create/viewId 等参数残留导致页面行为异常
+    router.push({ path, query: {} });
     mobileOpen.value = false;
   }
 }

@@ -114,10 +114,10 @@ async function applicationChanged() {
       ...blankLine(),
       ...x,
       applicationDetailId: x.id,
-      applicationQty: x.quantity,
-      historicalQty: x.historicalQty,
-      remainingQty: x.remainingQty,
-      quantity: x.remainingQty,
+      applicationQty: Number(x.quantity ?? 0),
+      historicalQty: Number(x.historicalQty ?? 0),
+      remainingQty: Number(x.remainingQty ?? 0),
+      quantity: Number(x.remainingQty ?? 0),
       returnable: Boolean(x.returnable),
       stockKey: stockKeyOf(x, a.warehouseId),
     }));
@@ -389,10 +389,10 @@ onMounted(async () => {
           <el-input-number
             v-model="s.row.quantity"
             :min="1"
-            :max="s.row.remainingQty == null ? undefined : Number(s.row.remainingQty)"
+            :max="Math.max(1, Number(s.row.remainingQty) || 1)"
             :precision="0"
             :step="1"
-            :disabled="isView"
+            :disabled="isView || !(Number(s.row.remainingQty) > 0)"
           />
         </template>
       </el-table-column>

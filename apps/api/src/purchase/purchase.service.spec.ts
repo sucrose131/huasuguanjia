@@ -1424,4 +1424,24 @@ describe('PurchaseService production-shortage guards', () => {
     );
     expect(result).toEqual(expect.objectContaining({ id: 91n, created: true }));
   });
+
+  it('resolveLineSkus fills default SKU for lines with sku_id=0', async () => {
+    const prisma = {
+      hspsi_goods_info: {
+        findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, unit_type: 3 }]),
+      },
+      hspsi_goods_info_sku: {
+        findMany: vi.fn().mockResolvedValue([
+          { good_id: 101n, sku_id: 202n, unit_type: 5, is_default: 0 },
+        ]),
+      },
+    };
+    const service = serviceWith(prisma);
+    const lines = [{ goodsId: '101', skuId: 0, unitType: 0 }];
+    await (service as any).resolveLineSkus(lines);
+
+    expect(String(lines[0].skuId)).toBe('202');
+    expect(lines[0].unitType).toBe(5);
+  });
 });
+
