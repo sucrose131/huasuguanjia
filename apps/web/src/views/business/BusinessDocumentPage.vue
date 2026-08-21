@@ -98,6 +98,11 @@ async function load() {
   loading.value = true;
   try {
     const params: Record<string, any> = { ...query };
+    // 过滤空值参数：空字符串/空数组不传给后端，避免被 Number('') 误判为状态 0
+    for (const key of Object.keys(params)) {
+      const value = params[key];
+      if (value === '' || (Array.isArray(value) && !value.length)) delete params[key];
+    }
     // date-range 字段拆成 start/end 参数
     for (const field of props.config.queryFields ?? []) {
       if (field.type !== 'date-range') continue;

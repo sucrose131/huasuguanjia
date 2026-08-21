@@ -97,7 +97,7 @@ export class GoodsService {
     if (query.keyword) where.goods_name = { contains: query.keyword };
     if (query.parentId) where.parent_goods_catg_id = BigInt(query.parentId);
     if (query.warehouseType) where.warehouse_type = Number(query.warehouseType);
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_info_category.findMany({
         where,
@@ -252,7 +252,7 @@ export class GoodsService {
         { property_name: { contains: query.keyword } },
         { property_desc: { contains: query.keyword } },
       ];
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_property.findMany({
         where,
@@ -327,7 +327,7 @@ export class GoodsService {
       where.goods_catg_id =
         visibleCategoryIds && !visibleCategoryIds.includes(categoryId) ? { in: [] } : categoryId;
     }
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     if (query.supplyType) where.supply_type = Number(query.supplyType);
     if (query.goodsType) where.goods_type = Number(query.goodsType);
     const [items, total] = await this.prisma.$transaction([

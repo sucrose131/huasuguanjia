@@ -767,7 +767,8 @@ export class PurchaseService {
     const where: Prisma.hspsi_purchase_approveWhereInput = { deleted_at: null };
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.approveStatus !== undefined) where.approve_status = Number(query.approveStatus);
+    if (query.approveStatus !== undefined && query.approveStatus !== '')
+      where.approve_status = Number(query.approveStatus);
     if (query.createdStart || query.createdEnd) {
       where.created_at = {
         ...(query.createdStart ? { gte: new Date(String(query.createdStart)) } : {}),
@@ -2253,7 +2254,8 @@ export class PurchaseService {
   async receipts(query: Body) {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_purchase_order_inputWhereInput = { deleted_at: null };
-    if (query.confirmStatus !== undefined) where.comfirm_status = Number(query.confirmStatus);
+    if (query.confirmStatus !== undefined && query.confirmStatus !== '')
+      where.comfirm_status = Number(query.confirmStatus);
     if (query.keyword) where.po_input_no = { contains: String(query.keyword) };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_order_input.findMany({
@@ -2927,7 +2929,8 @@ export class PurchaseService {
   async returns(query: Body) {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_purchase_order_input_exitWhereInput = { deleted_at: null };
-    if (query.approveStatus !== undefined) where.approve_status = Number(query.approveStatus);
+    if (query.approveStatus !== undefined && query.approveStatus !== '')
+      where.approve_status = Number(query.approveStatus);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_order_input_exit.findMany({
         where,

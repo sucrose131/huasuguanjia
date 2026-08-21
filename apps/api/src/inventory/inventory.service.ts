@@ -468,7 +468,7 @@ export class InventoryService {
     if (query.goodsId) where.goods_id = BigInt(query.goodsId);
     if (query.skuId) where.sku_id = BigInt(query.skuId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.batchNo !== undefined) where.batch_no = String(query.batchNo);
+    if (query.batchNo) where.batch_no = String(query.batchNo);
     if (query.inventoryMode) where.inventory_mode = Number(query.inventoryMode);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_total_detail.findMany({
