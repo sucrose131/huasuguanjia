@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { moneyText } from '@/utils/format';
-import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.vue';
@@ -23,7 +22,6 @@ import type {
 const props = defineProps<{ config: BusinessDocumentConfig }>();
 const route = useRoute();
 const router = useRouter();
-const auth = useAuthStore();
 const slots = useSlots();
 
 const rows = ref<Record<string, any>[]>([]);
@@ -90,8 +88,15 @@ const columnRenderCtx: ColumnRenderContext = {
     ),
   dictLabel: (code: string, value: unknown) =>
     (dicts[code] ?? []).find((item) => String(item.value) === String(value))?.label ?? '—',
-  creator: (row: Record<string, any>) =>
-    String(row.createdBy) === String(auth.user?.id) ? auth.user?.username ?? '' : '—',
+  creator: (row: Record<string, any>) => {
+    const value = row.createdBy ?? row.created_by;
+    if (value === undefined || value === null || value === '') return '—';
+    const user = (options.users ?? []).find(
+      (item: any) => String(item.value ?? item.id) === String(value),
+    );
+    if (!user) return '—';
+    return user.raw?.nickname || user.raw?.username || user.label || String(value);
+  },
 };
 
 async function load() {

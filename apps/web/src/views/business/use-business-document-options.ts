@@ -55,12 +55,16 @@ export function useBusinessDocumentOptions(
   }
 
   async function loadOptionBags() {
-    const bags = getConfig().optionBags ?? [];
+    const bags = [...new Set<OptionBagName>([...(getConfig().optionBags ?? []), 'users'])];
     const results = await Promise.all(
       bags.map((name) =>
         api
           .get(OPTION_BAG_ENDPOINTS[name], {
-            ...(name === 'goods' ? { params: { pageSize: 200, status: 1 } } : {}),
+            ...(name === 'goods'
+              ? { params: { pageSize: 200, status: 1 } }
+              : name === 'users'
+                ? { params: { pageSize: 1000 } }
+                : {}),
           })
           .catch(() => []),
       ),
