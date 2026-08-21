@@ -149,7 +149,25 @@ export class AuthService {
       'EX',
       ttl,
     );
-    return { token: await this.jwt.signAsync({ ...authUser, sid }), user: authUser, menus };
+    // JWT 只承载最小必要字段：permissions/授权组织由 AuthGuard 经 resolveSession
+    // 每次请求现查（sessionData），不塞进 token，避免 Authorization 头超出网关
+    // （APISIX/openresty）的 header 大小限制导致 400 Request Header Or Cookie Too Large。
+    const token = await this.jwt.signAsync({
+      id: authUser.id,
+      username: authUser.username,
+      orgId: authUser.orgId,
+      orgName: authUser.orgName,
+      deptId: authUser.deptId,
+      staffId: authUser.staffId,
+      positionId: authUser.positionId,
+      positionName: authUser.positionName,
+      roleName: authUser.roleName,
+      currentOrgId: authUser.currentOrgId,
+      currentOrgName: authUser.currentOrgName,
+      isSuperAdmin: authUser.isSuperAdmin,
+      sid,
+    });
+    return { token, user: authUser, menus };
   }
   session(userId: string) {
     return runWithoutDataScope(() => this.sessionData(userId));
