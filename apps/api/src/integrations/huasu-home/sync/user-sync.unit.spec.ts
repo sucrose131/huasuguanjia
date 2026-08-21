@@ -166,17 +166,53 @@ describe('HuasuHomeUserSyncService', () => {
       expect(prisma.hspsi_basic_customer.create).toHaveBeenCalledTimes(1);
     });
 
-    it('TC-SYNC-04 organization_id 为 0 单条失败', async () => {
+    it('TC-SYNC-04 organization_id 为 0 且已映射则写入', async () => {
+      prisma.hspsi_sys_organization_mapping.findMany.mockResolvedValue([
+        { source_object_id: '0', org_id: 88n },
+      ]);
       huasuHome.getUserList.mockResolvedValue({
         list: [baseUser({ organization_id: 0 })],
         page: 1,
         page_size: 200,
         total: 1,
       });
+      prisma.hspsi_basic_customer.findFirst.mockResolvedValue(null);
+      prisma.hspsi_basic_customer.create.mockResolvedValue({ customer_id: 1n });
 
       const stats = await service.syncUsers({ pageSize: 200 });
-      expect(stats).toMatchObject({ fetched: 1, failed: 1, created: 0 });
-      expect(prisma.hspsi_basic_customer.create).not.toHaveBeenCalled();
+      expect(stats).toMatchObject({ fetched: 1, created: 1, failed: 0 });
+      expect(prisma.hspsi_sys_organization_mapping.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source_object_id: { in: ['0'] },
+          }),
+        }),
+      );
+    });
+
+    it('TC-SYNC-04b organization_id 为 1 且已映射则写入', async () => {
+      prisma.hspsi_sys_organization_mapping.findMany.mockResolvedValue([
+        { source_object_id: '1', org_id: 88n },
+      ]);
+      huasuHome.getUserList.mockResolvedValue({
+        list: [baseUser({ id: 1, organization_id: 1 })],
+        page: 1,
+        page_size: 200,
+        total: 1,
+      });
+      prisma.hspsi_basic_customer.findFirst.mockResolvedValue(null);
+      prisma.hspsi_basic_customer.create.mockResolvedValue({ customer_id: 1n });
+
+      const stats = await service.syncUsers({ pageSize: 200 });
+      expect(stats).toMatchObject({ fetched: 1, created: 1, failed: 0, lastUserId: 1 });
+      expect(prisma.hspsi_basic_customer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            related_customer_id: 1n,
+            org_id: 88n,
+          }),
+        }),
+      );
     });
 
     it('TC-SYNC-05 进程内重入时跳过', async () => {
