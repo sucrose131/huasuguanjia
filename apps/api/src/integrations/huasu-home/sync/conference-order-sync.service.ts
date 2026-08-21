@@ -29,6 +29,10 @@ import type {
 } from '../huasu-home.types';
 import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
 import { buildCustomerLevels } from './build-customer-levels';
+import {
+  ensureSyncedSaleOrderServiceDetail,
+  hasIncompleteAfterSalesService,
+} from '../../common/sync-sale-order-service-detail';
 import type { HuasuHomeOrderSyncOptions, HuasuHomeOrderSyncStats } from './order-sync.types';
 
 type Tx = Prisma.TransactionClient;
@@ -175,7 +179,7 @@ export class HuasuHomeConferenceOrderSyncService {
     if (
       existing &&
       this.shouldSkipUnchanged(existing, order, sourceUpdatedAt) &&
-      !(await this.hasServiceMissingGoods(existing.so_id))
+      !(await hasIncompleteAfterSalesService(this.prisma, existing.so_id))
     ) {
       stats.skipped += 1;
       return;
@@ -597,13 +601,24 @@ export class HuasuHomeConferenceOrderSyncService {
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
     const goods = input.lines[0] ?? null;
+    const content = this.resolveEventContent(input.order);
+    const quantity = Number(goods?.quantity || input.order.quantity || 0);
     if (old) {
       await this.backfillServiceGoods(tx, old, goods, input.operatorId, input.now);
+      await ensureSyncedSaleOrderServiceDetail(tx, {
+        serviceId: old.service_id,
+        soId: input.soId,
+        goodsId: goods?.goodsId,
+        skuId: goods?.skuId,
+        unitType: goods?.unitType,
+        quantity,
+        remark: content,
+      });
       return false;
     }
 
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
+    const created = await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
@@ -611,7 +626,7 @@ export class HuasuHomeConferenceOrderSyncService {
         goods_id: goods ? Number(goods.goodsId) : 0,
         sku_id: goods ? Number(goods.skuId) : 0,
         event_type: 4,
-        event_content: this.resolveEventContent(input.order),
+        event_content: content,
         event_status: applying ? 1 : 2,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -621,6 +636,15 @@ export class HuasuHomeConferenceOrderSyncService {
         created_at: input.now,
         updated_at: input.now,
       },
+    });
+    await ensureSyncedSaleOrderServiceDetail(tx, {
+      serviceId: created.service_id,
+      soId: input.soId,
+      goodsId: goods?.goodsId,
+      skuId: goods?.skuId,
+      unitType: goods?.unitType,
+      quantity,
+      remark: content,
     });
     return true;
   }
@@ -874,14 +898,6 @@ export class HuasuHomeConferenceOrderSyncService {
       skuId: fallback.sku_id,
       unitType: Number(sku?.unit_type ?? 0),
     };
-  }
-
-  private async hasServiceMissingGoods(soId: bigint): Promise<boolean> {
-    const missing = await this.prisma.hspsi_sale_order_service.findFirst({
-      where: { so_id: soId, deleted_at: null, goods_id: 0, event_type: { in: [4, 5] } },
-      select: { service_id: true },
-    });
-    return Boolean(missing);
   }
 
   private async backfillServiceGoods(

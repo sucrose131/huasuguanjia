@@ -33,6 +33,10 @@ import type {
 } from '../huasu-home.types';
 import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
 import { buildCustomerLevels } from './build-customer-levels';
+import {
+  ensureSyncedSaleOrderServiceDetail,
+  hasIncompleteAfterSalesService,
+} from '../../common/sync-sale-order-service-detail';
 import type { HuasuHomeOrderSyncOptions, HuasuHomeOrderSyncStats } from './order-sync.types';
 
 type Tx = Prisma.TransactionClient;
@@ -210,7 +214,7 @@ export class HuasuHomeOrderSyncService {
       existing.source_updated_at &&
       existing.source_updated_at.getTime() === sourceUpdatedAt.getTime() &&
       existing.source_status === Number(order.order_status) &&
-      !(await this.hasServiceMissingGoods(existing.so_id))
+      !(await hasIncompleteAfterSalesService(this.prisma, existing.so_id))
     ) {
       stats.skipped += 1;
       return;
@@ -901,8 +905,19 @@ export class HuasuHomeOrderSyncService {
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
     const goods = this.resolveServiceGoodsLine(input.order, input.lines);
+    const quantity = this.resolveServiceQty(input.order, goods);
+    const content = this.resolveEventContent(input.order, input.eventStatus);
     if (old) {
       await this.backfillServiceGoods(tx, old, goods, input.operatorId, input.now);
+      await ensureSyncedSaleOrderServiceDetail(tx, {
+        serviceId: old.service_id,
+        soId: input.soId,
+        goodsId: goods?.goodsId,
+        skuId: goods?.skuId,
+        unitType: goods?.unitType,
+        quantity,
+        remark: content,
+      });
       return false;
     }
     const type = Number(input.order.after_sales_type ?? 0);
@@ -913,7 +928,7 @@ export class HuasuHomeOrderSyncService {
           ? 4
           : 4;
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
+    const created = await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
@@ -921,7 +936,7 @@ export class HuasuHomeOrderSyncService {
         goods_id: goods ? Number(goods.goodsId) : 0,
         sku_id: goods ? Number(goods.skuId) : 0,
         event_type: eventType,
-        event_content: this.resolveEventContent(input.order, input.eventStatus),
+        event_content: content,
         event_status: input.eventStatus,
         handler_id: input.operatorId,
         event_date: input.now,
@@ -931,6 +946,15 @@ export class HuasuHomeOrderSyncService {
         created_at: input.now,
         updated_at: input.now,
       },
+    });
+    await ensureSyncedSaleOrderServiceDetail(tx, {
+      serviceId: created.service_id,
+      soId: input.soId,
+      goodsId: goods?.goodsId,
+      skuId: goods?.skuId,
+      unitType: goods?.unitType,
+      quantity,
+      remark: content,
     });
     return true;
   }
@@ -1136,13 +1160,17 @@ export class HuasuHomeOrderSyncService {
     };
   }
 
-  /** 历史同步事件 goods_id=0 时，下次同步补写商品规格，不跳过。 */
-  private async hasServiceMissingGoods(soId: bigint): Promise<boolean> {
-    const missing = await this.prisma.hspsi_sale_order_service.findFirst({
-      where: { so_id: soId, deleted_at: null, goods_id: 0, event_type: { in: [4, 5] } },
-      select: { service_id: true },
-    });
-    return Boolean(missing);
+  /** 历史同步事件缺商品或缺明细时，下次同步补写，不跳过。 */
+  private resolveServiceQty(order: HuasuHomeOrder, goods: ResolvedOrderLine | null): number {
+    if (!goods) return 0;
+    const rightsQty = (order.after_sales?.rights_deducted_records ?? [])
+      .filter((row) => Number(row.product_id) === goods.sourceProductId)
+      .reduce(
+        (sum, row) => sum + Number(row.gift_number || 0) + Number(row.buy_number || 0),
+        0,
+      );
+    if (rightsQty > 0) return rightsQty;
+    return Number(goods.quantity || 0);
   }
 
   /**
