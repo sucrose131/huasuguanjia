@@ -685,6 +685,7 @@ export class RequisitionService {
     body: Body,
     userId: string,
     submit: boolean,
+    fixedOrgId?: string | null,
   ) {
     const lines = this.detailLines(body.details).map((line) => ({
       goodsId: this.bigint(line.goodsId, '商品'),
@@ -759,7 +760,10 @@ export class RequisitionService {
 
         // 后端兜底：账套由单据组织决定，提交人按(登录用户, 组织账套)解析身份，
         // 不信任前端/主身份 staff_id（多账套用户可能跨账套错配）。
-        const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
+        if (!fixedOrgId) throw new ForbiddenException('当前账号未关联固定所属组织，不能发起领用申请');
+        const orgId = this.bigint(fixedOrgId, '所属组织');
+        if (body.orgId != null && String(body.orgId) !== String(fixedOrgId))
+          throw new ForbiddenException('个人只能在自己的固定所属组织发起领用申请');
         if (current && current.org_id !== orgId)
           throw new ForbiddenException('领用申请的所属组织与已保存单据不一致，不允许变更组织');
         const applicant = await this.resolveApplicantIdentity(tx, userId, orgId);

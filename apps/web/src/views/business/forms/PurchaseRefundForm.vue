@@ -18,11 +18,13 @@ const saving = ref(false);
 const dicts = reactive<Record<string, any[]>>({});
 
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
+const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const flows = computed(() => (form.value.flows ?? []) as any[]);
 const canRecord = computed(
   () =>
     Number(form.value.remainingAmount ?? 0) > 0 &&
-    [0, 1].includes(Number(form.value.refundStatus ?? 0)),
+    [0, 1].includes(Number(form.value.refundStatus ?? 0)) &&
+    canEditAmount.value,
 );
 
 const flowForm = reactive({
@@ -103,6 +105,10 @@ async function recordFlow() {
 }
 
 async function voidFlow(flow: any) {
+  if (!canEditAmount.value) {
+    ElMessage.warning('当前账号没有金额编辑权限，不能撤销退款流水');
+    return;
+  }
   try {
     await ElMessageBox.confirm('作废后会重算累计已退和退款状态，是否继续？', '作废退款流水', {
       type: 'warning',
@@ -189,7 +195,7 @@ onMounted(async () => {
       <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
       <el-table-column label="操作" width="88" fixed="right">
         <template #default="s">
-          <el-button v-if="canRecord" link type="danger" @click="voidFlow(s.row)">撤销</el-button>
+          <el-button v-if="canEditAmount" link type="danger" @click="voidFlow(s.row)">撤销</el-button>
         </template>
       </el-table-column>
     </el-table>

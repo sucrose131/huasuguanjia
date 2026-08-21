@@ -8,6 +8,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
   title: '采购付款',
   subtitle: '归集采购订单发起的付款流水并自动重算累计已付',
   endpoint: '/purchase/payments',
+  documentType: 'purchase_payment',
   no: 'paymentNo',
   columns: [
     { prop: 'paymentNo', label: '付款单号', minWidth: 160 },
@@ -126,8 +127,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
     { label: '本页付款金额', key: 'paymentAmount', kind: 'money' },
     { label: '关联订单数', key: 'orderCount', kind: 'number' },
   ],
-  creatable: true,
-  createText: '登记付款',
+  creatable: false,
   formComponent: PurchasePaymentForm,
   openFromRoute: async (query, ctx) => {
     if (String(query.create ?? '') === '1' && query.orderId) {

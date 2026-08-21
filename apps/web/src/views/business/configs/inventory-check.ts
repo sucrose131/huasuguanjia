@@ -8,6 +8,7 @@ export const inventoryCheckConfig: BusinessDocumentConfig = {
   title: '库存盘点',
   subtitle: '数量差异与损坏独立核算，同一批次可同时进入两条处理链',
   endpoint: '/inventory/checks',
+  documentType: 'inventory_check',
   no: 'checkNo',
   columns: [
     { prop: 'checkNo', label: '盘点单号', minWidth: 150 },
@@ -46,6 +47,7 @@ export const inventoryCheckConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增盘点单',
   formComponent: InventoryCheckForm,
+  dialog: { width: '1180px', className: 'inventory-check-flow-dialog' },
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
       const detail: any = await api.get(`/inventory/checks/${query.documentId}`);

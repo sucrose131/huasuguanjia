@@ -8,6 +8,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
   title: '采购退货记录',
   subtitle: '统一查看采购订单未到货退回及采购入库实物退货记录',
   endpoint: '/purchase/returns',
+  documentType: 'purchase_return',
   no: 'returnNo',
   columns: [
     { prop: 'returnNo', label: '退货单号', minWidth: 160, tooltip: true },

@@ -17,6 +17,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
   title: '采购订单',
   subtitle: '管理直接采购和采购申请转入订单',
   endpoint: '/purchase/orders',
+  documentType: 'purchase_order',
   no: 'orderNo',
   columns: [
     { prop: 'orderNo', label: '订单编号', minWidth: 165, tooltip: true },
@@ -129,6 +130,8 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增直接采购订单',
   formComponent: PurchaseOrderForm,
+  dialog: { width: '1180px', className: 'purchase-order-form-dialog' },
+  loadDetail: async (id) => (await api.get(`/purchase/orders/${id}`)) as Record<string, any>,
   openFromRoute: async (query, ctx) => {
     if (query.applicationId) {
       ctx.openCreate({ applicationId: String(query.applicationId) });
@@ -150,6 +153,17 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       label: '编辑',
       show: (row) => Number(row.orderStatus) === 1 && canEditAmount() && !row.applicationId,
       handler: (row, ctx) => ctx.openEdit(row),
+    },
+    {
+      key: 'payment',
+      label: '付款',
+      permission: 'purchase:payments:create',
+      kind: 'success',
+      primary: false,
+      show: (row) =>
+        canEditAmount() && Number(row.vendorId) > 0 && Number(row.remainingPayable ?? 0) > 0,
+      handler: (row, ctx) =>
+        ctx.navigate('/purchase/payments', { create: '1', orderId: String(row.id) }),
     },
     {
       key: 'start',

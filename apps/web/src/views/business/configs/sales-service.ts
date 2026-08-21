@@ -7,6 +7,7 @@ export const salesServiceConfig: BusinessDocumentConfig = {
   key: 'sales/services',
   title: '售后记录',
   endpoint: '/sales/services',
+  documentType: 'sales_service',
   no: 'serviceNo',
   columns: [
     { prop: 'serviceNo', label: '服务编号', minWidth: 155 },
@@ -71,6 +72,7 @@ export const salesServiceConfig: BusinessDocumentConfig = {
     {
       key: 'exchange-output',
       label: '办理换货出库',
+      permission: 'sales:outputs',
       kind: 'success',
       primary: false,
       show: (row) => row.successorType === 'sales_exchange_output' && Boolean(row.successorId),

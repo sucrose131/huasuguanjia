@@ -278,16 +278,11 @@ async function save(submit = false) {
 }
 
 onMounted(async () => {
-  const [orgs, units] = await Promise.all([
-    api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/units/options').catch(() => []),
-  ]);
-  // 组织下拉按用户授权范围（用户管理配置的授权组织）
-  const authorized = (auth.user?.authorizedOrganizations ?? []).map((o) => ({
-    value: o.id,
-    label: o.name,
-  }));
-  options.orgs = authorized.length ? authorized : (orgs as any[]);
+  const units = await api.get('/base-data/units/options').catch(() => []);
+  // 申请发起组织只能是登录人的 OA 固定所属组织；额外授权组织仅用于查看和执行业务。
+  options.orgs = auth.user?.orgId
+    ? [{ value: auth.user.orgId, label: auth.user.orgName || auth.user.currentOrgName || '所属组织' }]
+    : [];
   options.units = units;
   await loadDicts();
   if (props.mode === 'create') {
@@ -331,7 +326,7 @@ onMounted(async () => {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="所属组织" required>
-        <el-select v-model="form.orgId" :disabled="isView" @change="organizationChanged">
+        <el-select v-model="form.orgId" disabled>
           <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>

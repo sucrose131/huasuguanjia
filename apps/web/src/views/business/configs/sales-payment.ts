@@ -7,6 +7,7 @@ export const salesPaymentConfig: BusinessDocumentConfig = {
   key: 'sales/payments',
   title: '销售收款',
   endpoint: '/sales/payments',
+  documentType: 'sales_payment',
   no: 'paymentNo',
   columns: [
     { prop: 'paymentNo', label: '收款单号', minWidth: 160 },
@@ -47,6 +48,7 @@ export const salesPaymentConfig: BusinessDocumentConfig = {
     {
       key: 'void',
       label: '作废',
+      permission: 'delete',
       kind: 'danger',
       primary: false,
       show: (row) => Number(row.amount) > 0,

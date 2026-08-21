@@ -7,6 +7,7 @@ export const productionInputConfig: BusinessDocumentConfig = {
   key: 'production/inputs',
   title: '生产成品入库单',
   endpoint: '/production/inputs',
+  documentType: 'production_input',
   no: 'inputNo',
   columns: [
     { prop: 'inputNo', label: '成品入库单号', minWidth: 160 },

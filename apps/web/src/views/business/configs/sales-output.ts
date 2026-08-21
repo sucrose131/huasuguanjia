@@ -7,6 +7,7 @@ export const salesOutputConfig: BusinessDocumentConfig = {
   key: 'sales/outputs',
   title: '销售出库单',
   endpoint: '/sales/outputs',
+  documentType: 'sales_output',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '出库单号', minWidth: 160 },

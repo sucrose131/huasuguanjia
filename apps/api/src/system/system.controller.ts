@@ -12,7 +12,7 @@ export class SystemController {
   constructor(@Inject(SystemService) private readonly service: SystemService) {}
 
   @Get('roles')
-  @RequirePermissions('system:view', 'system:1:view')
+  @RequirePermissions('system:roles')
   roles() {
     return this.service.roles();
   }
@@ -34,13 +34,13 @@ export class SystemController {
   }
 
   @Get('users')
-  @RequirePermissions('system:view', 'system:2:view')
+  @RequirePermissions('system:users')
   users() {
     return this.service.users();
   }
 
   @Get('user-options')
-  @RequirePermissions('system:view', 'system:2:view')
+  @RequirePermissions('system:users')
   userOptions(@CurrentUser() user: AuthUser) {
     return this.service.userOptions(
       user.isSuperAdmin === true ? undefined : user.authorizedOrganizations?.map((item) => item.id),
@@ -84,13 +84,13 @@ export class SystemController {
   }
 
   @Get('menus')
-  @RequirePermissions('system:view', 'system:3:view')
+  @RequirePermissions('system:config')
   menus() {
     return this.service.menus();
   }
 
   @Get('menu-options')
-  @RequirePermissions('system:view', 'system:3:view')
+  @RequirePermissions('system:config')
   menuOptions() {
     return this.service.menuOptions();
   }

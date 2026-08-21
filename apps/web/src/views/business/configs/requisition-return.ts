@@ -7,6 +7,7 @@ export const requisitionReturnConfig: BusinessDocumentConfig = {
   key: 'requisitions/returns',
   title: '领用退回单',
   endpoint: '/requisitions/returns',
+  documentType: 'requisition_return',
   no: 'returnNo',
   columns: [
     { prop: 'returnNo', label: '退回单号', minWidth: 160, tooltip: true },
@@ -30,7 +31,12 @@ export const requisitionReturnConfig: BusinessDocumentConfig = {
   },
   rowActions: [
     { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
-    { key: 'edit', label: '编辑', handler: (row, ctx) => ctx.openEdit(row) },
+    {
+      key: 'edit',
+      label: '编辑',
+      show: (row) => Number(row.confirmStatus) === 0,
+      handler: (row, ctx) => ctx.openEdit(row),
+    },
     {
       key: 'confirm',
       label: '确认',

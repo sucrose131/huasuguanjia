@@ -8,6 +8,7 @@ export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
   title: '盘盈入库单',
   subtitle: '查看由报盈单审批生成并完成过账的独立入库记录',
   endpoint: '/inventory/overflow-inputs',
+  documentType: 'inventory_overflow_input',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '入库单号', minWidth: 165 },

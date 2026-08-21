@@ -43,6 +43,7 @@ export const productionBomConfig: BusinessDocumentConfig = {
     {
       key: 'toggle-bom',
       label: (row) => (Number(row.status) === 1 ? '停用' : '启用'),
+      permission: 'status',
       kind: 'warning',
       primary: false,
       confirm: (row) =>

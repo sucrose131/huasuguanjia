@@ -8,6 +8,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
   title: '采购退款',
   subtitle: '采购退货形成实际应退金额后自动生成，支持分次退款与流水追溯',
   endpoint: '/purchase/refunds',
+  documentType: 'purchase_refund',
   no: 'refundNo',
   columns: [
     { prop: 'refundNo', label: '退款单号', minWidth: 160 },

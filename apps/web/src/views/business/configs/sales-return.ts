@@ -7,6 +7,7 @@ export const salesReturnConfig: BusinessDocumentConfig = {
   key: 'sales/returns',
   title: '销售退货单',
   endpoint: '/sales/returns',
+  documentType: 'sales_return',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '退货单号', minWidth: 160 },

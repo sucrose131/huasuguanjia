@@ -119,7 +119,7 @@ function customAction(segments: string[], method: string) {
  * 权限结果取值：
  * - [PUBLIC_READ]：主数据（商品/基础资料）读取，任意登录用户可读（用于表单引用下拉），仅需登录。
  * - []：下拉/选项辅助接口，回退到装饰器的模块目录 code。
- * - [module]：业务单据读取，按模块目录 code。
+ * - [page]：业务单据读取，按具体页面 code；目录权限不能代替页面查看权限。
  * - [page, page:action]：写操作，按页面 + 操作 code。
  */
 export const PUBLIC_READ = '@public-read';
@@ -142,8 +142,8 @@ export function inferRequestPermissions(request: PermissionRequest): string[] {
     // 供各业务表单引用商品、分类、仓库、组织等下拉数据。
     if (context.moduleName === 'goods' || context.moduleName === 'master-data')
       return [PUBLIC_READ];
-    // 业务单据读取：按模块级判断，引用其它单据只要求拥有该模块目录 code。
-    const required = new Set<string>([context.moduleName]);
+    // 业务单据读取：必须具备具体页面权限，避免拥有模块目录后越权读取同模块其它单据。
+    const required = new Set<string>([context.pageCode]);
     if (segments.includes('export')) required.add(`${context.pageCode}:export`);
     return [...required];
   }

@@ -7,6 +7,7 @@ export const productionOutputConfig: BusinessDocumentConfig = {
   key: 'production/outputs',
   title: '生产出库单',
   endpoint: '/production/outputs',
+  documentType: 'production_material_output',
   no: 'outNo',
   columns: [
     { prop: 'outNo', label: '单据编号', minWidth: 155 },

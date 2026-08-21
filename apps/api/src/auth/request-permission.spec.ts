@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { inferRequestPermissions, PUBLIC_READ } from './request-permission';
 
 describe('inferRequestPermissions', () => {
-  it('读取按模块级判定，主数据读取仅需登录', () => {
+  it('业务读取按页面判定，主数据读取仅需登录', () => {
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/purchase/applications/7' }),
-    ).toEqual(['purchase']);
+    ).toEqual(['purchase:applications']);
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/production/plans' }),
-    ).toEqual(['production']);
+    ).toEqual(['production:plans']);
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods/properties' }),
     ).toEqual([PUBLIC_READ]);

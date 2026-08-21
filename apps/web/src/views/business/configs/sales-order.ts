@@ -7,6 +7,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
   key: 'sales/orders',
   title: '销售订单',
   endpoint: '/sales/orders',
+  documentType: 'sales_order',
   no: 'orderNo',
   columns: [
     { prop: 'orderNo', label: '订单号', minWidth: 155, tooltip: true },
@@ -63,6 +64,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'direct-output',
       label: '直接出库',
+      permission: 'sales:outputs:create',
       show: (row) =>
         Number(row.orderType) !== 4 &&
         Number(row.deliveryQty ?? 0) + 0.000001 < Number(row.quantity ?? 0) &&
@@ -73,6 +75,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'receive',
       label: '登记收款',
+      permission: 'sales:payments:create',
       kind: 'success',
       primary: false,
       show: (row) =>
@@ -87,6 +90,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'refund',
       label: '登记退款',
+      permission: 'sales:refunds:create',
       kind: 'warning',
       primary: false,
       show: (row) =>
@@ -97,6 +101,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'return',
       label: '发起退货',
+      permission: 'sales:returns:create',
       show: (row) => Number(row.deliveryQty ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/returns', { create: '1', orderId: String(row.id) }),
@@ -104,6 +109,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'service',
       label: '登记售后',
+      permission: 'sales:services:create',
       show: (row) => Number(row.deliveryQty ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/services', { create: '1', orderId: String(row.id) }),

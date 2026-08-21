@@ -7,6 +7,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
   key: 'requisitions/outputs',
   title: '领用出库单',
   endpoint: '/requisitions/outputs',
+  documentType: 'requisition_output',
   no: 'outputNo',
   columns: [
     { prop: 'outputNo', label: '出库单号', minWidth: 160, tooltip: true },
@@ -79,6 +80,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
     {
       key: 'view-application',
       label: '查看领用申请',
+      permission: 'requisitions:applications',
       show: (row) => Boolean(row.applicationId),
       handler: (row, ctx) =>
         ctx.navigate('/requisitions/applications', {
@@ -89,6 +91,7 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
     {
       key: 'create-return',
       label: '生成退回',
+      permission: 'requisitions:returns:create',
       kind: 'success',
       primary: false,
       show: (row) => Number(row.confirmStatus) === 1 && Boolean(row.hasReturnableItems),

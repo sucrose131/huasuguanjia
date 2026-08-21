@@ -1589,6 +1589,7 @@ export class PurchaseService {
     const position = await this.purchaseMoneyPosition(this.prisma, header.po_id);
     return {
       ...header,
+      id: header.po_id,
       orderNo: header.po_no,
       applicationId: header.pur_id || null,
       applicationNo: sourceApplication?.pur_no ?? null,
