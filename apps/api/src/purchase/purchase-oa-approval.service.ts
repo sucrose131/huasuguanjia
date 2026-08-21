@@ -172,7 +172,7 @@ export class PurchaseOaApprovalService {
       where: { pur_id: purId, deleted_at: null },
     });
     if (!application) throw new BadRequestException('采购申请不存在');
-    const [details, warehouse, user, organization, sourcePlan] = await Promise.all([
+    const [details, warehouse, organization, sourcePlan] = await Promise.all([
       this.prisma.hspsi_purchase_approve_detail.findMany({
         where: { pur_id: purId },
         orderBy: { id: 'asc' },
@@ -180,10 +180,6 @@ export class PurchaseOaApprovalService {
       this.prisma.hspsi_basic_warehouse.findFirst({
         where: { warehouse_id: application.warehouse_id, status: 1, deleted_at: null },
         select: { name: true },
-      }),
-      this.prisma.hspsi_sys_user.findFirst({
-        where: { id: BigInt(userId), status: 1, deleted_at: null },
-        select: { username: true },
       }),
       this.prisma.hspsi_basic_organization.findFirst({
         where: { org_id: application.org_id, deleted_at: null },
@@ -198,20 +194,30 @@ export class PurchaseOaApprovalService {
     ]);
     if (!details.length) throw new BadRequestException('采购申请没有商品明细');
     if (!warehouse) throw new BadRequestException('目标仓库不存在或已停用');
-    if (!user) throw new BadRequestException('提交人账号不存在或已停用');
     if (!organization?.account_set_id)
       throw new BadRequestException('采购申请所属组织未关联OA账套');
 
+    // 提交人身份按 (登录用户, 单据组织账套) 解析，不依赖 username=mobile 猜测，
+    // 与领用申请一致，避免多账套/非手机号账号错配或取不到 OA 身份。
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) {
+      throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
+    }
     const staff = await this.prisma.hspsi_basic_staff.findFirst({
       where: {
-        mobile: user.username,
+        id: identity.staff_id,
         account_set_id: organization.account_set_id,
         status: 1,
         deleted_at: null,
       },
-      select: { id: true, outer_ref_id: true },
+      select: { id: true, outer_ref_id: true, out_staff_id: true },
     });
-    if (!staff?.outer_ref_id) throw new BadRequestException('提交人尚未关联有效OA账号');
+    if (!staff?.outer_ref_id || !staff.out_staff_id) {
+      throw new BadRequestException('提交人尚未关联有效OA账号，请先同步OA组织人员');
+    }
     const membership = await this.prisma.hspsi_basic_staff_organizations.findFirst({
       where: {
         staff_id: staff.id,
