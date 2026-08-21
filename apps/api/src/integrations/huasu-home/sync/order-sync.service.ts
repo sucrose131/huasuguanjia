@@ -649,7 +649,8 @@ export class HuasuHomeOrderSyncService {
           sourceType: 'sales_output',
           sourceNo: outputNo,
           operationBy: input.userId,
-          idempotencyKey: `huasu-home-output:${item.key}:v1`,
+          // 过账键绑定本平台出库单 ID。外部订单/发货单 ID 或 ALL 会让不同订单出同一商品撞键。
+          idempotencyKey: `huasu-home-output:${output.so_output_id}:v1`,
           remark: '',
           lines: shipLines.map((line) => ({
             goodsId: line.goodsId,

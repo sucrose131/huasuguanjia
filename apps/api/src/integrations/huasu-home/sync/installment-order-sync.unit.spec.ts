@@ -454,6 +454,7 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
     const shipKey = ctx.tx.hspsi_sale_order_output.create.mock.calls[0][0].data.remark;
     expect(shipKey).toContain('OIP2607300100000176913');
     expect(ctx.posting.post).toHaveBeenCalled();
+    expect(ctx.posting.post.mock.calls[0]![0].idempotencyKey).toBe('huasu-home-output:8001:v1');
   });
 
   it('套餐价高于成交额时订单金额取 package_amount，实际金额取 amount', async () => {

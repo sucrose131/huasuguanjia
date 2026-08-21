@@ -635,6 +635,9 @@ describe('ShifangQingyuanOrderSyncService 单元测试', () => {
     expect(detailArg[0].output_qty).toBe(6); // 2 * ratio 3
 
     expect(ctx.externalPosting.post).toHaveBeenCalled();
+    expect(ctx.externalPosting.post.mock.calls[0]![0].idempotencyKey).toBe(
+      'shifang-qingyuan-output:8001:v1',
+    );
   });
 
   it('order_type=1 云库存纯入库：建单收款，不出库不扣库，发货态保持待发货', async () => {

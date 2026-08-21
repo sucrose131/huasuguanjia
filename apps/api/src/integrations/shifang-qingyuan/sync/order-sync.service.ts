@@ -685,7 +685,8 @@ export class ShifangQingyuanOrderSyncService {
           sourceType: 'sales_output',
           sourceNo: outputNo,
           operationBy: input.userId,
-          idempotencyKey: `shifang-qingyuan-output:${item.key}:v1`,
+          // 过账键绑定本平台出库单 ID。外部订单/快递单 ID 或 ALL 会让不同订单出同一商品撞键。
+          idempotencyKey: `shifang-qingyuan-output:${output.so_output_id}:v1`,
           remark: '',
           lines: shipLines.map((line) => ({
             goodsId: line.goodsId,

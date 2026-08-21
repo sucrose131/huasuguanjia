@@ -425,6 +425,9 @@ describe('HuasuHomeConferenceOrderSyncService 单元测试', () => {
 
     const outputRemark = ctx.tx.hspsi_sale_order_output.create.mock.calls[0][0].data.remark;
     expect(outputRemark).toContain('CONFERENCE_TICKET');
+    const postArg = ctx.posting.post.mock.calls[0]![0];
+    expect(postArg.idempotencyKey).toBe('huasu-home-output:8001:v1');
+    expect(postArg.idempotencyKey).not.toContain('34');
   });
 
   it('未核销退款：只记账不回库', async () => {
