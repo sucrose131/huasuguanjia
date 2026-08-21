@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -39,9 +40,24 @@ export class OaDocumentSubmissionService {
     @Inject(XinfutongOaApprovalService)
     private readonly approval: XinfutongOaApprovalService,
     @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
+  /** OA 审批是否启用；关闭时拦截发起（单据保留系统内待审批，不写 OA 实例） */
+  private get oaApprovalEnabled() {
+    return this.config.get<string>('XINFUTONG_OA_APPROVAL_ENABLED', 'true') !== 'false';
+  }
+
   async submit(input: OaDocumentSubmission): Promise<OaDocumentSubmissionResult> {
+    if (!this.oaApprovalEnabled) {
+      return {
+        instanceId: 0n,
+        procInstId: '',
+        procStatus: 'PUSH_FAILED',
+        busKey: input.busKey,
+        errorMessage: 'OA审批已暂停，单据保留在系统内审批',
+      };
+    }
     const credential = await this.credentials.getById(input.accountSetId);
     if (!credential) throw new Error('单据所属OA账套未启用');
     const instance = await this.prisma.$transaction(async (tx) => {

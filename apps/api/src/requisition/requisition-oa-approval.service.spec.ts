@@ -136,6 +136,7 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
       approvalService as never,
       attachmentsService as never,
       { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.requisition_application) } as never,
+      { get: vi.fn().mockReturnValue('true') } as never,
     ),
     prisma,
     tx,
@@ -237,5 +238,27 @@ describe('RequisitionOaApprovalService', () => {
     ]);
     expect(attachmentsService.cacheOaUpload).toHaveBeenCalledTimes(2);
     await Promise.all(localPaths.map((path) => expect(readFile(path)).rejects.toThrow()));
+  });
+
+  it('returns intercepted result without touching prisma when OA approval is disabled', async () => {
+    const prisma = { hspsi_draw_approve: { findFirst: vi.fn() } };
+    const service = new RequisitionOaApprovalService(
+      prisma as never,
+      { getById: vi.fn() } as never,
+      { startFormProcess: vi.fn(), uploadFile: vi.fn() } as never,
+      {
+        listForIntegration: vi.fn(),
+        downloadToFileForIntegration: vi.fn(),
+        cacheOaUpload: vi.fn(),
+      } as never,
+      { getMapping: vi.fn() } as never,
+      { get: vi.fn().mockReturnValue('false') } as never,
+    );
+
+    const result = await service.submit(7n, '5');
+
+    expect(result.procStatus).toBe('PUSH_FAILED');
+    expect(result.errorMessage).toContain('OA审批已暂停');
+    expect(prisma.hspsi_draw_approve.findFirst).not.toHaveBeenCalled();
   });
 });

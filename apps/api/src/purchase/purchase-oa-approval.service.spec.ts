@@ -120,6 +120,7 @@ function fixture(existingStatus?: string) {
       approval as never,
       attachments as never,
       { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.purchase_application) } as never,
+      { get: vi.fn().mockReturnValue('true') } as never,
     ),
     approval,
   };
