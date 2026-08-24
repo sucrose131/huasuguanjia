@@ -4,6 +4,7 @@ import { HuasuHomeInstallmentOrderSyncService } from '../integrations/huasu-home
 import { HuasuHomeOrderSyncService } from '../integrations/huasu-home/sync/order-sync.service';
 import { HuasuHomeProductSyncService } from '../integrations/huasu-home/sync/product-sync.service';
 import { HuasuHomeUserSyncService } from '../integrations/huasu-home/sync/user-sync.service';
+import { ShifangQingyuanAgentOrderSyncService } from '../integrations/shifang-qingyuan/sync/agent-order-sync.service';
 import { ShifangQingyuanGoodsSyncService } from '../integrations/shifang-qingyuan/sync/goods-sync.service';
 import { ShifangQingyuanOrderSyncService } from '../integrations/shifang-qingyuan/sync/order-sync.service';
 import { ShifangQingyuanUserSyncService } from '../integrations/shifang-qingyuan/sync/user-sync.service';
@@ -32,6 +33,8 @@ export class ScheduledTaskHandlers {
     private readonly shifangGoods: ShifangQingyuanGoodsSyncService,
     @Inject(ShifangQingyuanOrderSyncService)
     private readonly shifangOrders: ShifangQingyuanOrderSyncService,
+    @Inject(ShifangQingyuanAgentOrderSyncService)
+    private readonly shifangAgentOrders: ShifangQingyuanAgentOrderSyncService,
     @Inject(XinfutongOaOrgSyncJob) private readonly oaOrg: XinfutongOaOrgSyncJob,
   ) {}
 
@@ -50,6 +53,8 @@ export class ScheduledTaskHandlers {
           return await this.syncShifangGoods();
         case SCHEDULED_TASK_CODE.SHIFANG_ORDERS:
           return await this.syncShifangOrders();
+        case SCHEDULED_TASK_CODE.SHIFANG_AGENT_ORDERS:
+          return await this.syncShifangAgentOrders();
         case SCHEDULED_TASK_CODE.OA_ORG:
           return await this.oaOrg.syncAll();
         default:
@@ -111,6 +116,15 @@ export class ScheduledTaskHandlers {
       `拉取${stats.fetched} 新增${stats.created} 更新${stats.updated} ` +
       `跳过${stats.skipped} 失败${stats.failed} ` +
       `收款${stats.payments} 出库${stats.outputs} 退货${stats.exits} 售后${stats.events}`
+    );
+  }
+
+  private async syncShifangAgentOrders(): Promise<string> {
+    const stats = await this.shifangAgentOrders.syncAgentOrders('0');
+    return (
+      `拉取${stats.fetched} 新增${stats.created} 更新${stats.updated} ` +
+      `跳过${stats.skipped} 失败${stats.failed} ` +
+      `出库${stats.outputs} 回库${stats.exits}`
     );
   }
 }

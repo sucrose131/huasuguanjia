@@ -9,6 +9,7 @@ export const SCHEDULED_TASK_CODE = {
   SHIFANG_USERS: 'shifang-qingyuan:users',
   SHIFANG_GOODS: 'shifang-qingyuan:goods',
   SHIFANG_ORDERS: 'shifang-qingyuan:orders',
+  SHIFANG_AGENT_ORDERS: 'shifang-qingyuan:agent-orders',
   OA_ORG: 'xinfutong-oa:org',
 } as const;
 
@@ -21,6 +22,7 @@ export const SCHEDULED_TASK_TYPES: Array<{ code: ScheduledTaskCode; name: string
   { code: SCHEDULED_TASK_CODE.SHIFANG_USERS, name: '十方清源用户同步' },
   { code: SCHEDULED_TASK_CODE.SHIFANG_GOODS, name: '十方清源商品同步' },
   { code: SCHEDULED_TASK_CODE.SHIFANG_ORDERS, name: '十方清源订单同步' },
+  { code: SCHEDULED_TASK_CODE.SHIFANG_AGENT_ORDERS, name: '十方清源自提订单同步' },
   { code: SCHEDULED_TASK_CODE.OA_ORG, name: '薪福通OA组织同步' },
 ];
 
