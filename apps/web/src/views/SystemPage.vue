@@ -61,6 +61,13 @@ const statusFilter = ref<string | number>('');
 const dialog = ref(false);
 const amountDialog = ref(false);
 const roleDialog = ref(false);
+const resetPwdDialog = ref(false);
+const resetPwdSaving = ref(false);
+const resetPwdForm = reactive<{ userId: string | null; name: string; password: string }>({
+  userId: null,
+  name: '',
+  password: '',
+});
 const mode = ref<Mode>('create');
 const current = ref<any>(null);
 const form = reactive<any>({});
@@ -482,6 +489,31 @@ async function saveAmountAccess() {
   }
 }
 
+/** OA 同步用户仅支持重置密码（身份/角色/组织由 OA 维护，后端放行纯密码修改） */
+function openResetPassword(row: any) {
+  resetPwdForm.userId = String(row.id);
+  resetPwdForm.name = row.name || row.nickname || row.account || '';
+  resetPwdForm.password = '';
+  resetPwdDialog.value = true;
+}
+
+async function saveResetPassword() {
+  if (String(resetPwdForm.password ?? '').length < 6) {
+    ElMessage.warning('重置密码至少6个字符');
+    return;
+  }
+  resetPwdSaving.value = true;
+  try {
+    await api.put(`/system/users/${resetPwdForm.userId}`, { password: resetPwdForm.password });
+    ElMessage.success('密码重置成功');
+    resetPwdDialog.value = false;
+  } catch {
+    // axios 拦截器已提示
+  } finally {
+    resetPwdSaving.value = false;
+  }
+}
+
 function openRoleAccess(row: any) {
   roleCurrent.value = row;
   roleForm.roleId = String(row.roleId ?? '');
@@ -763,6 +795,12 @@ onMounted(async () => {
                     type="primary"
                     @click="open('edit', row)"
                     >编辑</el-button
+                  ><el-button
+                    v-if="can('system:users:update') && row.staffId"
+                    link
+                    type="primary"
+                    @click="openResetPassword(row)"
+                    >重置密码</el-button
                   ><template #more
                     ><el-dropdown-item
                       v-if="can('system:users:configure-amount')"
@@ -1366,6 +1404,34 @@ onMounted(async () => {
           >
         </template>
       </el-dialog>
+
+      <el-dialog
+        v-model="resetPwdDialog"
+        width="420"
+        title="重置密码"
+        :close-on-click-modal="false"
+      >
+        <el-form label-position="top">
+          <el-form-item label="用户">
+            <el-input :model-value="resetPwdForm.name" disabled />
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input
+              v-model="resetPwdForm.password"
+              type="password"
+              show-password
+              placeholder="至少6个字符"
+            />
+          </el-form-item>
+          <p class="reset-pwd-hint">OA 同步用户的身份、角色与组织由 OA 维护，仅可重置登录密码。</p>
+        </el-form>
+        <template #footer>
+          <el-button @click="resetPwdDialog = false">取消</el-button>
+          <el-button type="primary" :loading="resetPwdSaving" @click="saveResetPassword"
+            >确定重置</el-button
+          >
+        </template>
+      </el-dialog>
     </template>
   </section>
 </template>
@@ -1384,6 +1450,11 @@ onMounted(async () => {
   border-bottom: 1px solid var(--hs-border);
   background: #fafbfd;
 }
+.reset-pwd-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #909399;
+}}
 .status-filter,
 .toolbar-actions {
   display: flex;

@@ -12,6 +12,11 @@ class LoginDto {
   @IsString() @IsNotEmpty() @MaxLength(128) password!: string;
 }
 
+class ChangePasswordDto {
+  @IsString() @IsNotEmpty() @MaxLength(128) oldPassword!: string;
+  @IsString() @IsNotEmpty() @MaxLength(64) newPassword!: string;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -30,6 +35,10 @@ export class AuthController {
   }
   @UseGuards(AuthGuard) @Get('amount-access') amountAccessState(@CurrentUser() user: AuthUser) {
     return this.amountAccess.forUser(user.id);
+  }
+  @UseGuards(AuthGuard) @Post('change-password')
+  changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) {
+    return this.service.changePassword(user.id, dto.oldPassword, dto.newPassword);
   }
   @UseGuards(AuthGuard) @Post('logout') async logout(
     @Headers('authorization') authorization: string,
