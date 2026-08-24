@@ -1454,7 +1454,7 @@ onMounted(async () => {
   margin: 0;
   font-size: 12px;
   color: #909399;
-}}
+}
 .status-filter,
 .toolbar-actions {
   display: flex;
