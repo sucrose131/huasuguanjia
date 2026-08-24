@@ -245,6 +245,10 @@ function createService() {
       })),
       update: vi.fn(),
     },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn(),
+    },
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockImplementation(async ({ where }) => {
         if (where?.remark) return outputs.get(where.remark) ?? null;
@@ -328,6 +332,10 @@ function createService() {
       .fn()
       .mockImplementation(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
     hspsi_sale_order_service: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    hspsi_sale_order_service_detail: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
   };
@@ -446,6 +454,7 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
     const shipKey = ctx.tx.hspsi_sale_order_output.create.mock.calls[0][0].data.remark;
     expect(shipKey).toContain('OIP2607300100000176913');
     expect(ctx.posting.post).toHaveBeenCalled();
+    expect(ctx.posting.post.mock.calls[0]![0].idempotencyKey).toBe('huasu-home-output:8001:v1');
   });
 
   it('套餐价高于成交额时订单金额取 package_amount，实际金额取 amount', async () => {
@@ -671,6 +680,15 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
         sku_id: 401,
         event_type: 4,
       }),
+    });
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 301n,
+          sku_id: 401n,
+          service_qty: 5,
+        }),
+      ],
     });
   });
 
