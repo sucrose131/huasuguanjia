@@ -1793,9 +1793,9 @@ model hspsi_sys_todo {
   title           String    @default("") @db.VarChar(100)
   content         String    @default("") @db.VarChar(500)
   source_type     String?   @default("") @db.VarChar(32)
-  source_id       Int?      @default(0) @db.UnsignedInt
+  source_id       BigInt?   @default(0) @db.UnsignedBigInt
   business_type   String?   @default("") @db.VarChar(50)
-  business_id     Int?      @default(0) @db.UnsignedInt
+  business_id     BigInt?   @default(0) @db.UnsignedBigInt
   status          Int?      @default(0) @db.TinyInt
   completed_time  DateTime? @db.DateTime(0)
   created_by      Int?      @default(0) @db.UnsignedInt
@@ -1805,6 +1805,7 @@ model hspsi_sys_todo {
   deleted_at      DateTime? @db.DateTime(0)
 
   @@index([user_id, status], map: "idx_user_status")
+  @@index([source_type, business_id, status], map: "idx_todo_business_status")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

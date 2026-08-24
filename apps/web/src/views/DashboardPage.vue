@@ -1,19 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import {
-  Bell,
-  Box,
-  CircleCheck,
-  Clock,
-  DataAnalysis,
-  Goods,
-  ShoppingCart,
-  Tickets,
-  Warning,
-} from '@element-plus/icons-vue';
+import { DataAnalysis, Warning } from '@element-plus/icons-vue';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import { hasPermission } from '@/utils/permission';
+import DashboardHealthCard from '@/components/dashboard/DashboardHealthCard.vue';
+import DashboardMessageCenter from '@/components/dashboard/DashboardMessageCenter.vue';
+import DashboardMessageSummary from '@/components/dashboard/DashboardMessageSummary.vue';
+import DashboardMetricCards from '@/components/dashboard/DashboardMetricCards.vue';
+import DashboardQuickActions from '@/components/dashboard/DashboardQuickActions.vue';
+import DashboardTodoList from '@/components/dashboard/DashboardTodoList.vue';
+import DashboardTodoPreview from '@/components/dashboard/DashboardTodoPreview.vue';
+import DashboardTrendCard from '@/components/dashboard/DashboardTrendCard.vue';
+import { DASHBOARD_SHORTCUTS } from '@/components/dashboard/dashboard.config';
+import type {
+  DashboardMessageItem,
+  DashboardModuleAccess,
+  DashboardOverviewData,
+  DashboardTodoItem,
+  DashboardWidgetAccess,
+} from '@/components/dashboard/dashboard.types';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,7 +37,7 @@ const title = computed(() =>
 );
 const loading = ref(false);
 const error = ref('');
-const dashboard = reactive<any>({
+const dashboard = reactive<DashboardOverviewData>({
   salesAmount: 0,
   purchaseAmount: 0,
   inventoryValue: 0,
@@ -44,44 +51,132 @@ const dashboard = reactive<any>({
   unreadCount: 0,
   lowStockItem: null,
 });
-const todoRows = ref<any[]>([]);
+const todoRows = ref<DashboardTodoItem[]>([]);
 const todoTotal = ref(0);
 const todoQuery = reactive({ page: 1, pageSize: 20, keyword: '', sourceType: '' });
-const messageRows = ref<any[]>([]);
+const messageRows = ref<DashboardMessageItem[]>([]);
 const messageTotal = ref(0);
-const messageCategory = ref('全部消息');
-const categories = ['全部消息', '审批消息', '预警消息', '业务消息'];
+type OverviewSection = 'metrics' | 'trend' | 'health' | 'todos' | 'messages';
+const overviewLoading = reactive<Record<OverviewSection, boolean>>({
+  metrics: false,
+  trend: false,
+  health: false,
+  todos: false,
+  messages: false,
+});
+const overviewErrors = reactive<Record<OverviewSection, string>>({
+  metrics: '',
+  trend: '',
+  health: '',
+  todos: '',
+  messages: '',
+});
 
 const greeting = computed(() => {
   const hour = new Date().getHours();
   const text = hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好';
   return `${text}，${auth.user?.username ?? '用户'}。这里是今日经营与待办概览。`;
 });
-const maxTrend = computed(() =>
-  Math.max(1, ...dashboard.trend.flatMap((item: any) => [item.sales, item.purchase])),
+const noModules: DashboardModuleAccess = {
+  sales: false,
+  purchase: false,
+  inventory: false,
+  production: false,
+  todos: false,
+  messages: false,
+  shortcuts: false,
+};
+const noWidgets: DashboardWidgetAccess = {
+  salesAmount: false,
+  purchaseAmount: false,
+  inventoryValue: false,
+  pendingCount: false,
+  businessTrend: false,
+  inventoryHealth: false,
+  todoPreview: false,
+  quickActions: false,
+  messageSummary: false,
+};
+const modules = computed(() => dashboard.modules ?? noModules);
+const widgets = computed(() => dashboard.widgets ?? noWidgets);
+const hasOverviewWidgets = computed(() => Object.values(widgets.value).some(Boolean));
+const shortcuts = computed(() =>
+  DASHBOARD_SHORTCUTS.filter(
+    (item) =>
+      hasPermission(auth.user, item.pagePermission) &&
+      (!item.actionPermission || hasPermission(auth.user, item.actionPermission)),
+  ),
 );
-const filteredMessages = computed(() =>
-  messageCategory.value === '全部消息'
-    ? messageRows.value
-    : messageRows.value.filter((item) => item.category === messageCategory.value),
-);
-const categoryCount = (category: string) =>
-  category === '全部消息'
-    ? messageRows.value.length
-    : messageRows.value.filter((item) => item.category === category).length;
 const money = (value: any) =>
   auth.amountAccess.canViewAmount
     ? `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`
     : '****';
-const messageText = (item: any) =>
+const messageText = (item: DashboardMessageItem) =>
   Object.prototype.hasOwnProperty.call(item, 'amount')
     ? `${item.content || ''} ${money(item.amount)}。`
     : item.content || '暂无消息内容';
 const dateText = (value: any) => (value ? String(value).replace('T', ' ').slice(0, 16) : '—');
 
 async function loadOverview() {
-  const data = (await api.get('/dashboard')) as any;
-  Object.assign(dashboard, data);
+  const access = (await api.get('/dashboard/access')) as any;
+  dashboard.modules = access.modules;
+  dashboard.widgets = access.widgets;
+  loading.value = false;
+  const tasks: Promise<void>[] = [];
+  const needsMetrics =
+    widgets.value.salesAmount ||
+    widgets.value.purchaseAmount ||
+    widgets.value.inventoryValue ||
+    widgets.value.pendingCount;
+  if (needsMetrics)
+    tasks.push(
+      loadOverviewSection('metrics', async () => {
+        Object.assign(dashboard, await api.get('/dashboard/metrics'));
+      }),
+    );
+  if (widgets.value.businessTrend)
+    tasks.push(
+      loadOverviewSection('trend', async () => {
+        dashboard.trend = (await api.get('/dashboard/trend')) as any;
+      }),
+    );
+  if (widgets.value.inventoryHealth)
+    tasks.push(
+      loadOverviewSection('health', async () => {
+        Object.assign(dashboard, await api.get('/dashboard/inventory-health'));
+      }),
+    );
+  if (widgets.value.todoPreview)
+    tasks.push(
+      loadOverviewSection('todos', async () => {
+        const data = (await api.get('/dashboard/todos', {
+          params: { page: 1, pageSize: 5 },
+        })) as any;
+        dashboard.todos = data.items ?? [];
+      }),
+    );
+  if (widgets.value.messageSummary)
+    tasks.push(
+      loadOverviewSection('messages', async () => {
+        const data = (await api.get('/dashboard/messages', {
+          params: { page: 1, pageSize: 2 },
+        })) as any;
+        dashboard.messages = data.items ?? [];
+        dashboard.unreadCount = data.unreadCount ?? 0;
+      }),
+    );
+  await Promise.all(tasks);
+}
+async function loadOverviewSection(section: OverviewSection, request: () => Promise<void>) {
+  overviewLoading[section] = true;
+  overviewErrors[section] = '';
+  try {
+    await request();
+  } catch (caught: any) {
+    overviewErrors[section] = caught?.response?.data?.message ?? '该模块暂时加载失败';
+  } finally {
+    overviewLoading[section] = false;
+  }
 }
 async function loadTodos() {
   const data = (await api.get('/dashboard/todos', { params: todoQuery })) as any;
@@ -109,16 +204,16 @@ async function load() {
     loading.value = false;
   }
 }
-function openTodo(item: any) {
+function openTodo(item: DashboardTodoItem) {
   if (item.route)
     router.push({ path: item.route, query: { sourceId: item.sourceId, status: 'pending' } });
 }
-async function readMessage(item: any) {
+async function readMessage(item: DashboardMessageItem) {
   if (!item.isRead) await api.post(`/dashboard/messages/${item.id}/read`);
   await loadMessages();
 }
-function quick(path: string, action?: string) {
-  router.push({ path, query: action ? { create: '1' } : {} });
+function quick(path: string, create?: boolean) {
+  router.push({ path, query: create ? { create: '1' } : {} });
 }
 watch(resource, load);
 onMounted(load);
@@ -150,333 +245,133 @@ onMounted(load);
     </div>
 
     <template v-else-if="resource === 'todos'">
-      <div class="panel">
-        <div class="todo-filter">
-          <el-input
-            v-model="todoQuery.keyword"
-            clearable
-            placeholder="搜索单据编号、类型或往来信息"
-            @keyup.enter="
-              todoQuery.page = 1;
-              loadTodos();
-            "
-          /><el-select v-model="todoQuery.sourceType" clearable placeholder="来源类型"
-            ><el-option label="采购管理" value="采购管理" /><el-option
-              label="生产管理"
-              value="生产管理" /><el-option label="销售管理" value="销售管理" /><el-option
-              label="领用管理"
-              value="领用管理" /><el-option label="库存管理" value="库存管理" /></el-select
-          ><el-button
-            type="primary"
-            @click="
-              todoQuery.page = 1;
-              loadTodos();
-            "
-            >查询</el-button
-          >
-        </div>
-        <div class="table-wrap">
-          <el-table :data="todoRows"
-            ><el-table-column type="index" label="序号" width="65" /><el-table-column
-              prop="docNo"
-              label="单据编号"
-              min-width="150"
-              ><template #default="{ row }"
-                ><strong class="business-no">{{ row.docNo }}</strong></template
-              ></el-table-column
-            ><el-table-column prop="docType" label="单据类型" min-width="130" /><el-table-column
-              prop="businessModule"
-              label="来源模块"
-              width="110"
-            /><el-table-column prop="counterparty" label="往来单位/信息" min-width="150"
-              ><template #default="{ row }">{{
-                row.counterparty || '—'
-              }}</template></el-table-column
-            ><el-table-column prop="date" label="日期" width="110" /><el-table-column
-              label="金额"
-              width="120"
-              align="right"
-              ><template #default="{ row }">{{
-                row.amount == null ? '—' : money(row.amount)
-              }}</template></el-table-column
-            ><el-table-column prop="creator" label="创建人" width="100" /><el-table-column
-              prop="status"
-              label="状态"
-              width="100"
-              ><template #default="{ row }"
-                ><el-tag type="warning">{{ row.status }}</el-tag></template
-              ></el-table-column
-            ><el-table-column label="操作" width="100" fixed="right"
-              ><template #default="{ row }"
-                ><el-button link type="primary" @click="openTodo(row)">去处理</el-button></template
-              ></el-table-column
-            ></el-table
-          >
-        </div>
-        <div v-if="!todoRows.length" class="dashboard-empty">暂无待办，今天也很顺利。</div>
-        <footer class="table-footer">
-          <span>共 {{ todoTotal }} 条记录</span
-          ><el-pagination
-            v-model:current-page="todoQuery.page"
-            v-model:page-size="todoQuery.pageSize"
-            :total="todoTotal"
-            layout="prev,pager,next"
-            @change="loadTodos"
-          />
-        </footer>
-      </div>
+      <DashboardTodoList
+        :rows="todoRows"
+        :total="todoTotal"
+        :query="todoQuery"
+        :money="money"
+        @search="
+          todoQuery.page = 1;
+          loadTodos();
+        "
+        @page="loadTodos"
+        @open="openTodo"
+      />
     </template>
 
     <template v-else-if="resource === 'messages'">
-      <div class="panel message-center">
-        <aside class="message-categories">
-          <button
-            v-for="category in categories"
-            :key="category"
-            :class="{ active: messageCategory === category }"
-            @click="messageCategory = category"
-          >
-            <el-icon><Bell /></el-icon><span>{{ category }}</span
-            ><b>{{ categoryCount(category) }}</b>
-          </button>
-        </aside>
-        <div class="message-list">
-          <button
-            v-for="item in filteredMessages"
-            :key="item.id"
-            class="message-row"
-            :class="{ unread: !item.isRead }"
-            @click="readMessage(item)"
-          >
-            <span class="message-icon"
-              ><el-icon
-                ><Warning v-if="item.category === '预警消息'" /><CircleCheck
-                  v-else-if="item.category === '审批消息'" /><Bell v-else /></el-icon></span
-            ><span class="message-copy"
-              ><strong>{{ item.title }}<i v-if="!item.isRead" /></strong
-              ><small>{{ messageText(item) }}</small
-              ><time>{{ dateText(item.createdAt) }}</time></span
-            ><b>›</b>
-          </button>
-          <div v-if="!filteredMessages.length" class="dashboard-empty">
-            {{ messageCategory === '全部消息' ? '暂无消息' : `暂无${messageCategory}` }}
-          </div>
-        </div>
-      </div>
+      <DashboardMessageCenter
+        :rows="messageRows"
+        :message-text="messageText"
+        :date-text="dateText"
+        @read="readMessage"
+      />
     </template>
 
     <template v-else-if="resource === 'shortcuts'">
-      <div class="shortcut-grid">
-        <button @click="quick('/sales/orders')">
-          <el-icon><Goods /></el-icon
-          ><span><strong>销售订单</strong><small>查询与处理客户订单</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/purchase/orders')">
-          <el-icon><ShoppingCart /></el-icon
-          ><span><strong>采购订单</strong><small>查看采购执行情况</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/inventory/stocks')">
-          <el-icon><Box /></el-icon
-          ><span><strong>库存查询</strong><small>查看仓库即时库存</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/production/plans')">
-          <el-icon><DataAnalysis /></el-icon
-          ><span><strong>生产计划</strong><small>查看生产与缺料状态</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/purchase/receipts', 'create')">
-          <el-icon><ShoppingCart /></el-icon
-          ><span><strong>采购入库</strong><small>快速创建采购入库单</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/sales/outputs', 'create')">
-          <el-icon><Goods /></el-icon
-          ><span><strong>销售出库</strong><small>快速创建销售出库单</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/requisitions/applications', 'create')">
-          <el-icon><Tickets /></el-icon
-          ><span><strong>领用申请</strong><small>快速发起物资领用</small></span
-          ><b>›</b>
-        </button>
-        <button @click="quick('/dashboard/messages')">
-          <el-icon><Bell /></el-icon
-          ><span><strong>消息中心</strong><small>查看审批与预警消息</small></span
-          ><b>›</b>
-        </button>
-      </div>
+      <DashboardQuickActions :shortcuts="shortcuts" @navigate="quick" />
     </template>
 
     <template v-else>
-      <div class="metric-grid">
-        <article>
-          <el-icon><DataAnalysis /></el-icon><span>本月销售额</span
-          ><strong>{{ money(dashboard.salesAmount) }}</strong
-          ><small>实时统计</small>
-        </article>
-        <article>
-          <el-icon><ShoppingCart /></el-icon><span>本月采购额</span
-          ><strong>{{ money(dashboard.purchaseAmount) }}</strong
-          ><small>实时统计</small>
-        </article>
-        <article>
-          <el-icon><Box /></el-icon><span>库存总值</span
-          ><strong>{{ money(dashboard.inventoryValue) }}</strong
-          ><small>按即时结存</small>
-        </article>
-        <article>
-          <el-icon><Clock /></el-icon><span>待审核单据</span
-          ><strong>{{ dashboard.pendingCount }} 笔</strong><small>全部业务模块</small>
-        </article>
+      <div v-if="!hasOverviewWidgets" class="dashboard-state">
+        <el-icon><DataAnalysis /></el-icon><span>当前角色尚未配置数据总览组件</span>
       </div>
+      <el-alert
+        v-if="overviewErrors.metrics"
+        :title="overviewErrors.metrics"
+        type="error"
+        :closable="false"
+        show-icon
+        class="dashboard-widget-error"
+      />
+      <DashboardMetricCards
+        v-else
+        v-loading="overviewLoading.metrics"
+        :sales-amount="dashboard.salesAmount"
+        :purchase-amount="dashboard.purchaseAmount"
+        :inventory-value="dashboard.inventoryValue"
+        :pending-count="dashboard.pendingCount"
+        :widgets="widgets"
+        :money="money"
+      />
 
       <div class="dashboard-grid">
-        <article class="dashboard-card trend-card">
-          <header>
-            <div>
-              <h3>采购 / 销售趋势</h3>
-              <small>近 14 日 · 按创建日汇总</small>
-            </div>
-            <span class="legend"><i />销售 <i />采购</span>
-          </header>
-          <div class="trend-chart">
-            <div v-for="item in dashboard.trend" :key="item.date" class="trend-day">
-              <div class="bars">
-                <i
-                  :style="{ height: `${Math.max(4, (item.sales / maxTrend) * 150)}px` }"
-                  :title="`销售 ${money(item.sales)}`"
-                /><i
-                  :style="{ height: `${Math.max(4, (item.purchase / maxTrend) * 150)}px` }"
-                  :title="`采购 ${money(item.purchase)}`"
-                />
-              </div>
-              <small>{{ item.date.slice(5).replace('-', '/') }}</small>
-            </div>
-          </div>
-        </article>
+        <el-alert
+          v-if="widgets.businessTrend && overviewErrors.trend"
+          :title="overviewErrors.trend"
+          type="error"
+          :closable="false"
+          show-icon
+          class="dashboard-widget-error"
+        />
+        <DashboardTrendCard
+          v-else-if="widgets.businessTrend"
+          v-loading="overviewLoading.trend"
+          :trend="dashboard.trend"
+          :modules="modules"
+          :money="money"
+        />
+        <el-alert
+          v-if="widgets.inventoryHealth && overviewErrors.health"
+          :title="overviewErrors.health"
+          type="error"
+          :closable="false"
+          show-icon
+          class="dashboard-widget-error"
+        />
+        <DashboardHealthCard
+          v-else-if="widgets.inventoryHealth"
+          v-loading="overviewLoading.health"
+          :data="dashboard"
+          @navigate="quick"
+        />
+        <el-alert
+          v-if="widgets.todoPreview && overviewErrors.todos"
+          :title="overviewErrors.todos"
+          type="error"
+          :closable="false"
+          show-icon
+          class="dashboard-widget-error"
+        />
+        <DashboardTodoPreview
+          v-else-if="widgets.todoPreview"
+          v-loading="overviewLoading.todos"
+          :rows="dashboard.todos"
+          :money="money"
+          @open="openTodo"
+          @all="router.push('/dashboard/todos')"
+        />
 
-        <article class="dashboard-card health-card">
-          <header>
-            <div>
-              <h3>库存健康度</h3>
-              <small>按即时结存测算</small>
-            </div>
-            <button @click="router.push('/inventory/stocks')">查看明细 ›</button>
-          </header>
-          <div class="health-content">
-            <div
-              class="health-ring"
-              :style="{
-                background: `conic-gradient(#078c68 0 ${dashboard.healthScore}%,#e9edf2 ${dashboard.healthScore}% 100%)`,
-              }"
-            >
-              <span
-                ><strong>{{ dashboard.healthScore }}</strong
-                ><small>健康分</small></span
-              >
-            </div>
-            <div class="health-counts">
-              <p>
-                <i class="good" />库存充足
-                <strong>{{
-                  Math.max(dashboard.inventoryCount - dashboard.lowStockCount, 0)
-                }}</strong>
-              </p>
-              <p>
-                <i class="low" />低库存 <strong>{{ dashboard.lowStockCount }}</strong>
-              </p>
-            </div>
-          </div>
-          <div v-if="dashboard.lowStockItem" class="stock-warning">
-            <el-icon><Warning /></el-icon
-            ><span
-              ><strong>{{ dashboard.lowStockItem.name }}</strong
-              ><small
-                >当前库存 {{ dashboard.lowStockItem.stock }} · 安全库存
-                {{ dashboard.lowStockItem.safetyStock }}</small
-              ></span
-            ><button @click="quick('/purchase/applications', 'create')">去补货</button>
-          </div>
-          <div v-else class="stock-clear">暂无库存预警</div>
-        </article>
-
-        <article class="dashboard-card todo-card">
-          <header>
-            <div>
-              <h3>待办事项</h3>
-              <small>需您处理的业务任务</small>
-            </div>
-            <button @click="router.push('/dashboard/todos')">全部待办 ›</button>
-          </header>
-          <button
-            v-for="item in dashboard.todos"
-            :key="item.id"
-            class="todo-row"
-            @click="openTodo(item)"
-          >
-            <el-icon><Clock /></el-icon
-            ><span
-              ><strong>{{ item.docType }} · {{ item.docNo }}</strong
-              ><small
-                >{{ item.businessModule }} · {{ item.counterparty || item.creator }}</small
-              ></span
-            ><span
-              ><b>{{ money(item.amount) }}</b
-              ><small>{{ item.date }}</small></span
-            ><b>›</b>
-          </button>
-          <div v-if="!dashboard.todos?.length" class="dashboard-empty">
-            暂无待办，今天也很顺利。
-          </div>
-        </article>
-
-        <div class="dashboard-side">
-          <article class="dashboard-card quick-card">
-            <header>
-              <div>
-                <h3>快捷功能</h3>
-                <small>高频业务快速发起</small>
-              </div>
-            </header>
-            <div>
-              <button @click="quick('/purchase/receipts', 'create')">
-                <el-icon><ShoppingCart /></el-icon>采购入库单</button
-              ><button @click="quick('/sales/outputs', 'create')">
-                <el-icon><Goods /></el-icon>销售出库单</button
-              ><button @click="quick('/requisitions/applications', 'create')">
-                <el-icon><Tickets /></el-icon>领用申请单</button
-              ><button @click="quick('/inventory/checks', 'create')">
-                <el-icon><CircleCheck /></el-icon>库存盘点
-              </button>
-            </div>
-          </article>
-          <article
-            class="dashboard-card message-summary"
-            @click="router.push('/dashboard/messages')"
-          >
-            <header>
-              <div>
-                <h3>消息中心</h3>
-                <small>{{ dashboard.unreadCount }} 条未读</small>
-              </div>
-              <el-icon><Bell /></el-icon>
-            </header>
-            <p v-for="item in dashboard.messages" :key="item.id">
-              <i :class="{ read: item.isRead }" /><span>{{ item.title }}</span
-              ><time>{{ dateText(item.createdAt).slice(5) }}</time>
-            </p>
-            <div v-if="!dashboard.messages?.length" class="dashboard-empty">暂无消息</div>
-          </article>
+        <div v-if="widgets.quickActions || widgets.messageSummary" class="dashboard-side">
+          <DashboardQuickActions
+            v-if="widgets.quickActions"
+            compact
+            :shortcuts="shortcuts"
+            @navigate="quick"
+          />
+          <DashboardMessageSummary
+            v-if="widgets.messageSummary && !overviewErrors.messages"
+            v-loading="overviewLoading.messages"
+            :rows="dashboard.messages"
+            :unread-count="dashboard.unreadCount"
+            :date-text="dateText"
+            @open="router.push('/dashboard/messages')"
+          />
+          <el-alert
+            v-else-if="widgets.messageSummary"
+            :title="overviewErrors.messages"
+            type="error"
+            :closable="false"
+            show-icon
+            class="dashboard-widget-error"
+          />
         </div>
       </div>
     </template>
   </section>
 </template>
 
-<style scoped>
+<style>
 .dashboard-state {
   min-height: 400px;
   display: flex;

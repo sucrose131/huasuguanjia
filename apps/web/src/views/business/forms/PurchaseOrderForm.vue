@@ -19,6 +19,7 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   depts: [],
   warehouses: [],
+  receivers: [],
   vendors: [],
   units: [],
   contextGoods: [],
@@ -56,7 +57,10 @@ const orderTotal = computed(() =>
   (form.value.details ?? []).reduce((sum: number, line: any) => sum + lineAmount(line), 0),
 );
 const orderQuantity = computed(() =>
-  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.quantity ?? 0), 0),
+  (form.value.details ?? []).reduce(
+    (sum: number, line: any) => sum + Number(line.quantity ?? 0),
+    0,
+  ),
 );
 
 async function loadDicts() {
@@ -72,6 +76,7 @@ async function loadOrgScopedOptions(orgId: unknown) {
   if (!orgId) {
     options.depts = [];
     options.warehouses = [];
+    options.receivers = [];
     return;
   }
   const [depts, warehouses] = await Promise.all([
@@ -82,13 +87,30 @@ async function loadOrgScopedOptions(orgId: unknown) {
   options.warehouses = warehouses as any[];
 }
 
+async function loadReceiverOptions(orgId: unknown, deptId: unknown) {
+  if (!orgId || !deptId) {
+    options.receivers = [];
+    return;
+  }
+  options.receivers = (await api
+    .get('/purchase/receiver-options', { params: { orgId, deptId } })
+    .catch(() => [])) as any[];
+}
+
 function organizationChanged() {
   form.value.deptId = '';
   form.value.warehouseId = '';
+  form.value.receiverId = '';
+  options.receivers = [];
   form.value.details = [blankLine()];
   options.contextGoods = [];
   loadOrgScopedOptions(form.value.orgId);
   loadContextGoods();
+}
+
+async function departmentChanged() {
+  form.value.receiverId = '';
+  await loadReceiverOptions(form.value.orgId, form.value.deptId);
 }
 
 /** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
@@ -133,7 +155,9 @@ function warehouseChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
+  const kw = String(keyword ?? '')
+    .trim()
+    .toLowerCase();
   const list = options.contextGoods.filter((g: any) =>
     kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
   );
@@ -187,8 +211,7 @@ async function enrichLine(line: any) {
   if (!line.goodsId) return;
   try {
     const g: any = await api.get(`/goods/${line.goodsId}`);
-    const sku =
-      (g.skus ?? []).find((x: any) => String(x.id) === String(line.skuId)) ?? g.skus?.[0];
+    const sku = (g.skus ?? []).find((x: any) => String(x.id) === String(line.skuId)) ?? g.skus?.[0];
     line.goodsCode = line.goodsCode || g.queryCode || '';
     line.goodsName = line.goodsName || g.goodsName || '';
     line.skuSpec = sku?.specModels ?? '';
@@ -235,15 +258,19 @@ async function applicationChanged() {
     applicationNo: source.applicationNo ?? '',
   });
   await loadOrgScopedOptions(form.value.orgId);
+  await loadReceiverOptions(form.value.orgId, form.value.deptId);
+  if (
+    !options.receivers.some((item: any) => String(item.value) === String(form.value.receiverId))
+  ) {
+    form.value.receiverId = '';
+  }
   form.value.details = (source.details ?? []).map((line: any) => ({
     ...blankLine(),
     goodsId: line.goodsId,
     skuId: line.skuId,
     unitType: line.unitType,
     quantity: Number(line.quantity ?? 0),
-    totalAmount: Number(
-      (Number(line.referencePrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2),
-    ),
+    totalAmount: Number((Number(line.referencePrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2)),
     remark: line.remark ?? '',
     goodsWarehouseType: Number(line.goodsWarehouseType ?? 0),
   }));
@@ -267,11 +294,13 @@ function validate() {
     ElMessage.warning('请选择所属组织和部门');
     return false;
   }
+  if (!form.value.receiverId) {
+    ElMessage.warning('请选择收货人');
+    return false;
+  }
   const hasGoods = (form.value.details ?? []).some((line: any) => line.goodsId);
   if (!form.value.warehouseId) {
-    ElMessage.warning(
-      hasGoods ? '请选择与商品匹配的目标仓库' : '请选择所属组织、目标仓库和部门',
-    );
+    ElMessage.warning(hasGoods ? '请选择与商品匹配的目标仓库' : '请选择所属组织、目标仓库和部门');
     return false;
   }
   if (hasGoods && documentWarehouseType.value) {
@@ -356,7 +385,7 @@ onMounted(async () => {
       orgId: form.value.orgId ?? auth.user?.orgId ?? '',
       deptId: form.value.deptId ?? auth.user?.deptId ?? '',
       warehouseId: '',
-      receiverId: form.value.receiverId ?? auth.user?.id ?? '',
+      receiverId: form.value.receiverId ?? '',
       vendorId: '',
       arrivalType: 1,
       planArrivalDate: '',
@@ -368,7 +397,15 @@ onMounted(async () => {
       details: [blankLine()],
     });
     if (form.value.applicationId) await applicationChanged();
-    else await loadOrgScopedOptions(form.value.orgId);
+    else {
+      await loadOrgScopedOptions(form.value.orgId);
+      await loadReceiverOptions(form.value.orgId, form.value.deptId);
+      if (
+        options.receivers.some((item: any) => String(item.value) === String(auth.user?.id ?? ''))
+      ) {
+        form.value.receiverId = auth.user?.id ?? '';
+      }
+    }
   } else if (form.value.id) {
     const detail: any = await api.get(`/purchase/orders/${form.value.id}`).catch(() => null);
     if (detail) {
@@ -384,6 +421,7 @@ onMounted(async () => {
       await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
     }
     await loadOrgScopedOptions(form.value.orgId);
+    await loadReceiverOptions(form.value.orgId, form.value.deptId);
   }
   await loadContextGoods();
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
@@ -403,7 +441,9 @@ onMounted(async () => {
     <div class="form-grid">
       <el-form-item label="来源采购申请">
         <el-input
-          :model-value="form.applicationNo || (form.applicationId ? form.applicationId : '直接采购')"
+          :model-value="
+            form.applicationNo || (form.applicationId ? form.applicationId : '直接采购')
+          "
           disabled
         />
       </el-form-item>
@@ -453,12 +493,26 @@ onMounted(async () => {
           v-model="form.deptId"
           filterable
           :disabled="isView || Boolean(form.applicationId)"
+          @change="departmentChanged"
         >
           <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="收货人">
-        <el-input :model-value="auth.user?.username ?? '—'" disabled />
+      <el-form-item label="收货人" required>
+        <el-select
+          v-model="form.receiverId"
+          filterable
+          clearable
+          :disabled="isView || !form.orgId || !form.deptId"
+          placeholder="请选择接收部门下的收货人"
+        >
+          <el-option
+            v-for="x in options.receivers"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="到货方式">
         <el-select v-model="form.arrivalType" :disabled="isView">
@@ -553,7 +607,14 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="计算单价" width="120" align="right">
         <template #default="s">
-          {{ canViewAmount ? lineUnitPrice(s.row).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '****' }}
+          {{
+            canViewAmount
+              ? lineUnitPrice(s.row).toLocaleString('zh-CN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })
+              : '****'
+          }}
         </template>
       </el-table-column>
       <el-table-column label="备注" min-width="130">
@@ -567,7 +628,8 @@ onMounted(async () => {
     </el-table>
 
     <div class="form-total">
-      合计：{{ orderQuantity }} 件　订单金额 {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
+      合计：{{ orderQuantity }} 件　订单金额
+      {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
     </div>
 
     <div v-if="!isView" class="form-actions">
