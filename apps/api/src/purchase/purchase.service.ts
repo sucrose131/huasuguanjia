@@ -3001,6 +3001,14 @@ export class PurchaseService {
           select: { po_id: true, po_no: true },
         })
       : [];
+    const receiptIds = [...new Set(items.map((i) => i.po_input_id).filter((x) => x > 0n))];
+    const receipts = receiptIds.length
+      ? await this.prisma.hspsi_purchase_order_input.findMany({
+          where: { po_input_id: { in: receiptIds } },
+          select: { po_input_id: true, po_input_no: true },
+        })
+      : [];
+    const receiptNoById = new Map(receipts.map((r) => [String(r.po_input_id), r.po_input_no]));
     const exitIds = items.map((i) => i.po_exit_id);
     const qtySums = exitIds.length
       ? await this.prisma.hspsi_purchase_order_input_exit_detail.groupBy({
@@ -3018,6 +3026,7 @@ export class PurchaseService {
           id: item.po_exit_id,
           returnNo: item.po_exit_no,
           receiptId: item.po_input_id,
+          receiptNo: item.po_input_id > 0n ? (receiptNoById.get(String(item.po_input_id)) ?? null) : null,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
           sourceType: fromReceipt ? 'receipt' : 'order',
@@ -3057,9 +3066,16 @@ export class PurchaseService {
       where: { po_exit_id: header.po_exit_id, deleted_at: null },
     });
     const fromReceipt = header.po_input_id > 0n;
+    const sourceReceipt = fromReceipt
+      ? await this.prisma.hspsi_purchase_order_input.findFirst({
+          where: { po_input_id: header.po_input_id, deleted_at: null },
+          select: { po_input_no: true },
+        })
+      : null;
     return {
       ...header,
       returnNo: header.po_exit_no,
+      receiptNo: sourceReceipt?.po_input_no ?? null,
       sourceType: fromReceipt ? 'receipt' : 'order',
       sourceTypeLabel: fromReceipt ? '已入库退货' : '未入库退货',
       affectsInventory: fromReceipt,

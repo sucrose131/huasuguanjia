@@ -28,11 +28,6 @@ const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
 
-const maxAmount = computed(() => {
-  const remaining = Number(form.value.orderRemaining ?? 0);
-  return remaining > 0 ? remaining : undefined;
-});
-
 /** 按组织加载部门/仓库选项（走后端），组织为空时清空 */
 async function loadOrgOptions(orgId: unknown) {
   if (!orgId) {
@@ -260,7 +255,6 @@ onMounted(async () => {
         <el-input-number
           v-model="form.paymentAmount"
           :min="0.01"
-          :max="maxAmount"
           :precision="2"
           controls-position="right"
           style="width: 100%"
