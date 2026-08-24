@@ -25,6 +25,9 @@ describe('ScheduledTaskService', () => {
     expect(types.find((item) => item.code === 'huasu-home:products')?.occupied).toBe(false);
     expect(types.find((item) => item.code === 'shifang-qingyuan:users')?.occupied).toBe(false);
     expect(types.find((item) => item.code === 'shifang-qingyuan:goods')?.name).toBe('十方清源商品同步');
+    expect(types.find((item) => item.code === 'shifang-qingyuan:agent-orders')?.name).toBe(
+      '十方清源自提订单同步',
+    );
   });
 
   it('拒绝未注册类型', async () => {

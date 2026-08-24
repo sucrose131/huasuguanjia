@@ -1,6 +1,6 @@
 ﻿# OpenApi 云库存自提单接口文档
 
-> 版本：v1 | 更新日期：2026-08-20 | 插件：OpenApi
+> 版本：v1 | 更新日期：2026-08-24 | 插件：OpenApi
 
 ## 概述
 
@@ -89,7 +89,7 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/list" \
 | data.list[].order_type_text | string | 订单类型文本描述 |
 | data.list[].send_status | int | 发货状态（0=待发货，1=已发货，2=已完成，4=已取消） |
 | data.list[].send_status_text | string | 发货状态文本描述 |
-| data.list[].user | object/null | 下单用户信息（nickname / avatar_url / mobile，手机号；无则为 null） |
+| data.list[].user | object/null | 下单用户信息（qimall_user 全量字段 + 增强字段，无则为 null） |
 | data.list[].details | array | 商品明细列表（`qimall_addons_cloud_stock_agent_order_details` 全量字段，每个元素含嵌套 `goods`） |
 | data.list[].num | int | 商品数量（主表 `qimall_addons_cloud_stock_agent_order.num` 字段透传，与 `details[].num` 相互独立，可能为 0） |
 | data.list[].name | string | 收货人姓名 |
@@ -98,7 +98,6 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/list" \
 | data.list[].express_code | string | 物流公司编码 |
 | data.list[].express_name | string | 物流公司名称 |
 | data.list[].express_no | string | 物流单号 |
-| data.list[].highest_user | object/null | 归属店铺用户信息（id / nickname / level / mobile，手机号；无则为 null） |
 | data.list[].refunds | array | 退款单列表（来自 `qimall_addons_cloud_stock_agent_order_refund` 表，全量字段） |
 | data.list[].created_at | int | 创建时间戳 |
 | data.list[].created_at_text | string | 创建时间文本（Y-m-d H:i:s） |
@@ -107,16 +106,61 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/list" \
 | data.pagination.page | int | 当前页码 |
 | data.pagination.page_size | int | 每页条数 |
 
-### user 字段说明
+### user 字段说明（list）
 
-> 来源表：`qimall_user`，按 `qimall_addons_cloud_stock_agent_order.user_id` 关联，仅查询 `id / nickname / avatar_url / mobile` 四个字段。
+> 来源表：`qimall_user`，按 `qimall_addons_cloud_stock_agent_order.user_id` 关联，返回用户表全量字段（已过滤 `password` / `transaction_password`），并附带增强字段。
+>
+> `mobile` **未脱敏**，为真实手机号明文返回（与收货人 `mobile` 的脱敏行为不同）。
+
+#### qimall_user 表字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | int | 用户ID |
+| base64_code | string | user_id 的64进制编码 |
+| mall_id | int | 商城ID |
+| mch_id | int | 商户ID |
+| store_id | int | 门店ID |
+| username | string | 用户账号（手机号） |
+| area_code | string | 手机区号 |
+| mobile | string | 手机号（未脱敏，明文返回） |
 | nickname | string | 用户昵称 |
+| birthday | int | 生日（时间戳） |
 | avatar_url | string | 用户头像URL |
-| mobile | string | 手机号 |
+| platform | string | 登录平台（mp-wx/mp-ali/mp-bd 等） |
+| temp_parent_id | int | 临时父级ID |
+| parent_id | int | 直推人ID（第一父级） |
+| second_parent_id | int | 二级推荐人ID |
+| third_parent_id | int | 三级推荐人ID |
+| junior_at | int | 成为下级时间 |
+| last_login_at | int | 最后登录时间 |
+| upgrade_level_at | int | 等级升级时间 |
+| inviter_at | int | 邀请时间 |
+| login_ip | string | 最后登录IP |
+| is_inviter | int | 是否是邀请者（1=是） |
+| status | int | 状态（-1=删除, 0=禁用, 1=启用） |
+| level | int | 普通会员等级 |
+| source | int | 用户来源（1=分享首页, 2=分享海报, ...） |
+| signature_title | string/null | 签名标题 |
+| signature_content | string/null | 签名内容 |
+| background | string/null | 背景图 |
+| created_at | int | 注册时间 |
+| updated_at | int | 更新时间 |
+| verification_token | string/null | 验证token |
+| device_type | string/null | 登录设备类型 |
+| device_mac | string/null | 登录设备MAC地址 |
+| inviter_source | int | 邀请来源 |
+
+#### 扩展字段（代码增强）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| parent_mobile | string | 直推人手机号（来自 qimall_user 表） |
+| parent_username | string | 直推人账号（来自 qimall_user 表） |
+| parent_nickname | string | 直推人昵称（来自 qimall_user 表） |
+| level_name | string | 普通会员等级名称（来自 qimall_user_level 表，默认"普通会员"） |
+| cloud_stock_level | int | 云仓代理等级（来自 qimall_addons_cloud_stock_agent 表，无则为 0） |
+| cloud_stock_level_name | string | 云仓代理等级名称（来自 qimall_addons_cloud_stock_level 表，无则为空） |
 
 ### details 字段说明（qimall_addons_cloud_stock_agent_order_details 表）
 
@@ -136,20 +180,6 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/list" \
 | created_at | int | 创建时间戳 |
 | updated_at | int | 更新时间戳 |
 | goods | object/null | 商品信息（id / goods_name / cover_pic；无则为 null） |
-
-### highest_user 字段说明
-
-> 来源表：`qimall_addons_cloud_stock_agent`（关联 `qimall_user`），按 `highest_user_id` 关联，查询条件含 `mall_id` + `status=1`（启用）。字段为 qimall_user 的 `id / nickname / avatar_url / mobile` 四个字段透传，另附 `level`（云库存代理等级）。
->
-> 注意：`mobile` **未脱敏**，为真实手机号明文返回（与 `user` / 收货人 `mobile` 的脱敏行为不同）。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 归属店铺用户ID |
-| nickname | string | 归属店铺用户昵称 |
-| avatar_url | string | 归属店铺用户头像URL |
-| mobile | string | 手机号（未脱敏，明文返回） |
-| level | int | 云库存代理等级 |
 
 ### refunds 字段说明（list / detail 均有）
 
@@ -174,133 +204,103 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/list" \
 
 > `addons/OpenApi/common/services/CloudStockAgentOrderService.php::getList()`
 >
-> 所有关联数据（用户 / 商品明细 / 物流公司 / 归属店铺 / 退款单）均按主键批量查询后分组组装，避免 N+1。
+> 所有关联数据（用户 / 上级代理 / 商品明细 / 物流公司 / 退款单）均按主键批量查询后分组组装，避免 N+1。
 
 ### 响应示例
 
-> 以下为真实接口返回示例（商城 `mall_id=1`，数据来源于生产库 `qimall_prod`）。
+> 以下为真实接口返回示例（商城 `mall_id=1`，数据来源于生产库）。
 
 ```json
 {
-    "code": 0,
-    "msg": "操作成功",
-    "data": {
-        "list": [
-            {
-                "id": 6,
-                "order_no": "CSP20251225131702968925",
-                "order_type": 1,
-                "order_type_text": "云仓自提",
-                "send_status": 2,
-                "send_status_text": "已完成",
-                "user": {
-                    "id": 171758,
-                    "base64_code": "FXK",
-                    "mall_id": 1,
-                    "mch_id": 0,
-                    "store_id": 0,
-                    "username": 13787956299,
-                    "area_code": 86,
-                    "mobile": 13787956299,
-                    "nickname": "缘份天注定",
-                    "birthday": 0,
-                    "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2025/12/25/image_1766625225_dJ5B8B3j.jpg",
-                    "platform": "mp-wx",
-                    "temp_parent_id": 0,
-                    "parent_id": 171755,
-                    "second_parent_id": 171754,
-                    "third_parent_id": 0,
-                    "junior_at": 0,
-                    "last_login_at": 1783492626,
-                    "upgrade_level_at": 1767497284,
-                    "inviter_at": 0,
-                    "login_ip": "120.227.212.10",
-                    "is_inviter": 1,
-                    "status": 1,
-                    "level": 5,
-                    "source": 1,
-                    "signature_title": null,
-                    "signature_content": null,
-                    "background": null,
-                    "created_at": 1766468788,
-                    "updated_at": 1783492626,
-                    "verification_token": null,
-                    "device_type": "android",
-                    "device_mac": "a9:35:26:22:83:ef",
-                    "inviter_source": 0
-                },
-                "details": [
-                    {
-                        "id": 6,
-                        "user_id": 171758,
-                        "mall_id": 1,
-                        "goods_id": 1,
-                        "order_id": 6,
-                        "num": 3,
-                        "status": 1,
-                        "created_at": 1766639822,
-                        "updated_at": 1766639822,
-                        "goods": {
-                            "id": 1,
-                            "goods_name": "尝鲜装",
-                            "cover_pic": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2026/01/28/image_1769571945_L0MqaY1z.jpg"
-                        }
-                    }
-                ],
-                "num": 0,
-                "name": "杜修君",
-                "mobile": "150****7079",
-                "address": "江苏省苏州市昆山市千灯镇锦景园26栋",
-                "express_code": "SF",
-                "express_name": "顺丰速运",
-                "express_no": "SF0257790655543",
-                "highest_user": {
-                    "id": 171758,
-                    "base64_code": "FXK",
-                    "mall_id": 1,
-                    "mch_id": 0,
-                    "store_id": 0,
-                    "username": 13787956299,
-                    "area_code": 86,
-                    "mobile": 13787956299,
-                    "nickname": "缘份天注定",
-                    "birthday": 0,
-                    "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2025/12/25/image_1766625225_dJ5B8B3j.jpg",
-                    "platform": "mp-wx",
-                    "temp_parent_id": 0,
-                    "parent_id": 171755,
-                    "second_parent_id": 171754,
-                    "third_parent_id": 0,
-                    "junior_at": 0,
-                    "last_login_at": 1783492626,
-                    "upgrade_level_at": 1767497284,
-                    "inviter_at": 0,
-                    "login_ip": "120.227.212.10",
-                    "is_inviter": 1,
-                    "status": 1,
-                    "level": 8,
-                    "source": 1,
-                    "signature_title": null,
-                    "signature_content": null,
-                    "background": null,
-                    "created_at": 1766468788,
-                    "updated_at": 1783492626,
-                    "verification_token": null,
-                    "device_type": "android",
-                    "device_mac": "a9:35:26:22:83:ef",
-                    "inviter_source": 0
-                },
-                "refunds": [],
-                "created_at": 1766639822,
-                "created_at_text": "2025-12-25 13:17:02"
+  "code": 0,
+  "msg": "操作成功",
+  "data": {
+    "list": [
+      {
+        "id": 17,
+        "order_no": "CSP20260109101204835092",
+        "order_type": 1,
+        "order_type_text": "云仓自提",
+        "send_status": 4,
+        "send_status_text": "已取消",
+        "user": {
+          "id": 171973,
+          "base64_code": "F/5",
+          "mall_id": 1,
+          "mch_id": 0,
+          "store_id": 0,
+          "username": 18665546822,
+          "area_code": 86,
+          "mobile": 18665546822,
+          "nickname": "小明",
+          "birthday": 0,
+          "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2026/01/03/image_1767427750_ldAalvCs.jpg",
+          "platform": "mp-wx",
+          "temp_parent_id": 0,
+          "parent_id": 171865,
+          "second_parent_id": 171824,
+          "third_parent_id": 171809,
+          "junior_at": 0,
+          "last_login_at": 1783411060,
+          "upgrade_level_at": 1767597457,
+          "inviter_at": 0,
+          "login_ip": "113.111.171.6",
+          "is_inviter": 1,
+          "status": 1,
+          "level": 5,
+          "source": 0,
+          "signature_title": null,
+          "signature_content": null,
+          "background": null,
+          "created_at": 1767426745,
+          "updated_at": 1783776231,
+          "verification_token": null,
+          "device_type": "android",
+          "device_mac": "9e:aa:0e:ee:7a:cb",
+          "inviter_source": 0,
+          "parent_mobile": 13066481413,
+          "parent_username": 13066481413,
+          "parent_nickname": "张三",
+          "level_name": "VIP会员",
+          "cloud_stock_level": 8,
+          "cloud_stock_level_name": "批发商"
+        },
+        "details": [
+          {
+            "id": 17,
+            "user_id": 171973,
+            "mall_id": 1,
+            "goods_id": 1,
+            "order_id": 17,
+            "num": 24,
+            "status": 1,
+            "created_at": 1767924724,
+            "updated_at": 1767924724,
+            "goods": {
+              "id": 1,
+              "goods_name": "尝鲜装",
+              "cover_pic": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2026/01/28/image_1769571945_L0MqaY1z.jpg"
             }
+          }
         ],
-        "pagination": {
-            "total": 494,
-            "page": 1,
-            "page_size": 1
-        }
+        "num": 0,
+        "name": "李四",
+        "mobile": "189****9911",
+        "address": "广东省广州市天河区",
+        "express_code": "",
+        "express_name": "",
+        "express_no": "",
+        "refunds": [],
+        "created_at": 1767924724,
+        "created_at_text": "2026-01-09 10:12:04"
+      }
+    ],
+    "pagination": {
+      "total": 494,
+      "page": 1,
+      "page_size": 20
     }
+  }
 }
 ```
 
@@ -340,7 +340,7 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/detail" \
 | data.order_type_text | string | 订单类型文本描述 |
 | data.send_status | int | 发货状态（0=待发货，1=已发货，2=已完成，4=已取消） |
 | data.send_status_text | string | 发货状态文本描述 |
-| data.user | object/null | 下单用户信息（id / nickname / avatar_url / mobile，已脱敏；无则为 null） |
+| data.user | object/null | 下单用户信息（qimall_user 全量字段 + 增强字段，无则为 null） |
 | data.details | array | 商品明细列表（来自 `qimall_addons_cloud_stock_agent_order_details` 表，返回方式与列表接口一致，每条含嵌套 `goods`） |
 | data.num | int | 商品数量（主表 `qimall_addons_cloud_stock_agent_order.num` 字段透传，与 `details[].num` 相互独立，可能为 0） |
 | data.name | string | 收货人姓名 |
@@ -355,9 +355,13 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/detail" \
 | data.express_name | string | 物流公司名称 |
 | data.express_no | string | 物流单号 |
 | data.seller_remark | string | 卖家备注 |
-| data.highest_user | object/null | 归属店铺用户信息（id / nickname / level / mobile，已脱敏；无则为 null） |
+| data.parent_agents | object/null | 多级上级代理数据（含 parent / second_parent / third_parent） |
+| data.parent_agents.parent | object/null | 直推人数据（{user: qimall_user 全量字段, agent: 代理信息}） |
+| data.parent_agents.second_parent | object/null | 二级推荐人数据（{user: qimall_user 全量字段, agent: 代理信息}） |
+| data.parent_agents.third_parent | object/null | 三级推荐人数据（{user: qimall_user 全量字段, agent: 代理信息}） |
+| data.highest_user | object/null | 分区关系树顶级用户数据（{user: qimall_user 全量字段, agent: 代理信息}） |
 | data.table_express_status | int | 单据物流状态（0=未完成，1=已完成） |
-| data.express_status | int | 物流状态（物流公司官网状态） |
+| data.express_status | int | 物流状态（物流公司官网状态码） |
 | data.is_shipping_refunded | int | 是否已退运费（0=否，1=是） |
 | data.is_delivery_address_modified | int | 收货地址是否修改过（0=否，1=是） |
 | data.refunds | array | 退款单列表（来自 `qimall_addons_cloud_stock_agent_order_refund` 表，全量字段） |
@@ -365,6 +369,47 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/detail" \
 | data.created_at_text | string | 创建时间文本（Y-m-d H:i:s） |
 | data.updated_at | int | 更新时间戳 |
 | data.updated_at_text | string | 更新时间文本（Y-m-d H:i:s） |
+
+### user 字段说明（detail）
+
+> 来源表：`qimall_user`，返回用户表全量字段（已过滤 `password` / `transaction_password`），**未附带增强字段**（与列表接口不同）。
+>
+> `mobile` **未脱敏**，为真实手机号明文返回。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | int | 用户ID |
+| username | string | 用户账号（手机号） |
+| nickname | string | 用户昵称 |
+| avatar_url | string | 用户头像URL |
+| mobile | string | 手机号（未脱敏，明文返回） |
+| level | int | 普通会员等级 |
+| ... | ... | qimall_user 表其余字段 |
+
+### parent_agents 字段说明
+
+> 通过 `qimall_user.parent_id` / `second_parent_id` / `third_parent_id` 关联查询多级上级用户及其代理信息。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| parent | object/null | 直推人数据 |
+| parent.user | object/null | qimall_user 全量字段（无则为 null） |
+| parent.agent | object/null | 云库存代理信息（id / user_id / level / status） |
+| second_parent | object/null | 二级推荐人数据（结构同 parent） |
+| second_parent.user | object/null | qimall_user 全量字段 |
+| second_parent.agent | object/null | 云库存代理信息 |
+| third_parent | object/null | 三级推荐人数据（结构同 parent） |
+| third_parent.user | object/null | qimall_user 全量字段 |
+| third_parent.agent | object/null | 云库存代理信息 |
+
+### highest_user 字段说明（detail）
+
+> 通过 `qimall_user_partition_relationship` 表获取 `tree` 字段，解码树顶节点获得 `highest_user_id`，关联 `qimall_user` 和 `qimall_addons_cloud_stock_agent` 表获取数据。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| user | object/null | qimall_user 全量字段（无则为 null） |
+| agent | object/null | 云库存代理信息（id / user_id / level / status） |
 
 ### 实现位置
 
@@ -374,36 +419,39 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/detail" \
 
 ### 响应示例
 
-> 以下为真实接口返回示例（商城 `mall_id=1`，数据来源于生产库 `qimall_prod`）。
+> 以下为真实接口返回示例（商城 `mall_id=1`，数据来源于生产库）。
 
 ```json
 {
   "code": 0,
   "msg": "操作成功",
   "data": {
-    "id": 6,
-    "order_no": "CSP20251225131702968925",
+    "id": 17,
+    "order_no": "CSP20260109101204835092",
     "order_type": 1,
     "order_type_text": "云仓自提",
-    "send_status": 2,
-    "send_status_text": "已完成",
+    "send_status": 4,
+    "send_status_text": "已取消",
     "user": {
-      "id": 171758,
-      "nickname": "缘份天注定",
-      "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2025/12/25/image_1766625225_dJ5B8B3j.jpg",
-      "mobile": "137****6299"
+      "id": 171973,
+      "username": 18665546822,
+      "nickname": "小明",
+      "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2026/01/03/image_1767427750_ldAalvCs.jpg",
+      "mobile": 18665546822,
+      "level": 5,
+      ...
     },
     "details": [
       {
-        "id": 6,
-        "user_id": 171758,
+        "id": 17,
+        "user_id": 171973,
         "mall_id": 1,
         "goods_id": 1,
-        "order_id": 6,
-        "num": 3,
+        "order_id": 17,
+        "num": 24,
         "status": 1,
-        "created_at": 1766639822,
-        "updated_at": 1766639822,
+        "created_at": 1767924724,
+        "updated_at": 1767924724,
         "goods": {
           "id": 1,
           "goods_name": "尝鲜装",
@@ -412,34 +460,45 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/detail" \
       }
     ],
     "num": 0,
-    "name": "杜修君",
-    "mobile": "150****7079",
-    "address": "江苏省苏州市昆山市千灯镇锦景园26栋",
-    "province_id": 811,
-    "city_id": 850,
-    "district_id": 858,
-    "town_id": 11617,
-    "region_name": "江苏省 苏州市 昆山市",
-    "express_code": "SF",
-    "express_name": "顺丰速运",
-    "express_no": "SF0257790655543",
+    "name": "李四",
+    "mobile": "189****9911",
+    "address": "广东省广州市天河区",
+    "province_id": 1941,
+    "city_id": 1942,
+    "district_id": 1947,
+    "town_id": 26079,
+    "region_name": "广东省 广州市 天河区",
+    "express_code": "",
+    "express_name": "",
+    "express_no": "",
     "seller_remark": "",
+    "parent_agents": {
+      "parent": {
+        "user": { "id": 171865, "username": 13066481413, "nickname": "张三", ... },
+        "agent": { "id": 79, "user_id": 171865, "level": 8, "status": 1 }
+      },
+      "second_parent": {
+        "user": { "id": 171824, "username": 17342689911, "nickname": "李四", ... },
+        "agent": { "id": 37, "user_id": 171824, "level": 8, "status": 1 }
+      },
+      "third_parent": {
+        "user": { "id": 171809, "username": 18983837289, "nickname": "王五", ... },
+        "agent": { "id": 25, "user_id": 171809, "level": 8, "status": 1 }
+      }
+    },
     "highest_user": {
-      "id": 171758,
-      "nickname": "缘份天注定",
-      "avatar_url": "https://slqy.oss-cn-shenzhen.aliyuncs.com/images/1/2025/12/25/image_1766625225_dJ5B8B3j.jpg",
-      "mobile": "13787956299",
-      "level": 8
+      "user": { "id": 171754, "username": 13168686868, "nickname": "顶级用户", ... },
+      "agent": { "id": 24, "user_id": 171754, "level": 8, "status": 1 }
     },
     "table_express_status": 0,
     "express_status": 9,
     "is_shipping_refunded": 0,
     "is_delivery_address_modified": 0,
     "refunds": [],
-    "created_at": 1766639822,
-    "created_at_text": "2025-12-25 05:17:02",
-    "updated_at": 1767875299,
-    "updated_at_text": "2026-01-08 12:28:19"
+    "created_at": 1767924724,
+    "created_at_text": "2026-01-09 10:12:04",
+    "updated_at": 1767929410,
+    "updated_at_text": "2026-01-09 11:30:10"
   }
 }
 ```
@@ -482,6 +541,9 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
 | data.express_status | object | 物流状态枚举映射 |
 | data.express_status.desc | string | 字段中文说明 |
 | data.express_status.map | array | 枚举值映射数组 |
+| data.cloud_stock_level | object | 云仓代理等级映射 |
+| data.cloud_stock_level.desc | string | 字段中文说明 |
+| data.cloud_stock_level.map | array | 等级数据数组 |
 
 每个枚举字段格式：
 
@@ -491,6 +553,17 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
   "map": [
     { "value": 0, "label": "标签文本" },
     { "value": 1, "label": "标签文本" }
+  ]
+}
+```
+
+`cloud_stock_level` 字段格式：
+
+```json
+{
+  "desc": "云仓代理等级",
+  "map": [
+    { "id": 1, "level": 1, "name": "等级名称" }
   ]
 }
 ```
@@ -516,12 +589,22 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
 
 **express_status（物流状态）**：
 
-> 注：常量映射仅给出 0/1 两个枚举，但主表 `express_status` 字段默认值为 9，表示"物流公司官网状态码"（由物流接口实时返回，如 9=已签收等），取值以实际物流状态为准。
-
 | 值 | 标签 | 说明 |
 |----|------|------|
 | 0 | 未完成 | 物流未完成 |
 | 1 | 已完成 | 物流已完成 |
+
+> 注：主表 `express_status` 字段默认值为 9，表示"物流公司官网状态码"（由物流接口实时返回，如 9=已签收等），取值以实际物流状态为准。
+
+**cloud_stock_level（云仓代理等级）**：
+
+> 来源表：`qimall_addons_cloud_stock_level`，查询条件含 `mall_id` + `status=1`（启用）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | int | 等级记录ID |
+| level | int | 等级权重值 |
+| name | string | 等级名称 |
 
 ### 响应示例
 
@@ -553,6 +636,13 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
         { "value": 0, "label": "未完成" },
         { "value": 1, "label": "已完成" }
       ]
+    },
+    "cloud_stock_level": {
+      "desc": "云仓代理等级",
+      "map": [
+        { "id": 1, "level": 1, "name": "一级代理" },
+        { "id": 2, "level": 2, "name": "二级代理" }
+      ]
     }
   }
 }
@@ -576,11 +666,11 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
 
 ### 手机号脱敏
 
-接口下发时对大部分手机号字段执行脱敏处理，规则为保留前 3 位和后 4 位，中间 4 位用 `****` 替换，例如：`138****8888`。
+接口下发时对部分手机号字段执行脱敏处理，规则为保留前 3 位和后 4 位，中间 4 位用 `****` 替换，例如：`138****8888`。
 
-涉及字段：`user.mobile`、`mobile`（收货人）。
+涉及字段：`mobile`（收货人）。
 
-**例外**：`highest_user.mobile` **未脱敏**，为真实手机号明文返回（当前实现为 qimall_user 字段透传，未执行脱敏）。
+**例外**：`user.mobile` **未脱敏**，为真实手机号明文返回（当前实现为 qimall_user 字段透传，未执行脱敏）。
 
 ### 时间字段
 
@@ -609,10 +699,13 @@ curl -X POST "http://api.ten.com/open-api/v1/cloud-stock-agent-order/constants" 
 | `qimall_addons_cloud_stock_agent_order` | 自提单主表 |
 | `qimall_addons_cloud_stock_agent_order_details` | 自提单商品明细表 |
 | `qimall_addons_cloud_stock_agent_order_refund` | 自提单退款表 |
-| `qimall_user` | 用户表（下单用户、归属店铺用户） |
+| `qimall_user` | 用户表（下单用户、上级代理用户） |
 | `qimall_goods` | 商品表 |
 | `qimall_common_express` | 物流公司表 |
-| `qimall_addons_cloud_stock_agent` | 云库存代理商表（归属店铺等级） |
+| `qimall_addons_cloud_stock_agent` | 云库存代理商表（代理等级） |
+| `qimall_addons_cloud_stock_level` | 云仓代理等级表 |
+| `qimall_user_level` | 普通会员等级表 |
+| `qimall_user_partition_relationship` | 用户分区关系表（highest_user 树顶节点） |
 | `qimall_region` | 地区表（region_name 拼接用） |
 
 ---
@@ -625,7 +718,10 @@ qimall_addons_cloud_stock_agent_order（自提单主表）
   ├── qimall_addons_cloud_stock_agent_order_details（商品明细）  1:N  通过 order_id 关联
   │       └── qimall_goods（商品信息）           1:1  通过 details.goods_id 关联
   ├── qimall_common_express（物流公司）          1:1  通过 express_code 关联
-  ├── qimall_addons_cloud_stock_agent（归属店铺） 1:1  通过 highest_user_id 关联
-  │       └── qimall_user（归属店铺用户）        1:1  通过 user_id 关联
+  ├── qimall_addons_cloud_stock_agent（代理商）   1:N  通过 user_id 关联
+  │       └── qimall_addons_cloud_stock_level（等级）  1:1  通过 level 关联
+  ├── qimall_user（上级代理用户）               1:N  通过 parent_id / second_parent_id / third_parent_id 关联
+  ├── qimall_user_partition_relationship（分区关系）  1:1  通过 user_id 关联，tree 字段解码得 highest_user_id
+  │       └── qimall_user（顶级用户）            1:1  通过 highest_user_id 关联
   └── qimall_addons_cloud_stock_agent_order_refund（退款单）  1:N  通过 order_id 关联
 ```
