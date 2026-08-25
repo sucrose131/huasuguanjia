@@ -754,8 +754,8 @@ onMounted(async () => {
 
 <template>
   <el-form label-position="top" :disabled="isView">
-    <div class="form-grid master-grid">
-      <el-form-item v-if="mode !== 'edit'" label="来源方式" class="span-2">
+    <div class="master-grid purchase-master-grid">
+      <el-form-item v-if="mode !== 'edit'" label="来源方式">
         <el-radio-group v-model="form.directReceipt" @change="receiptSourceChanged">
           <el-radio-button :value="false">采购订单入库</el-radio-button>
           <el-radio-button :value="true">临时采购入库</el-radio-button>
@@ -863,6 +863,9 @@ onMounted(async () => {
         :closable="false"
         title="确认临时采购入库时，系统会反向生成已审批采购申请和采购订单。"
       />
+      <el-form-item label="备注" class="span-all">
+        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
+      </el-form-item>
     </div>
 
     <!-- 订单入库：卡片式明细 -->
@@ -1113,13 +1116,18 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0 16px;
+/* 复用全局 .master-grid（4 列）/ .span-2 / .span-all 网格定义；此处对齐旧版间距并补齐控件宽度 */
+.master-grid {
+  gap: 12px 16px;
 }
-.span-2 {
-  grid-column: 1 / -1;
+.master-grid :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+.master-grid :deep(.el-select),
+.master-grid :deep(.el-date-editor),
+.master-grid :deep(.el-input-number),
+.master-grid :deep(.el-tree-select) {
+  width: 100%;
 }
 .section-title {
   display: flex;
