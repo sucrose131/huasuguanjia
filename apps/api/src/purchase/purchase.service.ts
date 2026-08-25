@@ -2376,6 +2376,13 @@ export class PurchaseService {
       where: { po_input_id: header.po_input_id, deleted_at: null },
     });
     const order = await this.order(String(header.po_id));
+    // 临时采购入库：入库单关联的采购申请由系统反向生成（source_type=temporary_receipt）
+    const sourceApplication = order.applicationId
+      ? await this.prisma.hspsi_purchase_approve.findFirst({
+          where: { pur_id: BigInt(String(order.applicationId)), deleted_at: null },
+          select: { source_type: true },
+        })
+      : null;
     return {
       ...header,
       id: header.po_input_id,
@@ -2383,6 +2390,7 @@ export class PurchaseService {
       orderId: header.po_id,
       orderNo: order.orderNo,
       applicationNo: order.applicationNo,
+      directReceipt: sourceApplication?.source_type === 'temporary_receipt',
       orgId: header.org_id,
       warehouseId: header.warehouse_id,
       deptId: header.dept_id,
