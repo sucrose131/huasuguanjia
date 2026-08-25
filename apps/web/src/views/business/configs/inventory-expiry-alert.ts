@@ -9,22 +9,7 @@ export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
   endpoint: '/inventory/expiry-alerts',
   no: 'goodsName',
   optionBags: ['orgs'],
-  queryFields: [
-    { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
-    {
-      key: 'warehouseId',
-      label: '仓库',
-      type: 'select',
-      dependsOn: 'orgId',
-      width: 180,
-      loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
-        return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
-        })) as any[];
-      },
-    },
-  ],
+  queryFields: [{ key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 }],
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 125 },
     { prop: 'goodsName', label: '商品名称', minWidth: 150, tooltip: true },
@@ -50,8 +35,7 @@ export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: false,
+  pagination: false,
   formComponent: InventoryExpiryAlertForm,
-  rowActions: [
-    { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
-  ],
+  rowActions: [],
 };

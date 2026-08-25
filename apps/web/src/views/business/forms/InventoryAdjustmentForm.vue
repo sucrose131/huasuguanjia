@@ -39,11 +39,21 @@ function blankLine() {
     unitType: 0,
     unitName: '',
     inventoryQty: 0,
+    beforeQty: 0,
+    afterQty: 0,
     adjustType: dicts.adjustTypes?.[0]?.value ?? 1,
     quantity: 1,
     remark: '',
     stocks: [],
   };
+}
+
+function recalcLine(line: any) {
+  line.beforeQty = Number(line.inventoryQty ?? line.beforeQty ?? 0);
+  line.afterQty =
+    Number(line.beforeQty) +
+    (Number(line.adjustType) === 1 ? Number(line.quantity ?? 0) : -Number(line.quantity ?? 0));
+  return line;
 }
 
 function unitName(line: any) {
@@ -82,6 +92,7 @@ function stockChanged(line: any) {
     unitName: stock.unitName,
     inventoryQty: Number(stock.inventoryQty ?? 0),
   });
+  recalcLine(line);
 }
 
 async function searchGoodsOptions(line: any, keyword: string) {
@@ -247,6 +258,7 @@ onMounted(async () => {
       inventoryQty: Number(line.beforeQty ?? 0),
       stockKey: `${line.goodsId}-${line.skuId}-${line.warehouseId}-${line.batchNo ?? ''}`,
     }));
+    form.value.details.forEach(recalcLine);
     await Promise.all(form.value.details.map((line: any) => loadLineStocks(line)));
   }
   await loadOrgWarehouses(form.value.orgId);
@@ -263,6 +275,9 @@ onMounted(async () => {
           value-format="YYYY-MM-DD"
           :disabled="isView"
         />
+      </el-form-item>
+      <el-form-item label="经办人">
+        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
       </el-form-item>
       <el-form-item label="调整原因" required>
         <el-input v-model="form.reason" :disabled="isView" />
@@ -341,7 +356,7 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="调整类型" width="115">
         <template #default="s">
-          <el-select v-if="!isView" v-model="s.row.adjustType">
+          <el-select v-if="!isView" v-model="s.row.adjustType" @change="recalcLine(s.row)">
             <el-option
               v-for="item in dicts.adjustTypes"
               :key="item.value"
@@ -360,8 +375,12 @@ onMounted(async () => {
             :precision="0"
             :step="1"
             :disabled="isView"
+            @change="recalcLine(s.row)"
           />
         </template>
+      </el-table-column>
+      <el-table-column label="调整后数量" width="105" align="right">
+        <template #default="s">{{ Number(s.row.afterQty ?? 0).toLocaleString() }}</template>
       </el-table-column>
       <el-table-column label="备注" min-width="120">
         <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>

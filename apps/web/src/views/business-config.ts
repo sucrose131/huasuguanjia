@@ -12,6 +12,8 @@ export type BusinessColumn = {
   tooltip?: boolean;
   /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */
   render?: (row: Record<string, any>, ctx: any) => string;
+  /** 该列渲染为「点击查看单据」的链接（如盘点单号） */
+  link?: boolean;
 };
 export type BusinessConfig = {
   title: string;

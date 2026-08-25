@@ -9,20 +9,26 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
   documentType: 'inventory_loss_output',
+  keywordPlaceholder: '商品编码 / 名称 / SKU',
   no: 'businessNo',
   columns: [
-    { prop: 'businessNo', label: '单号', minWidth: 165 },
-    { prop: 'sourceCheckNo', label: '来源盘点', minWidth: 140 },
-    { prop: 'sourceLossNo', label: '来源报损', minWidth: 140 },
-    { prop: 'orgName', label: '组织', minWidth: 110 },
-    { prop: 'warehouseName', label: '仓库', minWidth: 120 },
-    { prop: 'documentTypeName', label: '单据类型', minWidth: 110, kind: 'status' },
-    { prop: 'date', label: '日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number', align: 'right' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status' },
-    { prop: 'inputStatus', label: '入库状态', minWidth: 110, kind: 'status' },
-    { prop: 'createdByName', label: '创建人', minWidth: 100 },
-    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+    { prop: 'businessNo', label: '报亏出库单号', minWidth: 155, link: true },
+    {
+      prop: 'sourceCheckNo',
+      label: '来源盘点',
+      minWidth: 145,
+      render: (row) => row.sourceCheckNo || (row.sourceLossNo ? `历史：${row.sourceLossNo}` : '—'),
+    },
+    { prop: 'orgName', label: '组织', minWidth: 105 },
+    { prop: 'warehouseName', label: '仓库', minWidth: 110 },
+    { prop: 'deptName', label: '部门', minWidth: 100 },
+    { prop: 'documentTypeName', label: '报亏类型', minWidth: 105 },
+    { prop: 'reason', label: '原因', minWidth: 150, tooltip: true },
+    { prop: 'date', label: '日期', minWidth: 105, kind: 'date' },
+    { prop: 'quantity', label: '数量', minWidth: 85, kind: 'number', align: 'right' },
+    { prop: 'amount', label: '金额', minWidth: 100, kind: 'money', align: 'right' },
+    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status', statusDict: 'approval_status' },
+    { prop: 'createdByName', label: '创建人', minWidth: 90 },
   ],
   dictionaries: ['inventory_loss_output_type', 'approval_status'],
   optionBags: ['orgs'],
@@ -43,6 +49,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: false,
+  dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossOutputForm,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
@@ -57,7 +64,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       label: '通过',
       kind: 'success',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) => Number(row.approveStatus) === 0 && [0, 1].includes(Number(row.status)),
       confirm: '审核通过将按来源批次扣减库存，是否继续？',
       handler: async (row) => {
         await api.post(`/inventory/loss-outputs/${row.id}/approve`, { approved: true, comment: '' });
@@ -74,18 +81,6 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       handler: async (row) => {
         await api.post(`/inventory/loss-outputs/${row.id}/confirm`, { comment: '确认出库' });
         ElMessage.success('已确认出库');
-      },
-    },
-    {
-      key: 'delete',
-      label: '删除',
-      kind: 'danger',
-      primary: false,
-      show: (row) => Number(row.approveStatus) === 0,
-      confirm: '确认删除该报损出库单？',
-      handler: async (row) => {
-        await api.delete(`/inventory/loss-outputs/${row.id}`);
-        ElMessage.success('删除成功');
       },
     },
   ],
