@@ -54,9 +54,13 @@ export class RequisitionOaApprovalService {
     // 不信任前端自动填入的主身份 staff_id（多账套用户可能跨账套错配）。
     const appBrief = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
-      select: { org_id: true },
+      select: { org_id: true, draw_type: true },
     });
     if (!appBrief) throw new BadRequestException('领用申请不存在');
+    // 非「借用」类型的领用申请走系统内审批，不推送 OA。
+    if (Number(appBrief.draw_type) !== 2) {
+      throw new BadRequestException('非借用领用申请走系统内审批，无需提交OA');
+    }
     const orgBrief = await this.prisma.hspsi_basic_organization.findFirst({
       where: { org_id: appBrief.org_id, deleted_at: null },
       select: { account_set_id: true },
