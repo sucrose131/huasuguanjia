@@ -126,9 +126,11 @@ export class InventoryService {
         select: { sku_id: true },
       }),
     ]);
+    // 纯数字关键字同时精确匹配 sku_id（SKU 编号即 sku_id 主键，不在 spec_models 文本中）
+    const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
     return {
       goodsIds: goods.map((item) => item.goods_id),
-      skuIds: skus.map((item) => item.sku_id),
+      skuIds: [...skus.map((item) => item.sku_id), ...(numericSkuId ? [numericSkuId] : [])],
     };
   }
 
