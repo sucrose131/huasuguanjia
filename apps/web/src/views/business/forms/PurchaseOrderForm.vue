@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
+import { filterGoodsByWarehouseType, warehouseTypeOf } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 
 const props = defineProps<{
@@ -22,6 +23,7 @@ const options = reactive<Record<string, any>>({
   receivers: [],
   vendors: [],
   units: [],
+  receivers: [],
   contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
@@ -134,6 +136,11 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
+/** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
+const selectedWarehouseType = computed(() =>
+  warehouseTypeOf(options.warehouses ?? [], form.value.warehouseId),
+);
+
 /** 仓库选项：按明细商品分类类型过滤（先选商品后选仓库场景） */
 const warehouseOptions = computed(() =>
   (options.warehouses ?? []).filter(
@@ -155,10 +162,11 @@ function warehouseChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '')
-    .trim()
-    .toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
+  const kw = String(keyword ?? '').trim().toLowerCase();
+  const list = filterGoodsByWarehouseType(
+    options.contextGoods,
+    selectedWarehouseType.value,
+  ).filter((g: any) =>
     kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
   );
   return list.map((g: any) => ({
@@ -369,14 +377,16 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, vendors] = await Promise.all([
+  const [orgs, units, vendors, receivers] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/base-data/vendors/options').catch(() => []),
+    api.get('/purchase/receiver-options').catch(() => []),
   ]);
   options.orgs = orgs as any[];
   options.units = units as any[];
   options.vendors = vendors as any[];
+  options.receivers = receivers as any[];
   await loadDicts();
 
   if (props.mode === 'create') {
