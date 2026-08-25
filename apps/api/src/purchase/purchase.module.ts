@@ -8,6 +8,7 @@ import { PurchaseController } from './purchase.controller';
 import { PurchaseService } from './purchase.service';
 import { XinfutongOaModule } from '../integrations/xinfutong-oa/xinfutong-oa.module';
 import { AmountAccessModule } from '../amount-access/amount-access.module';
+import { MessageModule } from '../message/message.module';
 @Module({
   imports: [
     AuthModule,
@@ -15,6 +16,7 @@ import { AmountAccessModule } from '../amount-access/amount-access.module';
     InventoryModule,
     XinfutongOaModule,
     AmountAccessModule,
+    MessageModule,
   ],
   controllers: [PurchaseController],
   providers: [PurchaseService, PurchaseOaApprovalService, PurchaseReturnOaApprovalService],

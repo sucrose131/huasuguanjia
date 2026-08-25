@@ -10,6 +10,7 @@ coverage/
 .env.*.local
 apps/api/prisma/migrations/*/migration_lock.toml
 *.log
+apps/api/logs/
 
 docs/*
 !docs/README.md

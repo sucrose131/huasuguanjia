@@ -750,14 +750,22 @@ export class DashboardService {
     rows = [...rows, ...generated].sort((left, right) =>
       String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
     );
+    // 各类消息总数（基于全量未过滤数据，供前端侧栏徽标使用，不受当前分类/分页影响）
+    const categoryCounts = {
+      审批消息: rows.filter((item) => item.category === '审批消息').length,
+      预警消息: rows.filter((item) => item.category === '预警消息').length,
+      业务消息: rows.filter((item) => item.category === '业务消息').length,
+    };
+    let result = rows;
     if (category && category !== '全部消息')
-      rows = rows.filter((item) => item.category === category);
+      result = result.filter((item) => item.category === category);
     return {
-      items: rows.slice((page - 1) * pageSize, page * pageSize),
-      total: rows.length,
+      items: result.slice((page - 1) * pageSize, page * pageSize),
+      total: result.length,
       page,
       pageSize,
       unreadCount: all.filter((item) => item.is_read === 0).length,
+      categoryCounts,
     };
   }
 

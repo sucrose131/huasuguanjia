@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -14,6 +15,7 @@ import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { MessageService } from '../message/message.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
@@ -33,6 +35,8 @@ type OperationHistoryItem = {
 };
 @Injectable()
 export class PurchaseService {
+  private static readonly logger = new Logger(PurchaseService.name);
+
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(BusinessMasterDataService) private masterData: BusinessMasterDataService,
@@ -40,6 +44,7 @@ export class PurchaseService {
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private businessNumber: BusinessNumberService,
+    @Inject(MessageService) private message: MessageService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -3016,6 +3021,12 @@ export class PurchaseService {
     if (!confirmed) throw new BadRequestException('已入库单不能撤销，请从采购入库单发起采购退货');
     const receiptId = BigInt(id);
     let alreadyConfirmed = false;
+    let receiptContext: {
+      poId: bigint;
+      receiptNo: string;
+      orderNo: string;
+      quantity: number;
+    } | null = null;
     await this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT po_input_id FROM hspsi_purchase_order_input WHERE po_input_id=${receiptId} FOR UPDATE`;
       const header = await tx.hspsi_purchase_order_input.findFirst({
@@ -3052,6 +3063,12 @@ export class PurchaseService {
           inputQuantity: line.input_qty,
           validityPeriod: line.validity_period,
         })),
+      };
+      receiptContext = {
+        poId: sourceOrder.po_id,
+        receiptNo: header.po_input_no,
+        orderNo: sourceOrder.po_no,
+        quantity: Number(header.input_qty),
       };
       if (
         confirmed &&
@@ -3160,6 +3177,16 @@ export class PurchaseService {
         },
       });
     });
+    if (confirmed && !alreadyConfirmed && receiptContext) {
+      try {
+        await this.message.sendPurchaseReceiptNotification(receiptContext);
+      } catch (error) {
+        // 通知失败不影响入库结果，仅记录应用日志
+        PurchaseService.logger.error(
+          `采购入库通知发送失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     return {
       id,
       message: alreadyConfirmed
