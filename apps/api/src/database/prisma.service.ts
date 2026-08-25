@@ -8,6 +8,8 @@ type ScopedModel = {
   orgScalar: 'BigInt' | 'Int';
   primaryField?: string;
   uniqueColumns: Map<string, string>;
+  /** 复合唯一键列集（@@id / @@unique），where 中按键名（列名 join('_')）传入对象值 */
+  compoundKeys: string[][];
   hasCreatedBy: boolean;
   personalScope: boolean;
   includesSharedOrganization: boolean;
@@ -40,6 +42,12 @@ function scopedModels() {
           .filter((field) => field.isId || field.isUnique)
           .map((field) => [field.name, field.dbName ?? field.name]),
       ),
+      compoundKeys: [
+        ...(model.primaryKey?.fields?.length ? [[...model.primaryKey.fields]] : []),
+        ...(model.uniqueFields ?? [])
+          .filter((fields) => fields.length)
+          .map((fields) => [...fields]),
+      ],
       hasCreatedBy: model.fields.some((field) => field.name === 'created_by'),
       personalScope: false,
       includesSharedOrganization: model.name === 'hspsi_goods_info',
@@ -119,7 +127,30 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         const lookupField = [...meta.uniqueColumns.keys()].find(
           (field) => where[field] !== undefined && typeof where[field] !== 'object',
         );
-        if (!lookupField) throw new ForbiddenException('无法确认目标数据的组织归属');
+        if (!lookupField) {
+          // 复合唯一键（where 值为对象且键内不含 org_id，如 hspsi_inventory_batch_total 的
+          // goods_id_sku_id_warehouse_id_batch_no）：按复合键列回查目标行组织，
+          // 命中且组织不符才拒绝；未命中行交由底层返回。
+          for (const columns of meta.compoundKeys) {
+            const compoundKey = columns.join('_');
+            const parts = where[compoundKey];
+            if (!parts || typeof parts !== 'object') continue;
+            const rows = await this.$queryRawUnsafe<Array<Record<string, unknown>>>(
+              `SELECT \`${meta.orgField}\` AS org_id FROM \`${meta.table}\` WHERE ${columns
+                .map((column) => `\`${column}\` = ?`)
+                .join(' AND ')} LIMIT 1`,
+              ...columns.map((column) => (parts as Record<string, unknown>)[column] as string | number | bigint),
+            );
+            const record = rows[0];
+            if (
+              record &&
+              !modelAllowedIds.includes(organizationValue(meta, record.org_id as any))
+            )
+              throw new ForbiddenException(`不能${operation}其他组织的数据`);
+            return;
+          }
+          throw new ForbiddenException('无法确认目标数据的组织归属');
+        }
         const lookupColumn = meta.uniqueColumns.get(lookupField)!;
         const rows = await this.$queryRawUnsafe<Array<Record<string, unknown>>>(
           `SELECT \`${meta.orgField}\` AS org_id${meta.hasCreatedBy ? ', `created_by`' : ''} FROM \`${meta.table}\` WHERE \`${lookupColumn}\` = ? LIMIT 1`,
