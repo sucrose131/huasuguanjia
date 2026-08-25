@@ -365,9 +365,9 @@ onMounted(async () => {
       </div>
 
       <div class="table-wrap">
-        <el-table :data="rows" v-loading="loading" border stripe row-key="id">
-          <el-table-column type="index" label="序号" width="65" fixed="left" />
-          <el-table-column prop="id" label="ID" width="100" fixed="left" />
+        <el-table :data="rows" v-loading="loading" border row-key="id">
+          <el-table-column type="index" label="序号" width="58" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column
             v-for="column in config.columns"
             :key="column.prop"
@@ -451,9 +451,9 @@ onMounted(async () => {
           v-model:page-size="query.pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="load"
-          @size-change="query.page = 1; load()"
+          :teleported="false"
+          layout="prev, pager, next, sizes"
+          @change="load"
         />
       </div>
     </div>
