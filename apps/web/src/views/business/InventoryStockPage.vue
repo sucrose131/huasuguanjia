@@ -147,7 +147,8 @@ async function loadOptions() {
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/departments/options').catch(() => []),
     api.get('/base-data/warehouses/options').catch(() => []),
-    api.get('/base-data/employees/options').catch(() => []),
+    // 领用人筛选按系统用户（领用出库 receiver_id 为 sys_user id）
+    api.get('/inventory/users/options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.depts = depts;
@@ -167,7 +168,7 @@ async function organizationChanged(value: unknown) {
   Object.assign(summary, { itemCount: 0, totalAmount: 0, warningCount: 0 });
   await loadWarehouseTabs(query.orgId);
   options.employees = (await api
-    .get('/base-data/employees/options', { params: { orgId: query.orgId } })
+    .get('/inventory/users/options', { params: { orgId: query.orgId } })
     .catch(() => [])) as any[];
   await load();
 }

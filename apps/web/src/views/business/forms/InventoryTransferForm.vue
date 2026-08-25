@@ -254,7 +254,8 @@ async function saveAndSubmit() {
 onMounted(async () => {
   const [orgs, users, units, stocks] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/employees/options').catch(() => []),
+    // 发出人/接收人为系统用户（后端按 hspsi_sys_user 校验与解析姓名）
+    api.get('/inventory/users/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/inventory/stock-options').catch(() => []),
   ]);
