@@ -2021,6 +2021,7 @@ export class PurchaseService {
           updated_at: new Date(),
         },
       });
+      await this.logOrderTransition(tx, poId, 'start', '开始采购', userId, '订单进入采购中');
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_application',
@@ -2200,6 +2201,7 @@ export class PurchaseService {
         where: { po_id: poId },
         data: { updated_by: BigInt(userId), updated_at: new Date() },
       });
+      await this.logOrderTransition(tx, poId, 'return-unarrived', '退回未到货', userId, `生成退货单 ${businessNo}`);
       return { id: header.po_exit_id, businessNo, message: '未到货数量已退回，退货记录已生成' };
     });
   }
@@ -4051,6 +4053,30 @@ export class PurchaseService {
     });
     return { id, message: '付款已撤销，订单累计已付已重算' };
   }
+  /** 记录采购订单级状态迁移（开始采购/退回未到货等），供操作记录展示。 */
+  private async logOrderTransition(
+    tx: Prisma.TransactionClient,
+    poId: bigint,
+    action: string,
+    label: string,
+    userId: string,
+    detail = '',
+  ) {
+    await tx.hspsi_sys_oper_log.create({
+      data: {
+        method: 'POST',
+        router: `purchase/orders/${poId}/${action}`,
+        url: `purchase/orders/${poId}/${action}`,
+        service_name: 'purchase-order-transition',
+        request_data: detail || null,
+        response_code: '200',
+        response_data: label,
+        created_by: Number(userId),
+        updated_by: Number(userId),
+      },
+    });
+  }
+
   async operationHistory(resource: string, id: string) {
     const documentId = BigInt(id);
     const items: OperationHistoryItem[] = [];
@@ -4159,6 +4185,24 @@ export class PurchaseService {
           '付款金额',
           '',
           Number(item.fact_pay_amount),
+        ),
+      );
+      const transitions = await this.prisma.hspsi_sys_oper_log.findMany({
+        where: {
+          service_name: 'purchase-order-transition',
+          router: { startsWith: `purchase/orders/${row.po_id}/` },
+          deleted_at: null,
+        },
+        orderBy: { id: 'asc' },
+      });
+      transitions.forEach((log) =>
+        add(
+          `transition-${log.id}`,
+          log.response_data ?? '订单状态变更',
+          '已执行',
+          log.created_by,
+          log.created_at,
+          log.request_data ?? '',
         ),
       );
     } else if (resource === 'receipts') {

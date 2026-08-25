@@ -911,6 +911,7 @@ describe('PurchaseService production-shortage guards', () => {
       },
       hspsi_purchase_approve: { findFirst: vi.fn(), create: applicationCreate },
       hspsi_purchase_approve_detail: { createMany: applicationDetailCreate },
+      hspsi_sys_oper_log: { create: vi.fn() },
     };
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
