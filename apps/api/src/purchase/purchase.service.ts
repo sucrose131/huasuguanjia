@@ -14,6 +14,7 @@ import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { TodoService } from '../database/todo.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
@@ -40,6 +41,7 @@ export class PurchaseService {
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private businessNumber: BusinessNumberService,
+    @Inject(TodoService) private readonly todoService: TodoService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -64,6 +66,18 @@ export class PurchaseService {
   async allGoodsOptions(orgIdValue: unknown) {
     if (!orgIdValue) return [];
     return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
+  }
+  /** 采购订单收货人选项：启用系统用户（含 OA 同步人员），供收货人可编辑选择 */
+  async receiverOptions() {
+    const users = await this.prisma.hspsi_sys_user.findMany({
+      where: { status: 1, deleted_at: null },
+      orderBy: [{ id: 'asc' }],
+      select: { id: true, nickname: true, username: true },
+    });
+    return users.map((user) => ({
+      value: String(user.id),
+      label: user.nickname || user.username,
+    }));
   }
   private details(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
@@ -2033,6 +2047,7 @@ export class PurchaseService {
         },
         tx,
       );
+      await this.ensurePurchasePaidTodo(tx, poId);
       return { id, applicationId, applicationNo, message: '采购订单已开始采购' };
     });
   }
@@ -3966,6 +3981,38 @@ export class PurchaseService {
       },
     });
   }
+
+  /**
+   * 采购订单「完成付款且处于采购中（status=2）」时，给订单收货人写入待办提醒。
+   * 幂等由 TodoService 保证（同一业务+接收人的未完成记录不重复写）。
+   * 在 savePayment（付款完成）与 startOrder（进入采购中）两个时机调用，覆盖两种操作顺序。
+   */
+  private async ensurePurchasePaidTodo(tx: Prisma.TransactionClient, poId: bigint) {
+    const order = await tx.hspsi_purchase_order.findFirst({
+      where: { po_id: poId, deleted_at: null },
+      select: {
+        status: true,
+        pay_status: true,
+        receiver_id: true,
+        po_no: true,
+        org_id: true,
+      },
+    });
+    if (!order || Number(order.status) !== 2 || Number(order.pay_status) !== 1) return;
+    if (!order.receiver_id || order.receiver_id <= 0n) return;
+    await this.todoService.create(
+      {
+        userId: Number(order.receiver_id),
+        organizationId: Number(order.org_id),
+        title: order.po_no,
+        content: '采购订单已完成付款，请关注到货/收货',
+        businessType: 'purchase_order',
+        businessId: Number(poId),
+        actorUserId: String(order.receiver_id),
+      },
+      tx,
+    );
+  }
   async savePayment(id: string | null, body: Body, userId: string) {
     const poId = BigInt(String(body.orderId));
     const amount = new Prisma.Decimal(String(body.paymentAmount));
@@ -4015,6 +4062,7 @@ export class PurchaseService {
             },
           });
       await this.recalcPayment(tx, poId);
+      await this.ensurePurchasePaidTodo(tx, poId);
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_order',

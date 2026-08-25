@@ -6,14 +6,17 @@ function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
 ) {
-  return new PurchaseService(
+  const todoService = { create: vi.fn().mockResolvedValue({ created: true }) };
+  const service = new PurchaseService(
     prisma as never,
     { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
+    todoService as never,
   );
+  return Object.assign(service, { __todoService: todoService });
 }
 
 describe('PurchaseService quick catalog materialization', () => {
@@ -1445,3 +1448,126 @@ describe('PurchaseService production-shortage guards', () => {
   });
 });
 
+
+describe('PurchaseService paid order todo notification', () => {
+  function paymentTx(overrides: Record<string, any> = {}) {
+    const tx: Record<string, any> = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'CG202608260001',
+          org_id: 9n,
+          status: 2,
+          pay_status: 1,
+          receiver_id: 5n,
+          pay_amout: new Prisma.Decimal(21),
+        }),
+        update: vi.fn(),
+      },
+      hspsi_purchase_order_detail: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_order_input_exit: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_order_payment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ pay_id: 30n, pay_no: 'FK202608260001' }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { fact_pay_amount: new Prisma.Decimal(0) } }),
+      },
+      hspsi_purchase_refund: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_refund_flow: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { refund_amount: new Prisma.Decimal(0) } }),
+      },
+      hspsi_sys_dictionary_category: { findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1 }) },
+      hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_id: 1 }) },
+      ...overrides,
+    };
+    return tx;
+  }
+
+  it('writes a todo to the receiver when payment completes on a purchasing (status=2) order', async () => {
+    const tx = paymentTx();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.savePayment(
+      null,
+      {
+        orderId: 20,
+        deptId: 2,
+        paymentAmount: 21,
+        paymentChannel: 2,
+        paymentDate: '2026-08-02',
+      },
+      '9',
+    );
+
+    expect(todoService.create).toHaveBeenCalledTimes(1);
+    expect(todoService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 5,
+        organizationId: 9,
+        title: 'CG202608260001',
+        content: '采购订单已完成付款，请关注到货/收货',
+        businessType: 'purchase_order',
+        businessId: 20,
+      }),
+      tx,
+    );
+  });
+
+  it('writes a todo after startOrder when payment was already completed before purchasing', async () => {
+    // 直接验证私有方法：订单已采购中(status=2)且付款完成(pay_status=1) → 写 todo
+    const tx = paymentTx();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.ensurePurchasePaidTodo(tx, 20n);
+
+    expect(todoService.create).toHaveBeenCalledTimes(1);
+    expect(todoService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 5, businessType: 'purchase_order', businessId: 20 }),
+      tx,
+    );
+  });
+
+  it('does not write a todo when the order is still pending (status=1) or unpaid', async () => {
+    const tx = paymentTx({
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 22n,
+          po_no: 'CG202608260003',
+          org_id: 9n,
+          status: 1,
+          pay_status: 0,
+          receiver_id: 7n,
+          pay_amout: new Prisma.Decimal(100),
+        }),
+        update: vi.fn(),
+      },
+    });
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.savePayment(
+      null,
+      {
+        orderId: 22,
+        deptId: 2,
+        paymentAmount: 21,
+        paymentChannel: 2,
+        paymentDate: '2026-08-02',
+      },
+      '9',
+    );
+
+    expect(todoService.create).not.toHaveBeenCalled();
+  });
+});

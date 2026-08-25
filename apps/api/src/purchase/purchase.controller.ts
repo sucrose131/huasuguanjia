@@ -61,6 +61,11 @@ export class PurchaseController {
     return this.service.productOptions(orgId, warehouseId);
   }
   @RequirePermissions('purchase')
+  @Get('receiver-options')
+  receiverOptions() {
+    return this.service.receiverOptions();
+  }
+  @RequirePermissions('purchase')
   @Get('all-goods-options')
   allGoodsOptions(@Query('orgId') orgId?: string) {
     return this.service.allGoodsOptions(orgId);

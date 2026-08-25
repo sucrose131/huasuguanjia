@@ -21,6 +21,7 @@ const options = reactive<Record<string, any>>({
   warehouses: [],
   vendors: [],
   units: [],
+  receivers: [],
   contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
@@ -340,14 +341,16 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, vendors] = await Promise.all([
+  const [orgs, units, vendors, receivers] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/base-data/vendors/options').catch(() => []),
+    api.get('/purchase/receiver-options').catch(() => []),
   ]);
   options.orgs = orgs as any[];
   options.units = units as any[];
   options.vendors = vendors as any[];
+  options.receivers = receivers as any[];
   await loadDicts();
 
   if (props.mode === 'create') {
@@ -458,7 +461,19 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="收货人">
-        <el-input :model-value="auth.user?.username ?? '—'" disabled />
+        <el-select
+          v-model="form.receiverId"
+          filterable
+          :disabled="isView"
+          placeholder="请选择收货人"
+        >
+          <el-option
+            v-for="x in options.receivers"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="到货方式">
         <el-select v-model="form.arrivalType" :disabled="isView">
