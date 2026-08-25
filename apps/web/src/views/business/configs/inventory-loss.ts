@@ -9,6 +9,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
   subtitle: '支持盘点损坏生成和日常独立报损，按处置方式完成库存闭环',
   endpoint: '/inventory/losses',
   documentType: 'inventory_loss',
+  keywordPlaceholder: '商品编码 / 名称 / SKU',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '报损出库单号', minWidth: 155, link: true },
@@ -28,7 +29,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
     { prop: 'date', label: '日期', minWidth: 110, kind: 'date' },
     { prop: 'quantity', label: '数量', minWidth: 85, kind: 'number', align: 'right' },
     { prop: 'amount', label: '金额', minWidth: 100, kind: 'money', align: 'right' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status' },
+    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status', statusDict: 'approval_status' },
     { prop: 'createdByName', label: '创建人', minWidth: 90 },
   ],
   dictionaries: ['inventory_loss_type', 'inventory_loss_disposal', 'approval_status'],
@@ -52,6 +53,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
   creatable: true,
   createText: '新增报损单',
   createPreset: () => ({ businessKind: 2 }),
+  dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossForm,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {

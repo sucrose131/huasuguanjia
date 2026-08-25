@@ -36,8 +36,9 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   ],
   creatable: false,
   pagination: false,
+  dialog: { width: '520px', top: '4vh' },
   formComponent: InventoryQuantityAlertForm,
   rowActions: [
-    { key: 'edit', label: '设置阈值', handler: (row, ctx) => ctx.openEdit(row) },
+    { key: 'edit', label: '配置', handler: (row, ctx) => ctx.openEdit(row) },
   ],
 };

@@ -5,10 +5,11 @@ import InventoryOverflowForm from '../forms/InventoryOverflowForm.vue';
 
 export const inventoryOverflowConfig: BusinessDocumentConfig = {
   key: 'inventory/overflows',
-  title: '盘盈单',
+  title: '报盈入库单',
   subtitle: '仅由库存盘点的数量盘盈生成，审批后直接增加来源批次库存',
   endpoint: '/inventory/overflows',
   documentType: 'inventory_overflow',
+  keywordPlaceholder: '商品编码 / 名称 / SKU',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '报盈入库单号', minWidth: 155, link: true },
@@ -26,10 +27,18 @@ export const inventoryOverflowConfig: BusinessDocumentConfig = {
     { prop: 'date', label: '日期', minWidth: 105, kind: 'date' },
     { prop: 'quantity', label: '数量', minWidth: 85, kind: 'number', align: 'right' },
     { prop: 'amount', label: '金额', minWidth: 100, kind: 'money', align: 'right' },
-    { prop: 'approveStatus', label: '审批/入库状态', minWidth: 110, kind: 'status' },
+    {
+      prop: 'approveStatus',
+      label: '审批/入库状态',
+      minWidth: 110,
+      kind: 'status',
+      statusDict: 'inventory_overflow_status',
+      render: (row) =>
+        String(Number(row.inputStatus) === 1 ? 1 : Number(row.approveStatus) === 2 ? 2 : 0),
+    },
     { prop: 'createdByName', label: '创建人', minWidth: 90 },
   ],
-  dictionaries: ['inventory_overflow_type', 'approval_status'],
+  dictionaries: ['inventory_overflow_type', 'approval_status', 'inventory_overflow_status'],
   optionBags: ['orgs'],
   queryFields: [
     { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
@@ -47,9 +56,8 @@ export const inventoryOverflowConfig: BusinessDocumentConfig = {
       },
     },
   ],
-  creatable: true,
-  createText: '新增盘盈单',
-  createPreset: () => ({}),
+  creatable: false,
+  dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryOverflowForm,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {

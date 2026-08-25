@@ -9,6 +9,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
   documentType: 'inventory_loss_output',
+  keywordPlaceholder: '商品编码 / 名称 / SKU',
   no: 'businessNo',
   columns: [
     { prop: 'businessNo', label: '报亏出库单号', minWidth: 155, link: true },
@@ -26,7 +27,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
     { prop: 'date', label: '日期', minWidth: 105, kind: 'date' },
     { prop: 'quantity', label: '数量', minWidth: 85, kind: 'number', align: 'right' },
     { prop: 'amount', label: '金额', minWidth: 100, kind: 'money', align: 'right' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status' },
+    { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status', statusDict: 'approval_status' },
     { prop: 'createdByName', label: '创建人', minWidth: 90 },
   ],
   dictionaries: ['inventory_loss_output_type', 'approval_status'],
@@ -48,6 +49,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: false,
+  dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossOutputForm,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
