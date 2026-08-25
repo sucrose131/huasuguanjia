@@ -18,7 +18,6 @@ const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
   units: [],
-  goods: [],
   orders: [],
   serviceOutputs: [],
 });
@@ -49,10 +48,6 @@ function blankLine() {
     remainingQty: null,
     remark: '',
   };
-}
-
-function goodsOf(line: any) {
-  return (options.goods as any[]).find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
 
 function unitName(line: any) {
@@ -101,8 +96,7 @@ async function searchServiceGoodsOptions(keyword: string) {
     !ids.length || ids.some((id: string | number) => String(id) === String(g.id));
   const toOptions = (list: any[]) =>
     list.map((g: any) => ({ value: g.id, label: g.goodsName ?? g.queryCode ?? '' }));
-  if (!String(keyword ?? '').trim())
-    return toOptions(((options.goods as any[]) ?? []).filter(inOrder));
+  // 售后商品始终走远程搜索，不再依赖 onMounted 全量商品列表
   const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
   const items = ((r.items ?? []) as any[]).filter(inOrder);
   return toOptions(items);
@@ -289,17 +283,13 @@ function serviceProgressStatusType(item: Record<string, any>): 'success' | 'warn
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult, orders] = await Promise.all([
+  const [orgs, units, orders] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.orders = orders;
   await loadDicts();
 
@@ -448,10 +438,10 @@ onMounted(async () => {
     </div>
     <el-table v-if="serviceNeedsBatch" :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="180">
-        <template #default="s">{{ goodsOf(s.row).goodsName || s.row.goodsName || s.row.goodsId }}</template>
+        <template #default="s">{{ s.row.goodsName || s.row.goodsId || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ goodsOf(s.row).queryCode || s.row.goodsCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
         <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>

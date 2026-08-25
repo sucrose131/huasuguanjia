@@ -20,7 +20,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   units: [],
-  goods: [],
   orders: [],
   salesOutputs: [],
   disposalDict: [],
@@ -46,10 +45,6 @@ function blankLine() {
 
 function nid(v: unknown) {
   return v == null || v === '' || v === 0 || v === '0' ? '' : v;
-}
-
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
 
 function unitName(line: any) {
@@ -216,18 +211,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult, orders, disposalDict] = await Promise.all([
+  const [orgs, units, orders, disposalDict] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
     api.get('/dictionaries/sales_return_disposal').catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.orders = Array.isArray(orders) ? orders : ((orders as any).items ?? []);
   options.disposalDict = disposalDict;
 
@@ -328,10 +319,10 @@ onMounted(async () => {
     </div>
     <el-table :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="180">
-        <template #default="s">{{ goodsOf(s.row).goodsName || s.row.goodsName || '—' }}</template>
+        <template #default="s">{{ s.row.goodsName || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ goodsOf(s.row).queryCode || s.row.goodsCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
         <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>

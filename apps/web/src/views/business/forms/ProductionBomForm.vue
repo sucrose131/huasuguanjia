@@ -18,7 +18,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   units: [],
-  goods: [],
   goodsSkus: [],
   contextGoods: [],
 });
@@ -103,11 +102,7 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  if (!String(keyword ?? '').trim())
-    return options.goods.map((g: any) => ({
-      value: g.id,
-      label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
-    }));
+  // 成品选择始终走远程搜索，不再依赖 onMounted 全量商品列表
   const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
   return (r.items ?? []).map((g: any) => ({
     value: g.id,
@@ -183,16 +178,12 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult] = await Promise.all([
+  const [orgs, units] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   await loadDicts();
 
   if (props.mode === 'create') {

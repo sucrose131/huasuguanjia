@@ -19,7 +19,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   customers: [],
-  goods: [],
   units: [],
   stocks: [],
   contextGoods: [],
@@ -53,9 +52,6 @@ function lineActual(line: any) {
 function lineUnitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
-}
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
 
 const orderTotals = computed(() => {
@@ -230,18 +226,14 @@ onMounted(async () => {
     emit('cancel');
     return;
   }
-  const [orgs, customers, goodsResult, units, stocks] = await Promise.all([
+  const [orgs, customers, units, stocks] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/customers/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/inventory/stock-options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.customers = customers;
-  options.goods = (goodsResult as any).items ?? [];
   options.units = units;
   options.stocks = stocks;
   await loadDicts();
@@ -371,7 +363,7 @@ onMounted(async () => {
           <RemoteSelect
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
+            :current-label="s.row.goodsName || '—'"
             :disabled="isView || sourceLocked || !form.warehouseId"
             placeholder="请先选择组织与仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
@@ -379,7 +371,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ s.row.goodsCode || goodsOf(s.row).queryCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
         <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>

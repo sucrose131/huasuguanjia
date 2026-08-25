@@ -21,7 +21,6 @@ const options = reactive<Record<string, any>>({
   depts: [],
   users: [],
   units: [],
-  goods: [],
   stocks: [],
   orders: [],
   destinationDict: [],
@@ -53,10 +52,6 @@ function nid(v: unknown) {
 /** sales_order_type=4 无需出库，不能办理销售出库 */
 function isNoOutputOrder(order: { orderType?: unknown }) {
   return Number(order.orderType) === 4;
-}
-
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
 
 function stockKeyOf(line: any, warehouseId: unknown) {
@@ -224,22 +219,17 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, users, units, goodsResult, stocks, orders, destinationDict] =
-    await Promise.all([
-      api.get('/base-data/organizations/options').catch(() => []),
-      api.get('/base-data/users/options').catch(() => []),
-      api.get('/base-data/units/options').catch(() => []),
-      api
-        .get('/goods', { params: { pageSize: 100, status: 1 } })
-        .catch(() => ({ items: [] as any[] })),
-      api.get('/inventory/stock-options').catch(() => []),
-      api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
-      api.get('/dictionaries/sales_output_destination').catch(() => []),
-    ]);
+  const [orgs, users, units, stocks, orders, destinationDict] = await Promise.all([
+    api.get('/base-data/organizations/options').catch(() => []),
+    api.get('/base-data/users/options').catch(() => []),
+    api.get('/base-data/units/options').catch(() => []),
+    api.get('/inventory/stock-options').catch(() => []),
+    api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
+    api.get('/dictionaries/sales_output_destination').catch(() => []),
+  ]);
   options.orgs = orgs;
   options.users = users;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.stocks = stocks;
   options.orders = Array.isArray(orders) ? orders : ((orders as any).items ?? []);
   options.destinationDict = destinationDict;
@@ -336,10 +326,10 @@ onMounted(async () => {
     </div>
     <el-table :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="180">
-        <template #default="s">{{ goodsOf(s.row).goodsName || s.row.goodsName || '—' }}</template>
+        <template #default="s">{{ s.row.goodsName || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ goodsOf(s.row).queryCode || s.row.goodsCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
         <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>

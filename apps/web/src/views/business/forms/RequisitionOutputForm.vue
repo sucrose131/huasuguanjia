@@ -24,7 +24,6 @@ const options = reactive<Record<string, any>>({
   applications: [],
   stocks: [],
   units: [],
-  goods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
@@ -47,9 +46,6 @@ function blankLine() {
   };
 }
 
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
-}
 function stockKeyOf(line: any, warehouseId: unknown) {
   return line.goodsId && line.skuId && warehouseId && line.batchNo
     ? `${line.goodsId}-${line.skuId}-${warehouseId}-${line.batchNo}`
@@ -222,20 +218,16 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, applications, stocks, goodsResult] = await Promise.all([
+  const [orgs, units, applications, stocks] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/requisitions/application-options').catch(() => []),
     api.get('/inventory/stock-options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
   options.units = units;
   options.applications = applications;
   options.stocks = stocks;
-  options.goods = (goodsResult as any).items ?? [];
   await loadDicts();
 
   if (props.mode === 'create') {
@@ -335,16 +327,16 @@ onMounted(async () => {
             v-if="form.directOutput && !isView"
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
+            :current-label="s.row.goodsName || '—'"
             :disabled="isView || !form.warehouseId"
             placeholder="请先选择仓库，再搜索库存商品"
             @change="lineGoodsChanged(s.row)"
           />
-          <span v-else>{{ goodsOf(s.row).goodsName || s.row.goodsName || s.row.goodsId }}</span>
+          <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ goodsOf(s.row).queryCode || s.row.goodsCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
         <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
