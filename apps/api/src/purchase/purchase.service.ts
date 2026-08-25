@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+import { BusinessReferenceService } from '../database/business-reference.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { InventoryPostingService } from '../inventory/inventory-posting.service';
 import { InventoryAlertService } from '../inventory/inventory-alert.service';
@@ -36,6 +37,7 @@ export class PurchaseService {
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(BusinessMasterDataService) private masterData: BusinessMasterDataService,
+    @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
     @Inject(InventoryPostingService) private inventoryPosting: InventoryPostingService,
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
@@ -941,6 +943,26 @@ export class PurchaseService {
     const mappedLineByApplicationDetail = new Map(
       activeMappedLines.map((item) => [String(item.source_application_detail_id), item]),
     );
+    const mappedDetails = details.map((item) => ({
+      id: item.id,
+      applicationDetailId: item.id,
+      goodsId: item.goods_id,
+      skuId: item.sku_id,
+      sourceShortageId: item.source_shortage_id,
+      quantity: item.qty,
+      unitType: item.unit_type,
+      referencePrice: item.reference_price,
+      remark: item.remark,
+      generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
+      generatedOrderNo:
+        activeOrderMap.get(
+          String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
+        )?.po_no ?? null,
+      generationStatus: mappedLineByApplicationDetail.has(String(item.id))
+        ? 'generated'
+        : 'not_generated',
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       id: header.pur_id,
       applicationNo: header.pur_no,
@@ -958,25 +980,7 @@ export class PurchaseService {
       remark: header.remark,
       createdBy: header.created_by,
       createdAt: header.created_at,
-      details: details.map((item) => ({
-        id: item.id,
-        applicationDetailId: item.id,
-        goodsId: item.goods_id,
-        skuId: item.sku_id,
-        sourceShortageId: item.source_shortage_id,
-        quantity: item.qty,
-        unitType: item.unit_type,
-        referencePrice: item.reference_price,
-        remark: item.remark,
-        generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
-        generatedOrderNo:
-          activeOrderMap.get(
-            String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
-          )?.po_no ?? null,
-        generationStatus: mappedLineByApplicationDetail.has(String(item.id))
-          ? 'generated'
-          : 'not_generated',
-      })),
+      details: enrichedDetails,
       generatedOrders: linkedOrders.map((order) => {
         const orderLines = activeMappedLines.filter((item) => item.po_id === order.po_id);
         return {
@@ -1642,6 +1646,47 @@ export class PurchaseService {
     );
     const detailAmount = details.reduce((sum, line) => sum + Number(line.total_amout), 0);
     const position = await this.purchaseMoneyPosition(this.prisma, header.po_id);
+    const mappedDetails = details.map((line) => {
+      const product = goods.find((item) => item.goods_id === line.goods_id);
+      const received = receiptDetails.filter(
+        (item) => item.goods_id === line.goods_id && item.sku_id === line.sku_id,
+      );
+      const arrivedQuantity = received.reduce((sum, item) => sum + Number(item.input_qty), 0);
+      const inputtedQuantity = received
+        .filter((item) => confirmedIds.has(String(item.po_input_id)))
+        .reduce((sum, item) => sum + Number(item.input_qty), 0);
+      const latestArrivalDate =
+        received
+          .map((item) => item.arrive_at)
+          .filter(Boolean)
+          .sort((a, b) => Number(b) - Number(a))[0] ?? null;
+      const canceledQuantity = Number(line.cancel_qty);
+      const category = categories.find((item) => item.goods_catg_id === product?.goods_catg_id);
+      return {
+        id: line.id,
+        sourceApplicationDetailId: line.source_application_detail_id,
+        goodsId: line.goods_id,
+        goodsCode: product?.query_code ?? '',
+        goodsName: product?.goods_name ?? '',
+        categoryId: product?.goods_catg_id ?? 0,
+        categoryName: category?.goods_name ?? '',
+        categoryWarehouseType: category?.warehouse_type ?? 0,
+        skuId: line.sku_id,
+        quantity: line.qty,
+        canceledQuantity,
+        arrivedQuantity,
+        unarrivedQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
+        inputtedQuantity,
+        uninputtedQuantity: Math.max(0, arrivedQuantity - inputtedQuantity),
+        remainingQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
+        latestArrivalDate,
+        unitType: line.unit_type,
+        unitPrice: line.unit_price,
+        totalAmount: Number(line.total_amout),
+        remark: line.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       id: header.po_id,
@@ -1657,46 +1702,7 @@ export class PurchaseService {
       netPaidAmount: Number(position.netPaid),
       remainingPayable: Number(position.remainingPayable),
       paymentProgressStatus: position.paymentProgressStatus,
-      details: details.map((line) => {
-        const product = goods.find((item) => item.goods_id === line.goods_id);
-        const received = receiptDetails.filter(
-          (item) => item.goods_id === line.goods_id && item.sku_id === line.sku_id,
-        );
-        const arrivedQuantity = received.reduce((sum, item) => sum + Number(item.input_qty), 0);
-        const inputtedQuantity = received
-          .filter((item) => confirmedIds.has(String(item.po_input_id)))
-          .reduce((sum, item) => sum + Number(item.input_qty), 0);
-        const latestArrivalDate =
-          received
-            .map((item) => item.arrive_at)
-            .filter(Boolean)
-            .sort((a, b) => Number(b) - Number(a))[0] ?? null;
-        const canceledQuantity = Number(line.cancel_qty);
-        const category = categories.find((item) => item.goods_catg_id === product?.goods_catg_id);
-        return {
-          id: line.id,
-          sourceApplicationDetailId: line.source_application_detail_id,
-          goodsId: line.goods_id,
-          goodsCode: product?.query_code ?? '',
-          goodsName: product?.goods_name ?? '',
-          categoryId: product?.goods_catg_id ?? 0,
-          categoryName: category?.goods_name ?? '',
-          categoryWarehouseType: category?.warehouse_type ?? 0,
-          skuId: line.sku_id,
-          quantity: line.qty,
-          canceledQuantity,
-          arrivedQuantity,
-          unarrivedQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
-          inputtedQuantity,
-          uninputtedQuantity: Math.max(0, arrivedQuantity - inputtedQuantity),
-          remainingQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
-          latestArrivalDate,
-          unitType: line.unit_type,
-          unitPrice: line.unit_price,
-          totalAmount: Number(line.total_amout),
-          remark: line.remark,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async saveOrder(id: string | null, body: Body, userId: string) {
@@ -2376,6 +2382,49 @@ export class PurchaseService {
       where: { po_input_id: header.po_input_id, deleted_at: null },
     });
     const order = await this.order(String(header.po_id));
+    const mappedDetails = details.map((line) => {
+      const source = order.details.find(
+        (item: Body) =>
+          String(item.goodsId) === String(line.goods_id) &&
+          String(item.skuId) === String(line.sku_id),
+      );
+      const pendingQuantity = header.comfirm_status === 0 ? Number(line.input_qty) : 0;
+      return {
+        id: line.id,
+        batchNo: line.batch_no,
+        goodsId: line.goods_id,
+        goodsCode: source?.goodsCode ?? '',
+        goodsName: source?.goodsName ?? '',
+        categoryName: source?.categoryName ?? '',
+        skuId: line.sku_id,
+        orderQuantity: line.po_qty,
+        arrivedQuantity: source?.arrivedQuantity ?? line.input_qty,
+        unarrivedQuantity: source?.unarrivedQuantity ?? 0,
+        inputtedQuantity: source?.inputtedQuantity ?? 0,
+        uninputtedQuantity: source?.uninputtedQuantity ?? 0,
+        baseArrivedQuantity: Math.max(
+          0,
+          Number(source?.arrivedQuantity ?? line.input_qty) - pendingQuantity,
+        ),
+        baseUnarrivedQuantity: Number(source?.unarrivedQuantity ?? 0) + pendingQuantity,
+        baseUninputtedQuantity: Math.max(
+          0,
+          Number(source?.uninputtedQuantity ?? 0) - pendingQuantity,
+        ),
+        remainingQuantity: Number(source?.remainingQuantity ?? 0) + Number(line.input_qty),
+        latestArrivalDate: source?.latestArrivalDate ?? line.arrive_at,
+        inputQuantity: line.input_qty,
+        unitType: line.unit_type,
+        unitPrice: source?.unitPrice ?? 0,
+        amount: Number(line.input_qty) * Number(source?.unitPrice ?? 0),
+        position: line.input_position,
+        productionDate: line.produce_period,
+        validityPeriod: line.validity_period,
+        arrivalDate: line.arrive_at,
+        remark: line.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       id: header.po_input_id,
@@ -2389,48 +2438,7 @@ export class PurchaseService {
       receiverId: header.receiver_id,
       inputType: header.input_type,
       confirmStatus: header.comfirm_status,
-      details: details.map((line) => {
-        const source = order.details.find(
-          (item: Body) =>
-            String(item.goodsId) === String(line.goods_id) &&
-            String(item.skuId) === String(line.sku_id),
-        );
-        const pendingQuantity = header.comfirm_status === 0 ? Number(line.input_qty) : 0;
-        return {
-          id: line.id,
-          batchNo: line.batch_no,
-          goodsId: line.goods_id,
-          goodsCode: source?.goodsCode ?? '',
-          goodsName: source?.goodsName ?? '',
-          categoryName: source?.categoryName ?? '',
-          skuId: line.sku_id,
-          orderQuantity: line.po_qty,
-          arrivedQuantity: source?.arrivedQuantity ?? line.input_qty,
-          unarrivedQuantity: source?.unarrivedQuantity ?? 0,
-          inputtedQuantity: source?.inputtedQuantity ?? 0,
-          uninputtedQuantity: source?.uninputtedQuantity ?? 0,
-          baseArrivedQuantity: Math.max(
-            0,
-            Number(source?.arrivedQuantity ?? line.input_qty) - pendingQuantity,
-          ),
-          baseUnarrivedQuantity: Number(source?.unarrivedQuantity ?? 0) + pendingQuantity,
-          baseUninputtedQuantity: Math.max(
-            0,
-            Number(source?.uninputtedQuantity ?? 0) - pendingQuantity,
-          ),
-          remainingQuantity: Number(source?.remainingQuantity ?? 0) + Number(line.input_qty),
-          latestArrivalDate: source?.latestArrivalDate ?? line.arrive_at,
-          inputQuantity: line.input_qty,
-          unitType: line.unit_type,
-          unitPrice: source?.unitPrice ?? 0,
-          amount: Number(line.input_qty) * Number(source?.unitPrice ?? 0),
-          position: line.input_position,
-          productionDate: line.produce_period,
-          validityPeriod: line.validity_period,
-          arrivalDate: line.arrive_at,
-          remark: line.remark,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async saveReceipt(id: string | null, body: Body, userId: string) {
@@ -3057,6 +3065,18 @@ export class PurchaseService {
       where: { po_exit_id: header.po_exit_id, deleted_at: null },
     });
     const fromReceipt = header.po_input_id > 0n;
+    const mappedDetails = details.map((line) => ({
+      id: line.serial_number,
+      goodsId: line.goods_id,
+      skuId: line.sku_id,
+      batchNo: line.batch_no,
+      unitType: line.unit_type,
+      orderQuantity: line.po_qty,
+      inputQuantity: line.input_qty,
+      returnQuantity: line.exit_qty,
+      remark: line.remark,
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       returnNo: header.po_exit_no,
@@ -3066,17 +3086,7 @@ export class PurchaseService {
       autoCreated: header.auto_created === 1,
       sourceDocumentType: header.source_document_type,
       sourceDocumentId: header.source_document_id,
-      details: details.map((line) => ({
-        id: line.serial_number,
-        goodsId: line.goods_id,
-        skuId: line.sku_id,
-        batchNo: line.batch_no,
-        unitType: line.unit_type,
-        orderQuantity: line.po_qty,
-        inputQuantity: line.input_qty,
-        returnQuantity: line.exit_qty,
-        remark: line.remark,
-      })),
+      details: enrichedDetails,
     };
   }
   async saveReturn(id: string | null, body: Body, userId: string, submit = false) {

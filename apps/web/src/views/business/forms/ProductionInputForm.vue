@@ -20,15 +20,10 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   plans: [],
-  goods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
-
-function goodsOf(row: any) {
-  return options.goods.find((g: any) => String(g.id) === String(row.goodsId)) ?? {};
-}
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
 async function loadOrgWarehouses(orgId: unknown) {
@@ -110,16 +105,12 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, plans, goodsResult] = await Promise.all([
+  const [orgs, plans] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/production/plans', { params: { pageSize: 100 } }).catch(() => ({ items: [] })),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
   options.plans = (plans as any).items ?? [];
-  options.goods = (goodsResult as any).items ?? [];
 
   if (props.mode === 'create') {
     Object.assign(form.value, {
@@ -160,7 +151,7 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="入库成品">
-        <el-input :model-value="form.goodsName || goodsOf(form).goodsName || form.goodsId" readonly />
+        <el-input :model-value="form.goodsName || form.goodsId" readonly />
       </el-form-item>
       <el-form-item label="计划数量">
         <el-input :model-value="form.planQty ?? 0" readonly />

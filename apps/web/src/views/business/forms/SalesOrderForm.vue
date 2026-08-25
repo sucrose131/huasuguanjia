@@ -19,7 +19,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   customers: [],
-  goods: [],
   goodsSkus: [],
   units: [],
   contextGoods: [],
@@ -49,10 +48,6 @@ function lineUnitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
 }
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
-}
-
 const orderTotals = computed(() => {
   const quantity = (form.value.details ?? []).reduce(
     (s: number, x: any) => s + Number(x.quantity || 0),
@@ -231,17 +226,13 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, customers, goodsResult, units] = await Promise.all([
+  const [orgs, customers, units] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/customers/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/base-data/units/options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.customers = customers;
-  options.goods = (goodsResult as any).items ?? [];
   options.units = units;
   await loadDicts();
 
@@ -350,7 +341,7 @@ onMounted(async () => {
           <RemoteSelect
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
+            :current-label="s.row.goodsName || '—'"
             :disabled="isView || !form.warehouseId"
             placeholder="请先选择组织与仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
@@ -358,7 +349,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ s.row.goodsCode || goodsOf(s.row).queryCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
         <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
@@ -384,15 +375,12 @@ onMounted(async () => {
           {{ s.row.availableStock == null ? '—' : Number(s.row.availableStock).toLocaleString('zh-CN') }}
         </template>
       </el-table-column>
+      <!-- 供应方式/商品形态：后端详情接口未富化这两类字段，且已不再加载全量商品列表反查，缺失时显示 '—' -->
       <el-table-column label="供应方式" width="110">
-        <template #default="s">
-          {{ goodsOf(s.row).supplyTypeName || goodsOf(s.row).supply_type_name || goodsOf(s.row).supplyType || '—' }}
-        </template>
+        <template #default="s">—</template>
       </el-table-column>
       <el-table-column label="商品形态" width="110">
-        <template #default="s">
-          {{ goodsOf(s.row).goodsFormName || goodsOf(s.row).goods_form_name || goodsOf(s.row).goodsForm || '—' }}
-        </template>
+        <template #default="s">—</template>
       </el-table-column>
       <el-table-column label="数量" width="130">
         <template #default="s">

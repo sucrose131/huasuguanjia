@@ -19,7 +19,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   units: [],
-  goods: [],
   boms: [],
   plans: [],
   planOrders: [],
@@ -28,9 +27,6 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 
-function goodsOf(row: any) {
-  return options.goods.find((g: any) => String(g.id) === String(row.goodsId)) ?? {};
-}
 function unitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
@@ -148,11 +144,7 @@ function blankLine() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  if (!String(keyword ?? '').trim())
-    return options.goods.map((g: any) => ({
-      value: g.id,
-      label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
-    }));
+  // 成品选择始终走远程搜索，不再依赖 onMounted 全量商品列表
   const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
   return (r.items ?? []).map((g: any) => ({
     value: g.id,
@@ -205,19 +197,15 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, units, goodsResult, boms] = await Promise.all([
+  const [orgs, warehouses, units, boms] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/production/boms', { params: { pageSize: 100, status: 1 } }).catch(() => ({ items: [] })),
   ]);
   options.orgs = orgs;
   options.warehouses = warehouses;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.boms = (boms as any).items ?? [];
   await loadDicts();
 
@@ -261,7 +249,7 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item v-if="form.bomId" label="成品">
-        <el-input :model-value="form.goodsName || goodsOf(form).goodsName || form.goodsId" readonly />
+        <el-input :model-value="form.goodsName || form.goodsId" readonly />
       </el-form-item>
       <el-form-item label="关联销售订单" required>
         <el-select
@@ -308,7 +296,7 @@ onMounted(async () => {
     <div class="details-title">BOM原料明细</div>
     <el-table :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="220">
-        <template #default="s">{{ s.row.goodsName || goodsOf(s.row).goodsName || s.row.goodsId }}</template>
+        <template #default="s">{{ s.row.goodsName || s.row.goodsId || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
         <template #default="s">{{ s.row.goodsCode || '—' }}</template>

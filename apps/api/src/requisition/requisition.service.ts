@@ -544,6 +544,24 @@ export class RequisitionService {
         orderBy: { id: 'desc' },
       }),
     ]);
+    const mappedDetails = details.map((detail) => {
+      const historicalQty =
+        (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
+        (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
+      return {
+        id: detail.draw_detail_id,
+        goodsId: detail.goods_id,
+        skuId: detail.sku_id,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        quantity: detail.draw_qty,
+        returnable: detail.is_returnable === 1,
+        historicalQty,
+        remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
+        remark: detail.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     const [enriched] = await this.enrichRequisitionStaff([
       {
         ...item,
@@ -575,23 +593,7 @@ export class RequisitionService {
         oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
         oaProcessId: oa?.proc_inst_id ?? '',
         oaBusKey: oa?.bus_key ?? '',
-        details: details.map((detail) => {
-          const historicalQty =
-            (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
-            (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
-          return {
-            id: detail.draw_detail_id,
-            goodsId: detail.goods_id,
-            skuId: detail.sku_id,
-            batchNo: detail.batch_no,
-            unitType: detail.unit_type,
-            quantity: detail.draw_qty,
-            returnable: detail.is_returnable === 1,
-            historicalQty,
-            remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
-            remark: detail.remark,
-          };
-        }),
+        details: enrichedDetails,
       },
     ]);
     return enriched!;
@@ -1474,6 +1476,7 @@ export class RequisitionService {
         remark: detail.remark,
       };
     });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     const [enriched] = await this.enrichRequisitionStaff([
       {
         ...item,
@@ -1495,7 +1498,7 @@ export class RequisitionService {
         hasReturnableItems: mappedDetails.some(
           (detail) => detail.returnable && detail.remainingQty > 0,
         ),
-        details: mappedDetails,
+        details: enrichedDetails,
       },
     ]);
     return enriched!;

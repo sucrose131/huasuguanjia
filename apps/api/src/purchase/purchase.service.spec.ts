@@ -9,6 +9,7 @@ function serviceWith(
   return new PurchaseService(
     prisma as never,
     { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
+    { enrichGoods: vi.fn(async (rows: unknown[]) => rows) } as never,
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,

@@ -143,4 +143,38 @@ export class BusinessReferenceService {
       return result as T;
     });
   }
+
+  /**
+   * 仅富化商品展示字段（goodsName/goodsCode/skuSpec），供详情明细行回显使用，
+   * 避免前端全量加载商品列表反查。返回新数组，不修改入参。
+   */
+  async enrichGoods<T extends Row>(rows: T[]): Promise<T[]> {
+    if (!rows.length) return rows;
+    const goodsIds = this.ids(rows, ['goodsId', 'goods_id']);
+    const skuIds = this.ids(rows, ['skuId', 'sku_id']);
+    const [goods, skus] = await Promise.all([
+      goodsIds.length
+        ? this.prisma.hspsi_goods_info.findMany({ where: { goods_id: { in: goodsIds } } })
+        : [],
+      skuIds.length
+        ? this.prisma.hspsi_goods_info_sku.findMany({ where: { sku_id: { in: skuIds } } })
+        : [],
+    ]);
+    const goodsMap = new Map(goods.map((item) => [String(item.goods_id), item]));
+    const skuMap = new Map(skus.map((item) => [String(item.sku_id), item]));
+    return rows.map((row) => {
+      const result: Row = { ...row };
+      const goodsId = row.goodsId ?? row.goods_id;
+      const skuId = row.skuId ?? row.sku_id;
+      const goodsItem = goodsMap.get(String(goodsId ?? ''));
+      const skuItem = skuMap.get(String(skuId ?? ''));
+      if (goodsItem) {
+        result.goodsName = goodsItem.goods_name;
+        result.goodsCode = goodsItem.query_code;
+        if (!skuItem) result.skuSpec = goodsItem.spec_models || '';
+      }
+      if (skuItem) result.skuSpec = skuItem.spec_models || '';
+      return result as T;
+    });
+  }
 }

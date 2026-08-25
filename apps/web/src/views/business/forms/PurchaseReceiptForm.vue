@@ -21,7 +21,6 @@ const options = reactive<Record<string, any>>({
   warehouses: [],
   depts: [],
   units: [],
-  goods: [],
   orders: [],
   vendors: [],
   contextGoods: [],
@@ -44,9 +43,6 @@ function blankLine() {
   };
 }
 
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
-}
 function unitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
@@ -225,18 +221,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult, vendors, orders] = await Promise.all([
+  const [orgs, units, vendors, orders] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/base-data/vendors/options').catch(() => []),
     api.get('/purchase/orders', { params: { pageSize: 100 } }).catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.vendors = vendors;
   options.orders = ((orders as any).items ?? []).map((item: any) => ({
     ...item,
@@ -365,12 +357,12 @@ onMounted(async () => {
             v-if="!isView"
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
+            :current-label="s.row.goodsName || '—'"
             :disabled="isView || !form.warehouseId"
             placeholder="请先选择仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
           />
-          <span v-else>{{ s.row.goodsName || goodsOf(s.row).goodsName || s.row.goodsId || '—' }}</span>
+          <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">

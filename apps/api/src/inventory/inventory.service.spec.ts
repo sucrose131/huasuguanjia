@@ -180,6 +180,7 @@ describe('inventory draft document row locking', () => {
         documentTrace as never,
         { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
         { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
+        {} as never,
       ),
       prisma,
       posting,
@@ -751,6 +752,7 @@ describe('inventory requisition history query', () => {
       {} as never,
       {} as never,
       { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
+      {} as never,
     );
     return { service, prisma };
   }

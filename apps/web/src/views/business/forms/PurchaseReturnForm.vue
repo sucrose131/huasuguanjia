@@ -17,7 +17,6 @@ const options = reactive<Record<string, any>>({
   warehouses: [],
   depts: [],
   units: [],
-  goods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
@@ -37,12 +36,6 @@ function warehouseName(id: unknown) {
 function deptName(id: unknown) {
   const d = options.depts.find((x: any) => String(x.value ?? x.id) === String(id));
   return d?.label ?? d?.name ?? '—';
-}
-function goodsNameOf(id: unknown) {
-  return options.goods.find((g: any) => String(g.id) === String(id))?.goodsName ?? '';
-}
-function goodsCodeOf(id: unknown) {
-  return options.goods.find((g: any) => String(g.id) === String(id))?.queryCode ?? '';
 }
 function toDateString(value: unknown) {
   if (!value) return '';
@@ -159,17 +152,13 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult, returnTypeDict] = await Promise.all([
+  const [orgs, units, returnTypeDict] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/dictionaries/purchase_return_type').catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   dicts.purchase_return_type = returnTypeDict as any[];
 
   if (props.mode === 'create') {
@@ -197,8 +186,8 @@ onMounted(async () => {
       });
       form.value.details = (form.value.details ?? []).map((line: any) => ({
         ...line,
-        goodsName: line.goodsName ?? goodsNameOf(line.goodsId),
-        goodsCode: line.goodsCode ?? goodsCodeOf(line.goodsId),
+        goodsName: line.goodsName ?? '',
+        goodsCode: line.goodsCode ?? '',
       }));
       if (form.value.receiptId) {
         const receipt: any = await api
