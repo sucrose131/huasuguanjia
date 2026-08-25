@@ -6,22 +6,32 @@ import PurchaseReceiptForm from '../forms/PurchaseReceiptForm.vue';
 export const purchaseReceiptConfig: BusinessDocumentConfig = {
   key: 'purchase/receipts',
   title: '采购入库单',
-  subtitle: '按采购订单生成待入库单，补充库位与批次后执行库存过账',
+  subtitle: '按采购订单或临时采购生成待入库单，补充库位与批次后执行库存过账',
   endpoint: '/purchase/receipts',
   documentType: 'purchase_receipt',
   no: 'receiptNo',
+  dialogTitle: (mode) => (mode === 'view' ? '查看采购入库单' : '办理采购入库'),
+  dialog: { width: '1120px', top: '4vh' },
   columns: [
     { prop: 'receiptNo', label: '入库单号', minWidth: 160 },
     {
       prop: 'orderNo',
       label: '数据来源',
       minWidth: 160,
-      render: (row) => row.orderNo || row.orderId || '—',
+      render: (row) => row.orderNo || '—',
+    },
+    {
+      prop: 'vendorName',
+      label: '供应商',
+      minWidth: 176,
+      tooltip: true,
+      render: (row) => row.vendorName || '—',
     },
     {
       prop: 'warehouseId',
       label: '仓库',
       minWidth: 160,
+      tooltip: true,
       render: (row, ctx) => ctx.lookup('warehouses', row.warehouseId),
     },
     {

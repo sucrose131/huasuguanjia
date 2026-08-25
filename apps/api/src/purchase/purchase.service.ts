@@ -2557,7 +2557,16 @@ export class PurchaseService {
     const orders = poIds.length
       ? await this.prisma.hspsi_purchase_order.findMany({
           where: { po_id: { in: poIds } },
-          select: { po_id: true, po_no: true, pur_id: true },
+          select: { po_id: true, po_no: true, pur_id: true, vendor_id: true },
+        })
+      : [];
+    const vendorIds = [
+      ...new Set(orders.map((item) => item.vendor_id).filter((id) => id > 0n)),
+    ];
+    const vendors = vendorIds.length
+      ? await this.prisma.hspsi_basic_vendor.findMany({
+          where: { vendor_id: { in: vendorIds } },
+          select: { vendor_id: true, conpany_name: true },
         })
       : [];
     const purIds = [...new Set(orders.map((item) => item.pur_id).filter((id) => id > 0n))];
@@ -2570,6 +2579,7 @@ export class PurchaseService {
     return {
       items: items.map((item) => {
         const ord = orders.find((o) => o.po_id === item.po_id);
+        const vendor = vendors.find((v) => v.vendor_id === ord?.vendor_id);
         return {
           id: item.po_input_id,
           receiptNo: item.po_input_no,
@@ -2577,6 +2587,8 @@ export class PurchaseService {
           orderNo: ord?.po_no ?? null,
           applicationNo:
             applications.find((application) => application.pur_id === ord?.pur_id)?.pur_no ?? null,
+          vendorId: ord?.vendor_id ?? null,
+          vendorName: vendor?.conpany_name ?? '',
           orgId: item.org_id,
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
@@ -2609,6 +2621,14 @@ export class PurchaseService {
       where: { po_input_id: header.po_input_id, deleted_at: null },
     });
     const order = await this.order(String(header.po_id));
+    // 临时采购入库：入库单关联的采购申请由系统反向生成（source_type=temporary_receipt）
+    const sourceApplication = order.applicationId
+      ? await this.prisma.hspsi_purchase_approve.findFirst({
+          where: { pur_id: BigInt(String(order.applicationId)), deleted_at: null },
+          select: { source_type: true },
+        })
+      : null;
+
     const mappedDetails = details.map((line) => {
       const source = order.details.find(
         (item: Body) =>
@@ -2659,6 +2679,7 @@ export class PurchaseService {
       orderId: header.po_id,
       orderNo: order.orderNo,
       applicationNo: order.applicationNo,
+      directReceipt: sourceApplication?.source_type === 'temporary_receipt',
       orgId: header.org_id,
       warehouseId: header.warehouse_id,
       deptId: header.dept_id,
