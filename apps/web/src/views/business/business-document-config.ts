@@ -110,6 +110,8 @@ export type BusinessDocumentConfig = {
   /** 页面及新增权限。缺省按当前路由和 create 操作判断。 */
   pagePermission?: string;
   createPermission?: string;
+  /** 关键字搜索框占位文案；缺省「单号 / 关键字」 */
+  keywordPlaceholder?: string;
   createText?: string;
   /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */
   createPreset?: () => Record<string, any>;

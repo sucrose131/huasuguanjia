@@ -220,6 +220,8 @@ const ctx: BusinessDocumentContext = {
   },
 };
 
+defineExpose({ ctx, load, openCreate, openEdit, openView });
+
 watch(
   () => props.config.key,
   async () => {
@@ -274,14 +276,23 @@ onMounted(async () => {
     </header>
 
     <div class="panel">
-      <SummaryStrip v-if="summaryItems.length" :items="summaryItems" />
+      <slot
+        v-if="$slots.summary"
+        name="summary"
+        :summary="summary"
+        :rows="rows"
+        :total="total"
+      />
+      <SummaryStrip v-else-if="summaryItems.length" :items="summaryItems" />
+
+      <slot name="query-tools" :query="query" :load="load" :total="total" />
 
       <div class="query-bar">
         <el-input
           v-model="query.keyword"
           class="query-field keyword"
           clearable
-          placeholder="单号 / 关键字"
+          :placeholder="config.keywordPlaceholder || '单号 / 关键字'"
           @keyup.enter="query.page = 1; load()"
         />
         <template v-for="field in config.queryFields ?? []" :key="field.key">
@@ -367,8 +378,16 @@ onMounted(async () => {
             :show-overflow-tooltip="column.tooltip"
           >
             <template #default="s">
+              <button
+                v-if="column.link"
+                type="button"
+                class="document-link"
+                @click="openView(s.row)"
+              >
+                {{ displayCell(s.row, column) }}
+              </button>
               <el-progress
-                v-if="column.kind === 'progress'"
+                v-else-if="column.kind === 'progress'"
                 :percentage="Math.round(Number(s.row[column.prop] || 0))"
                 :stroke-width="7"
               />
@@ -472,3 +491,18 @@ onMounted(async () => {
     />
   </section>
 </template>
+
+<style scoped>
+.document-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hs-color-primary);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.document-link:hover {
+  text-decoration: underline;
+}
+</style>

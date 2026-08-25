@@ -160,17 +160,6 @@ function recalcCheckLine(line: any) {
   line.differentAmount = Number(line.differentQty ?? 0) * Number(line.unitPrice ?? 0);
 }
 
-function docStatus(item: any) {
-  return Number(item.approveStatus) === 1
-    ? '已通过'
-    : Number(item.approveStatus) === 2
-      ? '已驳回'
-      : '待审批';
-}
-function docStatusType(item: any) {
-  return Number(item.approveStatus) === 1 ? 'success' : Number(item.approveStatus) === 2 ? 'danger' : 'info';
-}
-
 function validate() {
   if (isCreate.value) {
     if (!form.value.orgId || !form.value.warehouseId || !form.value.checkType) {
@@ -271,65 +260,78 @@ onMounted(async () => {
 
 <template>
   <el-form label-position="top" :disabled="isView">
-    <div class="form-grid">
-      <el-form-item v-if="!isCreate" label="盘点单号">
-        <el-input :model-value="form.checkNo || '—'" readonly />
-      </el-form-item>
-      <el-form-item label="盘点类型" required>
-        <el-select v-model="form.checkType" :disabled="!isCreate">
-          <el-option
-            v-for="item in dicts.checkTypes"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
+    <div class="check-dialog-section">
+      <div class="check-dialog-section__heading">
+        <div>
+          <strong>基本信息</strong>
+          <span>新增、继续盘点和查看统一使用本布局；库存明细按商品规格和批次载入</span>
+        </div>
+        <BusinessStatusTag
+          v-if="!isCreate"
+          :semantic="isView ? 'neutral' : 'processing'"
+          :text="isView ? '只读查看' : '盘点录入中'"
+        />
+      </div>
+      <div class="check-master-grid">
+        <el-form-item v-if="!isCreate" label="盘点单号">
+          <el-input :model-value="form.checkNo || '保存后自动生成'" disabled />
+        </el-form-item>
+        <el-form-item label="盘点类型" required>
+          <el-select v-model="form.checkType" :disabled="!isCreate">
+            <el-option
+              v-for="item in dicts.checkTypes"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="组织" required>
+          <el-tree-select
+            v-model="form.orgId"
+            :data="organizationTree"
+            filterable
+            check-strictly
+            node-key="value"
+            :props="{ label: 'label', children: 'children' }"
+            :disabled="!isCreate"
+            @change="
+              form.warehouseId = '';
+              loadOrgWarehouses(form.orgId);
+            "
           />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="组织" required>
-        <el-tree-select
-          v-model="form.orgId"
-          :data="organizationTree"
-          filterable
-          check-strictly
-          node-key="value"
-          :props="{ label: 'label', children: 'children' }"
-          :disabled="!isCreate"
-          @change="
-            form.warehouseId = '';
-            loadOrgWarehouses(form.orgId);
-          "
-        />
-      </el-form-item>
-      <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="!isCreate">
-          <el-option
-            v-for="w in options.warehouses"
-            :key="w.value"
-            :label="w.label"
-            :value="w.value"
+        </el-form-item>
+        <el-form-item label="仓库" required>
+          <el-select v-model="form.warehouseId" filterable :disabled="!isCreate">
+            <el-option
+              v-for="w in options.warehouses"
+              :key="w.value"
+              :label="w.label"
+              :value="w.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="盘点日期" required>
+          <el-date-picker
+            v-model="form.checkDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :disabled="!isCreate"
           />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="盘点日期" required>
-        <el-date-picker
-          v-model="form.checkDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :disabled="!isCreate"
-        />
-      </el-form-item>
-      <el-form-item label="盘点人">
-        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
-      </el-form-item>
-      <el-form-item label="备注" class="span-2">
-        <el-input
-          v-model="form.remark"
-          type="textarea"
-          :rows="2"
-          :disabled="!isCreate"
-          placeholder="填写本次盘点范围或特殊说明"
-        />
-      </el-form-item>
+        </el-form-item>
+        <el-form-item label="盘点人">
+          <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+        </el-form-item>
+        <el-form-item label="备注" class="span-2">
+          <el-input
+            v-model="form.remark"
+            type="textarea"
+            :rows="2"
+            :disabled="!isCreate"
+            placeholder="填写本次盘点范围或特殊说明"
+          />
+        </el-form-item>
+      </div>
     </div>
 
     <div v-if="isCreate" class="load-hint">
@@ -366,6 +368,24 @@ onMounted(async () => {
           <span>损坏数量</span><strong>{{ quantity(checkDetailSummary.damagedQty) }}</strong
           ><small>独立损坏维度</small>
         </div>
+      </div>
+
+      <div v-if="form.generatedDocuments?.length" class="generated-documents">
+        <span>已生成后继单据：</span>
+        <el-tag
+          v-for="item in form.generatedDocuments"
+          :key="`${item.type}-${item.id}`"
+          :type="
+            Number(item.approveStatus) === 1
+              ? 'success'
+              : Number(item.status) === 0
+                ? 'info'
+                : 'warning'
+          "
+        >
+          {{ item.type }} {{ item.businessNo
+          }}<template v-if="item.successorNo"> → {{ item.successorNo }}</template>
+        </el-tag>
       </div>
 
       <div class="form-section-title">批次盘点明细</div>
@@ -498,19 +518,6 @@ onMounted(async () => {
       </div>
     </template>
 
-    <template v-if="isView && form.generatedDocuments?.length">
-      <div class="form-section-title">已生成单据</div>
-      <el-table :data="form.generatedDocuments" border size="small">
-        <el-table-column prop="type" label="类型" min-width="130" />
-        <el-table-column prop="businessNo" label="单号" min-width="150" />
-        <el-table-column label="状态" width="100">
-          <template #default="s">
-            <el-tag :type="docStatusType(s.row)" effect="plain">{{ docStatus(s.row) }}</el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
-    </template>
-
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
       <el-button v-if="!isCreate" :loading="saving" @click="save">保存盘点</el-button>
@@ -522,22 +529,59 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0 16px;
-}
 .span-2 {
   grid-column: 1 / -1;
 }
+.check-dialog-section {
+  margin-bottom: var(--hs-space-5);
+  padding: var(--hs-space-5);
+  border: 1px solid var(--hs-color-border);
+  border-radius: var(--hs-radius-md);
+  background: var(--hs-color-surface-muted);
+}
+.check-dialog-section__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--hs-space-4);
+  margin-bottom: var(--hs-space-4);
+}
+.check-dialog-section__heading strong,
+.check-dialog-section__heading span {
+  display: block;
+}
+.check-dialog-section__heading strong {
+  margin-bottom: var(--hs-space-1);
+  color: var(--hs-color-text-primary);
+  font-size: 14px;
+}
+.check-dialog-section__heading span {
+  color: var(--hs-color-text-secondary);
+  font-size: 11px;
+}
+.check-master-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0 var(--hs-space-3);
+}
 .load-hint {
-  padding: 10px 12px;
-  margin: 8px 0;
+  padding: 24px;
+  border: 1px dashed #c9d2e3;
+  background: #f8faff;
+  color: #667085;
+  text-align: center;
+}
+.generated-documents {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbe5f4;
   border-radius: 6px;
-  background: #ecf5ff;
-  color: #409eff;
-  font-size: 13px;
-  line-height: 1.6;
+  background: #f7faff;
+  color: #526079;
 }
 .form-section-title {
   display: flex;
@@ -546,97 +590,149 @@ onMounted(async () => {
   min-height: 40px;
   margin: 16px 0 8px;
   padding: 0 12px;
-  border: 1px solid #e4e8ef;
-  border-radius: 4px;
-  background: #f7f9fc;
-  color: #344054;
+  border: 1px solid var(--hs-color-border);
+  border-radius: var(--hs-radius-md);
+  background: var(--hs-color-surface-muted);
+  color: var(--hs-color-text-primary);
   font-size: var(--hs-font-section);
   line-height: var(--hs-line-section);
   font-weight: 600;
 }
 .check-result-summary {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
-  margin: 12px 0;
+  grid-template-columns: repeat(7, minmax(112px, 1fr));
+  margin-bottom: var(--hs-space-5);
+  border: 1px solid var(--hs-color-border);
+  border-radius: var(--hs-radius-md);
+  background: var(--hs-color-surface);
 }
 .check-result-summary > div {
-  padding: 10px 12px;
-  border: 1px solid #e4e8ef;
-  border-radius: 6px;
-  background: #fafbfc;
+  min-height: 78px;
+  padding: 13px 16px;
+  border-right: 1px solid var(--hs-color-border);
 }
-.check-result-summary span {
+.check-result-summary > div:last-child {
+  border-right: 0;
+}
+.check-result-summary span,
+.check-result-summary small {
   display: block;
-  color: #8791a5;
-  font-size: 12px;
+  color: var(--hs-color-text-secondary);
+  font-size: 10px;
 }
 .check-result-summary strong {
   display: block;
-  margin: 4px 0 2px;
-  color: #172033;
-  font-size: 18px;
-  font-weight: 600;
-}
-.check-result-summary small {
-  color: #a0a8b8;
-  font-size: 11px;
+  margin: 3px 0;
+  color: var(--hs-color-text-primary);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
 }
 .check-result-summary .is-danger strong {
-  color: #f56c6c;
+  color: var(--hs-color-danger);
 }
 .check-result-summary .is-success strong {
-  color: #67c23a;
+  color: var(--hs-color-success);
 }
 .check-result-summary .is-warning strong {
-  color: #e6a23c;
+  color: var(--hs-color-warning);
+}
+.difference-negative {
+  color: var(--hs-color-danger);
+  font-weight: 650;
+}
+.difference-positive {
+  color: var(--hs-color-success);
+  font-weight: 650;
+}
+.check-result-tags {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--hs-space-1);
 }
 .check-master-detail-layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 12px;
+  grid-template-columns: minmax(288px, 28%) minmax(0, 1fr);
+  gap: var(--hs-space-3);
+  align-items: stretch;
+}
+.check-product-list-panel,
+.check-batch-detail-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--hs-color-border);
+  border-radius: var(--hs-radius-md);
+  background: var(--hs-color-surface);
 }
 .check-panel-heading {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  margin-bottom: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--hs-space-3);
+  min-height: 44px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--hs-color-border);
+  background: var(--hs-color-surface-muted);
 }
 .check-panel-heading strong {
-  font-weight: 600;
-  color: #344054;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-section);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .check-panel-heading span {
-  color: #8791a5;
-  font-size: 12px;
+  flex: none;
+  color: var(--hs-color-text-secondary);
+  font-size: var(--hs-font-helper);
 }
 .check-product-cell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 2px;
+  min-width: 0;
+}
+.check-product-cell strong,
+.check-product-cell span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .check-product-cell strong {
-  font-weight: 600;
-  color: #172033;
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-body);
 }
 .check-product-cell span {
-  color: #8791a5;
-  font-size: 12px;
+  color: var(--hs-color-text-secondary);
+  font-size: var(--hs-font-helper);
 }
-.check-result-tags {
-  display: inline-flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: center;
+:deep(.check-product-table .el-table__header-wrapper th) {
+  background: var(--hs-color-surface-muted);
+  color: var(--hs-color-text-primary);
+  font-weight: 650;
 }
-.difference-negative {
-  color: #f56c6c;
-  font-weight: 600;
+:deep(.check-product-table .el-table__body td) {
+  height: var(--hs-list-row-height);
 }
-.difference-positive {
-  color: #67c23a;
-  font-weight: 600;
+:deep(.check-batch-table .el-table__header-wrapper th) {
+  background: var(--hs-color-surface);
+}
+:deep(.check-batch-table .el-table__cell) {
+  height: var(--hs-detail-row-height);
+}
+:deep(.check-batch-table .check-row-shortage) {
+  --el-table-tr-bg-color: var(--el-color-danger-light-9);
+}
+:deep(.check-batch-table .check-row-overflow) {
+  --el-table-tr-bg-color: var(--el-color-success-light-9);
+}
+:deep(.check-batch-table .check-row-damaged) {
+  --el-table-tr-bg-color: var(--el-color-warning-light-9);
+}
+:deep(.check-batch-table .el-table__footer-wrapper td) {
+  background: var(--hs-color-surface-muted);
+  color: var(--hs-color-text-primary);
+  font-weight: 650;
 }
 .form-actions {
   display: flex;
