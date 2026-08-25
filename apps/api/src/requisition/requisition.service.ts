@@ -940,8 +940,9 @@ export class RequisitionService {
   }
 
   /**
-   * 查找所属组织下对领用申请有审批权限的用户（无论角色）：
-   * 授权组织覆盖该 org_id，且拥有 requisitions 相关权限（含 admin 超级权限）。
+   * 查找所属组织下对领用申请有审批操作权限的用户（无论角色）：
+   * 授权组织覆盖该 org_id，且拥有领用申请审核权限（菜单 code
+   * requisitions:applications:approve，含 admin 超级权限）。
    */
   private async findRequisitionApprovers(db: Db, orgId: bigint): Promise<number[]> {
     const authorized = await db.hspsi_sys_user_authorized_org.findMany({
@@ -975,17 +976,15 @@ export class RequisitionService {
           select: { id: true, code: true },
         })
       : [];
-    const requisitionMenuIds = new Set(
+    const approveMenuIds = new Set(
       menus
-        .filter(
-          (menu) => menu.code === 'requisitions' || menu.code.startsWith('requisitions:'),
-        )
+        .filter((menu) => menu.code === 'requisitions:applications:approve')
         .map((menu) => menu.id),
     );
     const approvedRoleIds = new Set<number>();
     adminRoleIds.forEach((id) => approvedRoleIds.add(id));
     roleMenus.forEach((item) => {
-      if (requisitionMenuIds.has(Number(item.menu_id))) approvedRoleIds.add(Number(item.role_id));
+      if (approveMenuIds.has(Number(item.menu_id))) approvedRoleIds.add(Number(item.role_id));
     });
     return [
       ...new Set(

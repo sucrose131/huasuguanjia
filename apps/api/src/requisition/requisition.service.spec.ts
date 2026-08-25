@@ -610,18 +610,27 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       },
       hspsi_sys_user_role: {
         findMany: vi.fn().mockResolvedValue([
-          { user_id: 3, role_id: 11 },
-          { user_id: 4, role_id: 12 },
+          { user_id: 3, role_id: 11 }, // 有 approve 权限 → 应收到
+          { user_id: 4, role_id: 12 }, // 仅有 requisitions 父权限 → 不应收到
         ]),
       },
       hspsi_sys_role: {
-        findMany: vi.fn().mockResolvedValue([{ id: 11n, code: 'requisition-approver' }]),
+        findMany: vi.fn().mockResolvedValue([
+          { id: 11n, code: 'requisition-approver' },
+          { id: 12n, code: 'requisition-viewer' },
+        ]),
       },
       hspsi_sys_role_menu: {
-        findMany: vi.fn().mockResolvedValue([{ role_id: 11n, menu_id: 49n }]),
+        findMany: vi.fn().mockResolvedValue([
+          { role_id: 11n, menu_id: 265n }, // requisitions:applications:approve
+          { role_id: 12n, menu_id: 49n }, // requisitions（父权限）
+        ]),
       },
       hspsi_sys_menu: {
-        findMany: vi.fn().mockResolvedValue([{ id: 49, code: 'requisitions' }]),
+        findMany: vi.fn().mockResolvedValue([
+          { id: 265, code: 'requisitions:applications:approve' },
+          { id: 49, code: 'requisitions' },
+        ]),
       },
     };
     const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(tx, root);
@@ -657,7 +666,8 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
 
     expect(result).toMatchObject({ id: 77n, message: '申请已提交，等待系统内审批' });
     expect(oaApproval.submit).not.toHaveBeenCalled();
-    // 授权组织覆盖 org 9 的候选：3/4/5；仅 user 3 的角色(11)拥有 requisitions 菜单权限
+    // 授权组织覆盖 org 9 的候选：3/4/5；仅 user 3 的角色(11)拥有
+    // requisitions:applications:approve 审批操作权限；user 4 仅父权限不通知
     expect(todoService.create).toHaveBeenCalledTimes(1);
     expect(todoService.create).toHaveBeenCalledWith(
       expect.objectContaining({
