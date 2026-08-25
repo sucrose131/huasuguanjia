@@ -186,6 +186,13 @@ function validate() {
   } else if (!form.value.applicationId) {
     ElMessage.warning('请选择来源领用申请');
     return false;
+  } else if (
+    !(form.value.details ?? []).every(
+      (line: any) => String(line.batchNo ?? '').trim() && Number(line.quantity) > 0,
+    )
+  ) {
+    ElMessage.warning('请为全部出库明细选择库存批次并填写出库数量');
+    return false;
   }
   return true;
 }

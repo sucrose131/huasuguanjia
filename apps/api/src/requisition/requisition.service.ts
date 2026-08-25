@@ -1937,7 +1937,9 @@ export class RequisitionService {
       const usage = await this.confirmedOutputUsage(tx, output.draw_id);
       for (const detail of details) {
         if (!detail.batch_no.trim())
-          throw new BadRequestException('确认出库前必须填写全部物品批号');
+          throw new BadRequestException(
+            '确认出库前必须填写全部物品批号，请先编辑出库单并选择库存批次',
+          );
         const source = applicationDetails.find(
           (line) => line.draw_detail_id === detail.draw_detail_id,
         );

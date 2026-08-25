@@ -156,6 +156,13 @@ const protectedMoney = (value: unknown) => {
 
 async function runAction(action: RowAction, row: Record<string, any>) {
   try {
+    if (action.verify) {
+      const problem = await action.verify(row);
+      if (problem) {
+        ElMessage.warning(problem);
+        return;
+      }
+    }
     if (action.confirm) {
       const text = typeof action.confirm === 'function' ? action.confirm(row) : action.confirm;
       await ElMessageBox.confirm(text, '提示', { type: 'warning' });

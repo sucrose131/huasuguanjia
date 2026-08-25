@@ -65,6 +65,8 @@ export type RowAction = {
   show?: (row: Record<string, any>) => boolean;
   /** 操作前的确认文案（可动态按行生成） */
   confirm?: string | ((row: Record<string, any>) => string);
+  /** 预检：返回非空文案时中止操作（不发请求、不弹确认框），用于“先编辑补数据再操作”的引导 */
+  verify?: (row: Record<string, any>) => string | null | undefined | Promise<string | null | undefined>;
   /** 是否作为主操作平铺展示（默认 true：平铺在操作列；false 时收进“更多”下拉） */
   primary?: boolean;
   /** 菜单内操作权限；支持 create/update/delete，或完整权限码。缺省按 action key 推导。 */
