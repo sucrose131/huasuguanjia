@@ -401,7 +401,7 @@ onMounted(async () => {
             </template>
           </el-table-column>
           <el-table-column
-            v-if="(config.rowActions ?? []).length"
+            v-if="(config.rowActions ?? []).length || $slots['row-actions']"
             label="操作"
             width="220"
             fixed="right"
@@ -444,7 +444,7 @@ onMounted(async () => {
         </el-table>
       </div>
 
-      <div class="table-footer">
+      <div v-if="config.pagination !== false" class="table-footer">
         <span class="result-total">共 {{ total }} 条</span>
         <el-pagination
           v-model:current-page="query.page"

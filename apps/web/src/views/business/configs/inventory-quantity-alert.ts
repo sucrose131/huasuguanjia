@@ -28,26 +28,16 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['inventory_stock_health_status'],
   optionBags: ['orgs'],
-  queryFields: [
-    { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
-    {
-      key: 'warehouseId',
-      label: '仓库',
-      type: 'select',
-      dependsOn: 'orgId',
-      width: 180,
-      loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
-        return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
-        })) as any[];
-      },
-    },
+  queryFields: [{ key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 }],
+  summaryLabels: [
+    { label: '库存品项', key: 'itemCount', kind: 'number' },
+    { label: '库存总值', key: 'totalAmount', kind: 'money' },
+    { label: '库存预警', key: 'warningCount', kind: 'number' },
   ],
   creatable: false,
+  pagination: false,
   formComponent: InventoryQuantityAlertForm,
   rowActions: [
-    { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
     { key: 'edit', label: '设置阈值', handler: (row, ctx) => ctx.openEdit(row) },
   ],
 };

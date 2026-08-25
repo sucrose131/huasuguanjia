@@ -307,6 +307,9 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
+      <el-form-item v-if="form.sourceCheckNo" label="来源盘点" class="span-2">
+        <el-input :model-value="form.sourceCheckNo" disabled />
+      </el-form-item>
       <el-form-item label="类型">
         <el-input :model-value="businessKindLabel" disabled />
       </el-form-item>
@@ -380,6 +383,9 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="日期">
         <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+      </el-form-item>
+      <el-form-item label="经办人">
+        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
       </el-form-item>
       <el-form-item label="原因" required class="span-2">
         <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />

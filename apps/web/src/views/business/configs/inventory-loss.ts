@@ -11,19 +11,25 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
   documentType: 'inventory_loss',
   no: 'businessNo',
   columns: [
-    { prop: 'businessNo', label: '单号', minWidth: 165 },
-    { prop: 'businessKindName', label: '类型', minWidth: 105, kind: 'status' },
-    { prop: 'orgName', label: '组织', minWidth: 110 },
-    { prop: 'warehouseName', label: '仓库', minWidth: 120 },
-    { prop: 'documentTypeName', label: '单据类型', minWidth: 110, kind: 'status' },
+    { prop: 'businessNo', label: '报损出库单号', minWidth: 155, link: true },
+    { prop: 'businessKindName', label: '业务类别', minWidth: 105 },
+    {
+      prop: 'sourceCheckNo',
+      label: '来源盘点',
+      minWidth: 140,
+      render: (row) => row.sourceCheckNo || '历史非盘点记录',
+    },
+    { prop: 'orgName', label: '组织', minWidth: 105 },
+    { prop: 'warehouseName', label: '仓库', minWidth: 110 },
+    { prop: 'deptName', label: '部门', minWidth: 100 },
+    { prop: 'documentTypeName', label: '业务类型', minWidth: 105 },
     { prop: 'reason', label: '原因', minWidth: 150, tooltip: true },
+    { prop: 'goWhereName', label: '报损去向', minWidth: 105 },
     { prop: 'date', label: '日期', minWidth: 110, kind: 'date' },
-    { prop: 'quantity', label: '数量', minWidth: 100, kind: 'number', align: 'right' },
-    { prop: 'amount', label: '金额', minWidth: 110, kind: 'money', align: 'right' },
-    { prop: 'goWhereName', label: '去向', minWidth: 105 },
+    { prop: 'quantity', label: '数量', minWidth: 85, kind: 'number', align: 'right' },
+    { prop: 'amount', label: '金额', minWidth: 100, kind: 'money', align: 'right' },
     { prop: 'approveStatus', label: '审批状态', minWidth: 110, kind: 'status' },
-    { prop: 'createdByName', label: '创建人', minWidth: 100 },
-    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+    { prop: 'createdByName', label: '创建人', minWidth: 90 },
   ],
   dictionaries: ['inventory_loss_type', 'inventory_loss_disposal', 'approval_status'],
   optionBags: ['orgs'],
@@ -59,7 +65,10 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) =>
+        Number(row.businessKind) === 2 &&
+        Number(row.status) === 0 &&
+        [0, 2].includes(Number(row.approveStatus)),
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {
@@ -67,7 +76,10 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
       label: '提交',
       kind: 'success',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) =>
+        Number(row.businessKind) === 2 &&
+        Number(row.status) === 0 &&
+        [0, 2].includes(Number(row.approveStatus)),
       confirm: '提交后进入审批流程，是否继续？',
       handler: async (row) => {
         await api.post(`/inventory/losses/${row.id}/submit`);
@@ -111,11 +123,30 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
       },
     },
     {
+      key: 'purchase-return',
+      label: (row) =>
+        (row.purchaseReturns ?? []).length
+          ? `查看采购退货 ${row.purchaseReturns[0]?.returnNo ?? ''}`
+          : '查看采购退货',
+      kind: 'primary',
+      primary: false,
+      show: (row) => (row.purchaseReturns ?? []).length > 0,
+      handler: (row, ctx) =>
+        ctx.navigate('/purchase/returns', {
+          documentId: String(row.purchaseReturns[0]?.id ?? ''),
+          view: '1',
+        }),
+    },
+    {
       key: 'delete',
       label: '删除',
       kind: 'danger',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) =>
+        Number(row.businessKind) === 2 &&
+        Number(row.sourceCheckId ?? 0) === 0 &&
+        Number(row.status) === 0 &&
+        [0, 2].includes(Number(row.approveStatus)),
       confirm: '确认删除该报损单？',
       handler: async (row) => {
         await api.delete(`/inventory/losses/${row.id}`);

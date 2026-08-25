@@ -264,6 +264,9 @@ onMounted(async () => {
           :disabled="isView"
         />
       </el-form-item>
+      <el-form-item label="经办人">
+        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+      </el-form-item>
       <el-form-item label="调整原因" required>
         <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
