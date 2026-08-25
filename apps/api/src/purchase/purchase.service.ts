@@ -65,6 +65,62 @@ export class PurchaseService {
     if (!orgIdValue) return [];
     return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
+  async receiverOptions(orgIdValue: unknown, deptIdValue: unknown) {
+    if (!orgIdValue || !deptIdValue) return [];
+    const orgId = BigInt(String(orgIdValue));
+    const deptId = BigInt(String(deptIdValue));
+    const department = await this.prisma.hspsi_basic_dept.findFirst({
+      where: { dept_id: deptId, org_id: orgId, status: 1, deleted_at: null },
+      select: { dept_id: true },
+    });
+    if (!department) throw new BadRequestException('所选接收部门不属于当前组织或已停用');
+    const users = await this.prisma.hspsi_sys_user.findMany({
+      where: {
+        org_id: orgId,
+        dept_id: deptId,
+        staff_id: { not: null },
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, staff_id: true, username: true, nickname: true },
+      orderBy: [{ nickname: 'asc' }, { id: 'asc' }],
+    });
+    if (!users.length) return [];
+    const [staff, memberships] = await Promise.all([
+      this.prisma.hspsi_basic_staff.findMany({
+        where: {
+          id: { in: users.flatMap((user) => (user.staff_id ? [user.staff_id] : [])) },
+          status: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      }),
+      this.prisma.hspsi_basic_staff_organizations.findMany({
+        where: {
+          staff_id: { in: users.flatMap((user) => (user.staff_id ? [user.staff_id] : [])) },
+          org_type: 2,
+          org_id: deptId,
+          type: 1,
+          deleted_at: null,
+        },
+        select: { staff_id: true },
+      }),
+    ]);
+    const activeStaffIds = new Set(staff.map((item) => String(item.id)));
+    const memberStaffIds = new Set(memberships.map((item) => String(item.staff_id)));
+    return users
+      .filter(
+        (user) =>
+          user.staff_id &&
+          activeStaffIds.has(String(user.staff_id)) &&
+          memberStaffIds.has(String(user.staff_id)),
+      )
+      .map((user) => ({
+        value: user.id,
+        label: user.nickname || user.username,
+        raw: { username: user.username, orgId, deptId },
+      }));
+  }
   private details(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
     return input as Body[];
@@ -77,9 +133,7 @@ export class PurchaseService {
   }
   /** sku_id 缺失(0)的明细回填商品默认/第一个有效 SKU，保证下游单据可过账 */
   private async resolveLineSkus(lines: Body[], db: PurchaseDb = this.prisma) {
-    const missing = lines.filter(
-      (line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n,
-    );
+    const missing = lines.filter((line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n);
     if (!missing.length) return;
     const goodsIds = [...new Set(missing.map((line) => String(line.goodsId ?? line.goods_id)))];
     const goodsList = await db.hspsi_goods_info.findMany({
@@ -378,10 +432,109 @@ export class PurchaseService {
     if (!warehouse || warehouse.org_id !== orgId)
       throw new BadRequestException('所选仓库不属于当前组织');
   }
+  private async assertReceiverScope(
+    tx: PurchaseDb,
+    orgId: bigint,
+    deptId: bigint,
+    receiverId: bigint,
+  ) {
+    if (receiverId <= 0n) throw new BadRequestException('请选择收货人');
+    const receiver = await tx.hspsi_sys_user.findFirst({
+      where: {
+        id: receiverId,
+        org_id: orgId,
+        dept_id: deptId,
+        staff_id: { not: null },
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, staff_id: true, username: true, nickname: true },
+    });
+    if (!receiver?.staff_id)
+      throw new BadRequestException('所选收货人账号不存在、已停用或不属于所选组织和部门');
+    const [staff, membership] = await Promise.all([
+      tx.hspsi_basic_staff.findFirst({
+        where: { id: receiver.staff_id, status: 1, deleted_at: null },
+        select: { id: true },
+      }),
+      tx.hspsi_basic_staff_organizations.findFirst({
+        where: {
+          staff_id: receiver.staff_id,
+          org_type: 2,
+          org_id: deptId,
+          type: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!staff || !membership)
+      throw new BadRequestException('所选收货人的OA主组织、部门关系无效，请先同步组织人员');
+    return receiver;
+  }
+  private async syncPurchaseOrderTodo(
+    tx: Prisma.TransactionClient,
+    order: {
+      po_id: bigint;
+      po_no: string;
+      org_id: bigint;
+      receiver_id: bigint;
+      status: number;
+      created_by: bigint;
+    },
+    actorId?: string,
+    closed = false,
+  ) {
+    const existing = await tx.hspsi_sys_todo.findFirst({
+      where: {
+        source_type: 'purchase_order',
+        business_id: order.po_id,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    const completed = closed || [4, 5, 6].includes(Number(order.status));
+    const now = new Date();
+    const data = {
+      organization_id: Number(order.org_id),
+      user_id: Number(order.receiver_id),
+      title: `采购订单 ${order.po_no} 待收货`,
+      content: `请办理采购订单 ${order.po_no} 的到货及入库`,
+      source_type: 'purchase_order',
+      source_id: order.po_id,
+      business_type: 'purchase_receipt',
+      business_id: order.po_id,
+      status: completed ? (closed ? 2 : 1) : 0,
+      completed_time: completed ? now : null,
+      updated_by: Number(actorId ?? order.created_by),
+      updated_at: now,
+    };
+    if (existing) {
+      await tx.hspsi_sys_todo.update({ where: { id: existing.id }, data });
+    } else if (!completed) {
+      await tx.hspsi_sys_todo.create({
+        data: {
+          ...data,
+          created_by: Number(actorId ?? order.created_by),
+          created_at: now,
+        },
+      });
+    }
+  }
   private async recalcOrderStatus(tx: Prisma.TransactionClient, poId: bigint) {
     const order = await tx.hspsi_purchase_order.findUniqueOrThrow({
       where: { po_id: poId },
-      select: { po_id: true, pcs_qty: true, arrival_qty: true, is_all_arrival: true, status: true },
+      select: {
+        po_id: true,
+        po_no: true,
+        org_id: true,
+        receiver_id: true,
+        created_by: true,
+        pcs_qty: true,
+        arrival_qty: true,
+        is_all_arrival: true,
+        status: true,
+      },
     });
     const details = await tx.hspsi_purchase_order_detail.findMany({
       where: { po_id: poId },
@@ -417,6 +570,7 @@ export class PurchaseService {
       newStatus = 3;
     }
     await tx.hspsi_purchase_order.update({ where: { po_id: poId }, data: { status: newStatus } });
+    await this.syncPurchaseOrderTodo(tx, { ...order, status: newStatus });
   }
   private async assertDictionaryValue(tx: PurchaseDb, code: string, value: number, label: string) {
     const category = await tx.hspsi_sys_dictionary_category.findFirst({
@@ -1178,6 +1332,8 @@ export class PurchaseService {
     const purId = BigInt(id);
     const vendorId = BigInt(String(body.vendorId ?? 0));
     if (vendorId <= 0n) throw new BadRequestException('请选择本次采购订单的供应商');
+    const receiverId = BigInt(String(body.receiverId ?? 0));
+    if (receiverId <= 0n) throw new BadRequestException('请选择本次采购订单的收货人');
     const generationMode = String(body.generationMode ?? 'partial');
     if (!['all', 'partial'].includes(generationMode))
       throw new BadRequestException('采购订单生成方式无效');
@@ -1214,6 +1370,7 @@ export class PurchaseService {
         application.dept_id,
         application.warehouse_id,
       );
+      await this.assertReceiverScope(tx, application.org_id, application.dept_id, receiverId);
       const vendor = await tx.hspsi_basic_vendor.findFirst({
         where: { vendor_id: vendorId, deleted_at: null },
         select: { vendor_id: true },
@@ -1321,7 +1478,7 @@ export class PurchaseService {
           org_id: application.org_id,
           warehouse_id: application.warehouse_id,
           dept_id: application.dept_id,
-          receiver_id: BigInt(userId),
+          receiver_id: receiverId,
           vendor_id: vendorId,
           pcs_qty: totalQuantity,
           arrival_type: 1,
@@ -1373,6 +1530,18 @@ export class PurchaseService {
           createdBy: userId,
         },
         tx,
+      );
+      await this.syncPurchaseOrderTodo(
+        tx,
+        {
+          po_id: order.po_id,
+          po_no: orderNo,
+          org_id: application.org_id,
+          receiver_id: receiverId,
+          status: 1,
+          created_by: BigInt(userId),
+        },
+        userId,
       );
       return {
         id: order.po_id,
@@ -1534,6 +1703,28 @@ export class PurchaseService {
         ),
       ),
     ]);
+    const orderUserIds = [
+      ...new Set(
+        items
+          .flatMap((item) => [item.receiver_id, item.created_by])
+          .filter((userId) => userId > 0n)
+          .map(String),
+      ),
+    ].map(BigInt);
+    // 姓名只按当前已获准查看的订单中出现的用户ID精确回查。
+    // 不走按用户所属组织过滤的通用下拉，避免总部人员替子公司建单时姓名显示为“—”。
+    const orderUsers = orderUserIds.length
+      ? await this.prisma.$queryRaw<Array<{ id: bigint; display_name: string }>>(
+          Prisma.sql`
+            SELECT id, COALESCE(NULLIF(nickname, ''), username) AS display_name
+            FROM hspsi_sys_user
+            WHERE id IN (${Prisma.join(orderUserIds)}) AND deleted_at IS NULL
+          `,
+        )
+      : [];
+    const orderUserNames = new Map(
+      orderUsers.map((user) => [String(user.id), String(user.display_name ?? '')]),
+    );
     const positionMap = new Map(positions);
     return {
       items: items.map((item) => {
@@ -1552,6 +1743,7 @@ export class PurchaseService {
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
           receiverId: item.receiver_id,
+          receiverName: orderUserNames.get(String(item.receiver_id)) ?? '',
           vendorId: item.vendor_id,
           vendorName: vendor?.conpany_name ?? '',
           pcsQty: item.pcs_qty,
@@ -1579,6 +1771,7 @@ export class PurchaseService {
           orderStatus: item.status,
           remark: item.remark,
           createdBy: item.created_by,
+          createdByName: orderUserNames.get(String(item.created_by)) ?? '',
           createdAt: item.created_at,
         };
       }),
@@ -1767,7 +1960,7 @@ export class PurchaseService {
       org_id: BigInt(String(body.orgId)),
       warehouse_id: BigInt(String(body.warehouseId)),
       dept_id: BigInt(String(body.deptId)),
-      receiver_id: BigInt(String(body.receiverId)),
+      receiver_id: BigInt(String(body.receiverId ?? 0)),
       vendor_id: body.vendorId ? BigInt(String(body.vendorId)) : 0n,
       pcs_qty: quantity,
       arrival_type: Number(body.arrivalType),
@@ -1785,6 +1978,7 @@ export class PurchaseService {
     return this.guardedTransaction(async (tx) => {
       await this.materializeQuickCatalog(tx, pricedLines, userId);
       await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
+      await this.assertReceiverScope(tx, data.org_id, data.dept_id, data.receiver_id);
       await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, pricedLines);
       await this.assertDictionaryValue(tx, 'purchase_settlement_type', data.pay_type, '结算方式');
       if (id) {
@@ -1851,6 +2045,18 @@ export class PurchaseService {
           remark: String(line.remark ?? ''),
         })),
       });
+      await this.syncPurchaseOrderTodo(
+        tx,
+        {
+          po_id: poId,
+          po_no: orderNo,
+          org_id: data.org_id,
+          receiver_id: data.receiver_id,
+          status: 1,
+          created_by: BigInt(String(existingOrder?.created_by ?? userId)),
+        },
+        userId,
+      );
       let paymentNo = '';
       if (currentPaymentAmount.greaterThan(0)) {
         const paymentChannel = Number(body.currentPaymentChannel);
@@ -2042,7 +2248,15 @@ export class PurchaseService {
       await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${poId} FOR UPDATE`;
       const order = await tx.hspsi_purchase_order.findFirst({
         where: { po_id: poId, deleted_at: null },
-        select: { pur_id: true },
+        select: {
+          po_id: true,
+          po_no: true,
+          pur_id: true,
+          org_id: true,
+          receiver_id: true,
+          status: true,
+          created_by: true,
+        },
       });
       if (!order) throw new NotFoundException('采购订单不存在');
       const [inputs, payments, shortageLines] = await Promise.all([
@@ -2068,6 +2282,7 @@ export class PurchaseService {
         where: { po_id: poId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
       });
+      await this.syncPurchaseOrderTodo(tx, order, userId, true);
       await tx.hspsi_purchase_order_detail.updateMany({
         where: { po_id: poId, source_application_detail_id: { not: null } },
         data: { source_application_detail_id: null },

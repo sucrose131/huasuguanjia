@@ -6,7 +6,7 @@ function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
 ) {
-  return new PurchaseService(
+  const service = new PurchaseService(
     prisma as never,
     { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
     { post: vi.fn() } as never,
@@ -14,6 +14,9 @@ function serviceWith(
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
   );
+  vi.spyOn(service as any, 'assertReceiverScope').mockResolvedValue(undefined);
+  vi.spyOn(service as any, 'syncPurchaseOrderTodo').mockResolvedValue(undefined);
+  return service;
 }
 
 describe('PurchaseService quick catalog materialization', () => {
@@ -191,6 +194,79 @@ describe('PurchaseService quick catalog materialization', () => {
     });
     expect(trace.link).toHaveBeenCalledTimes(2);
     expect(result).toEqual(expect.objectContaining({ id: 501n, message: '入库单已创建' }));
+  });
+});
+
+describe('PurchaseService receiver assignment and todo', () => {
+  it('returns only active OA users whose primary department matches the selected organization', async () => {
+    const prisma = {
+      hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ dept_id: 2n }) },
+      hspsi_sys_user: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 9n, staff_id: 90n, username: 'receiver', nickname: '收货人甲' },
+          { id: 10n, staff_id: 100n, username: 'other', nickname: '其他人员' },
+        ]),
+      },
+      hspsi_basic_staff: { findMany: vi.fn().mockResolvedValue([{ id: 90n }, { id: 100n }]) },
+      hspsi_basic_staff_organizations: {
+        findMany: vi.fn().mockResolvedValue([{ staff_id: 90n }]),
+      },
+    };
+    const result = await serviceWith(prisma).receiverOptions('1', '2');
+    expect(result).toEqual([expect.objectContaining({ value: 9n, label: '收货人甲' })]);
+  });
+
+  it('rejects a receiver without a valid OA primary department relation', async () => {
+    const tx = {
+      hspsi_sys_user: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 9n,
+          staff_id: 90n,
+          username: 'receiver',
+          nickname: '收货人甲',
+        }),
+      },
+      hspsi_basic_staff: { findFirst: vi.fn().mockResolvedValue({ id: 90n }) },
+      hspsi_basic_staff_organizations: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const service = serviceWith({});
+    (service as any).assertReceiverScope.mockRestore();
+    await expect((service as any).assertReceiverScope(tx, 1n, 2n, 9n)).rejects.toThrow(
+      'OA主组织、部门关系无效',
+    );
+  });
+
+  it('creates a personal todo linked by the full bigint purchase-order id', async () => {
+    const todoCreate = vi.fn();
+    const tx = {
+      hspsi_sys_todo: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: todoCreate,
+        update: vi.fn(),
+      },
+    };
+    const service = serviceWith({});
+    (service as any).syncPurchaseOrderTodo.mockRestore();
+    await (service as any).syncPurchaseOrderTodo(
+      tx,
+      {
+        po_id: 1786090216033523n,
+        po_no: 'PO202608190008',
+        org_id: 4n,
+        receiver_id: 13n,
+        status: 1,
+        created_by: 7n,
+      },
+      '7',
+    );
+    expect(todoCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        user_id: 13,
+        source_id: 1786090216033523n,
+        business_id: 1786090216033523n,
+        status: 0,
+      }),
+    });
   });
 });
 
@@ -1046,6 +1122,7 @@ describe('PurchaseService production-shortage guards', () => {
       {
         generationMode: 'partial',
         vendorId: '5',
+        receiverId: '9',
         details: [{ applicationDetailId: '12', totalAmount: 100 }],
       },
       '9',
@@ -1055,6 +1132,7 @@ describe('PurchaseService production-shortage guards', () => {
       data: expect.objectContaining({
         pur_id: 7n,
         vendor_id: 5n,
+        receiver_id: 9n,
         pcs_qty: 4,
         pay_amout: new Prisma.Decimal(100),
       }),
@@ -1070,6 +1148,15 @@ describe('PurchaseService production-shortage guards', () => {
       ],
     });
     expect(trace.link).toHaveBeenCalledOnce();
+    expect((service as any).syncPurchaseOrderTodo).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        po_id: 30n,
+        receiver_id: 9n,
+        status: 1,
+      }),
+      '9',
+    );
     expect(result).toEqual(
       expect.objectContaining({ id: 30n, totalAmount: new Prisma.Decimal(100) }),
     );
@@ -1431,17 +1518,16 @@ describe('PurchaseService production-shortage guards', () => {
         findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, unit_type: 3 }]),
       },
       hspsi_goods_info_sku: {
-        findMany: vi.fn().mockResolvedValue([
-          { good_id: 101n, sku_id: 202n, unit_type: 5, is_default: 0 },
-        ]),
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ good_id: 101n, sku_id: 202n, unit_type: 5, is_default: 0 }]),
       },
     };
     const service = serviceWith(prisma);
     const lines = [{ goodsId: '101', skuId: 0, unitType: 0 }];
     await (service as any).resolveLineSkus(lines);
 
-    expect(String(lines[0].skuId)).toBe('202');
-    expect(lines[0].unitType).toBe(5);
+    expect(String(lines[0]!.skuId)).toBe('202');
+    expect(lines[0]!.unitType).toBe(5);
   });
 });
-

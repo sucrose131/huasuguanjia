@@ -28,13 +28,17 @@ const submitting = ref(false);
 const application = ref<any>({ details: [], generatedOrders: [] });
 const tableRef = ref<TableInstance>();
 const selectedRows = ref<any[]>([]);
-const form = reactive({ vendorId: '' as string | number });
+const form = reactive({
+  vendorId: '' as string | number,
+  receiverId: '' as string | number,
+});
 const options = reactive<Record<string, Option[]>>({
   organizations: [],
   departments: [],
   warehouses: [],
   vendors: [],
   units: [],
+  receivers: [],
 });
 const orderStatuses = ref<Option[]>([]);
 
@@ -84,6 +88,7 @@ async function load() {
   loading.value = true;
   selectedRows.value = [];
   form.vendorId = '';
+  form.receiverId = '';
   try {
     const [data, organizations, departments, warehouses, vendors, units, statuses] =
       (await Promise.all([
@@ -129,6 +134,11 @@ async function load() {
       };
     });
     application.value = data;
+    options.receivers = isGeneration.value
+      ? ((await api.get('/purchase/receiver-options', {
+          params: { orgId: data.orgId, deptId: data.deptId },
+        })) as Option[])
+      : [];
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message ?? '采购申请生成界面加载失败');
   } finally {
@@ -153,6 +163,10 @@ async function submitOrder() {
     ElMessage.warning('请选择本次采购订单的供应商');
     return;
   }
+  if (!form.receiverId) {
+    ElMessage.warning('请选择本次采购订单的收货人');
+    return;
+  }
   if (!effectiveRows.value.length) {
     ElMessage.warning('请至少选择一条采购明细');
     return;
@@ -167,6 +181,7 @@ async function submitOrder() {
     const result = (await api.post(`/purchase/applications/${props.applicationId}/generate-order`, {
       generationMode: props.mode,
       vendorId: form.vendorId,
+      receiverId: form.receiverId,
       details: effectiveRows.value.map((item: any) => ({
         applicationDetailId: String(item.applicationDetailId),
         totalAmount: Number(item.totalAmount),
@@ -284,8 +299,8 @@ watch(
             >
           </div>
         </div>
-        <el-form label-position="top">
-          <el-form-item label="本次采购供应商" required class="vendor-field">
+        <el-form label-position="top" class="generation-form-grid">
+          <el-form-item label="本次采购供应商" required>
             <el-select
               v-model="form.vendorId"
               clearable
@@ -294,6 +309,21 @@ watch(
             >
               <el-option
                 v-for="item in options.vendors"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="收货人" required>
+            <el-select
+              v-model="form.receiverId"
+              clearable
+              filterable
+              placeholder="请选择申请部门下的收货人"
+            >
+              <el-option
+                v-for="item in options.receivers"
                 :key="item.value"
                 :label="item.label"
                 :value="item.value"
@@ -447,11 +477,13 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vendor-field {
-  width: 360px;
+.generation-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 360px));
+  gap: 16px;
   margin-bottom: 12px;
 }
-.vendor-field :deep(.el-select) {
+.generation-form-grid :deep(.el-select) {
   width: 100%;
 }
 .generation-table {
@@ -523,8 +555,8 @@ watch(
   .generation-master-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .vendor-field {
-    width: 100%;
+  .generation-form-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

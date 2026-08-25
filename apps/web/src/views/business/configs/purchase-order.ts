@@ -98,10 +98,16 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       statusDict: 'purchase_order_status',
     },
     {
+      prop: 'receiverId',
+      label: '收货人',
+      width: 104,
+      render: (row, ctx) => row.receiverName || ctx.lookup('users', row.receiverId),
+    },
+    {
       prop: 'createdBy',
       label: '创建人',
       width: 96,
-      render: (row, ctx) => ctx.creator(row),
+      render: (row, ctx) => row.createdByName || ctx.creator(row),
     },
   ],
   dictionaries: ['purchase_settlement_type', 'purchase_order_status', 'purchase_payment_progress_status'],

@@ -94,6 +94,9 @@ export class SystemService {
         role.code === 'admin'
           ? ['全部']
           : assigned.filter((menu) => menu.type === 3).map((menu) => menu.name);
+      const dashboardWidgets = assigned.filter(
+        (menu) => menu.type === 3 && menu.code.startsWith('dashboard:overview:widget:'),
+      );
       return {
         id: String(role.id),
         name: role.name,
@@ -106,6 +109,9 @@ export class SystemService {
         actionPermissions,
         actionPermissionCount: assigned.filter((menu) => menu.type === 3).length,
         actionPermissionCodes: assigned.filter((menu) => menu.type === 3).map((menu) => menu.code),
+        dashboardWidgetCodes: dashboardWidgets.map((menu) => menu.code),
+        dashboardWidgets: dashboardWidgets.map((menu) => menu.name),
+        dashboardWidgetCount: dashboardWidgets.length,
         userCount: userRoles.filter((item) => BigInt(item.role_id) === role.id).length,
         createdBy:
           actorMap.get(String(role.created_by ?? 0n)) ??
@@ -129,12 +135,20 @@ export class SystemService {
     const actionCodes = Array.isArray(body.actionPermissionCodes)
       ? body.actionPermissionCodes.map(String)
       : [];
-    if (actionCodes.length) {
+    const dashboardWidgetCodes = Array.isArray(body.dashboardWidgetCodes)
+      ? body.dashboardWidgetCodes.map(String)
+      : [];
+    const permissionCodes = [...new Set([...actionCodes, ...dashboardWidgetCodes])];
+    if (permissionCodes.length) {
       const actions = await this.prisma.hspsi_sys_menu.findMany({
-        where: { code: { in: actionCodes }, type: 3, status: 1, deleted_at: null },
+        where: { code: { in: permissionCodes }, type: 3, status: 1, deleted_at: null },
       });
-      if (actions.length !== new Set(actionCodes).size)
+      if (actions.length !== permissionCodes.length)
         throw new BadRequestException('包含无效的操作权限');
+      const invalidWidget = dashboardWidgetCodes.some(
+        (code) => !code.startsWith('dashboard:overview:widget:'),
+      );
+      if (invalidWidget) throw new BadRequestException('包含无效的工作台组件权限');
       actions.forEach((action) => requested.add(action.id));
     }
     if (!requested.size) throw new BadRequestException('至少选择一项菜单权限');
@@ -212,7 +226,9 @@ export class SystemService {
     });
     if (duplicate) throw new ConflictException('角色名称已存在');
     const menuIds =
-      body.menuIds !== undefined || body.actionPermissionCodes !== undefined
+      body.menuIds !== undefined ||
+      body.actionPermissionCodes !== undefined ||
+      body.dashboardWidgetCodes !== undefined
         ? await this.roleMenuIds(body)
         : null;
     await this.prisma.$transaction(async (tx) => {

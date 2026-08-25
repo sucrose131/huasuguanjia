@@ -152,7 +152,6 @@ watch(
   },
 );
 
-
 // 树形节点计数（含子级，供底部统计/空态判断）
 const menuRowCount = computed(() => {
   let count = 0;
@@ -398,7 +397,9 @@ function open(nextMode: Mode, row?: any) {
         menuIds: (row.menuIds ?? [])
           .map(String)
           .filter((id: string) => pageMenus.value.some((menu) => String(menu.id) === id)),
-        actionPermissionCodes: row.actionPermissionCodes ?? [],
+        actionPermissionCodes: [
+          ...new Set([...(row.actionPermissionCodes ?? []), ...(row.dashboardWidgetCodes ?? [])]),
+        ],
       });
     else if (resource.value === 'users')
       Object.assign(form, {
@@ -814,13 +815,11 @@ onMounted(async () => {
           </el-table>
 
           <el-table
-          <el-table
             v-else
             :data="menuTree"
             row-key="id"
             :tree-props="{ children: 'children' }"
             :default-expanded-keys="menuExpandedKeys"
-
             min-width="1180"
           >
             <el-table-column prop="name" label="菜单名称" min-width="200">
@@ -863,7 +862,13 @@ onMounted(async () => {
               <template #default="{ row }">
                 <TableRowActions :show-more="can('system:config:delete')">
                   <el-button link type="primary" @click="open('view', row)">查看</el-button>
-                  <el-button v-if="can('system:config:update')" link type="primary" @click="open('edit', row)">编辑</el-button>
+                  <el-button
+                    v-if="can('system:config:update')"
+                    link
+                    type="primary"
+                    @click="open('edit', row)"
+                    >编辑</el-button
+                  >
                   <template #more>
                     <el-dropdown-item
                       v-if="can('system:config:delete')"

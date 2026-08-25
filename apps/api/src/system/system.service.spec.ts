@@ -77,3 +77,46 @@ describe('SystemService.updateUserRoles', () => {
     });
   });
 });
+
+describe('SystemService dashboard widget role permissions', () => {
+  it('把数据总览组件作为其他业务操作与页面权限一起保存', async () => {
+    const menus = [
+      { id: 1, parent_id: 0, type: 1, code: 'dashboard' },
+      { id: 54, parent_id: 1, type: 2, code: 'dashboard:1:view' },
+      {
+        id: 301,
+        parent_id: 54,
+        type: 3,
+        code: 'dashboard:overview:widget:inventory-health',
+      },
+      {
+        id: 302,
+        parent_id: 54,
+        type: 3,
+        code: 'dashboard:overview:widget:todo-preview',
+      },
+    ];
+    const prisma = {
+      hspsi_sys_menu: {
+        findMany: vi.fn(async ({ where, select }: any) => {
+          if (where.code?.in) return menus.filter((menu) => where.code.in.includes(menu.code));
+          const selected = menus.filter((menu) => where.id.in.includes(menu.id));
+          return select
+            ? selected.map((menu) => ({ id: menu.id, parent_id: menu.parent_id }))
+            : selected;
+        }),
+      },
+    };
+    const service = new SystemService(prisma as never, {} as never);
+
+    const ids = await (service as any).roleMenuIds({
+      menuIds: ['54'],
+      actionPermissionCodes: [
+        'dashboard:overview:widget:inventory-health',
+        'dashboard:overview:widget:todo-preview',
+      ],
+    });
+
+    expect(ids.map(String).sort()).toEqual(['1', '301', '302', '54'].sort());
+  });
+});
