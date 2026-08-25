@@ -1,7 +1,7 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { compare } from 'bcryptjs';
+import { compare, hash } from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../database/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -190,5 +190,23 @@ export class AuthService {
   async logout(sid: string) {
     await this.redis.ensureConnected();
     await this.redis.client.del(`session:${sid}`);
+  }
+
+  /** 用户自助修改密码：校验旧密码后写入新密码（对 OA 同步用户同样适用） */
+  async changePassword(userId: string, oldPassword: string, newPassword: string) {
+    const user = await this.prisma.hspsi_sys_user.findFirst({
+      where: { id: BigInt(userId), deleted_at: null, status: 1 },
+      select: { id: true, password: true },
+    });
+    if (!user) throw new UnauthorizedException('账号不存在或已停用');
+    if (!(await compare(oldPassword, user.password)))
+      throw new UnauthorizedException('旧密码不正确');
+    if (newPassword.length < 6 || newPassword.length > 64)
+      throw new UnauthorizedException('新密码长度应为6至64个字符');
+    await this.prisma.hspsi_sys_user.update({
+      where: { id: user.id },
+      data: { password: await hash(newPassword, 12), updated_by: BigInt(userId), updated_at: new Date() },
+    });
+    return { message: '密码修改成功' };
   }
 }

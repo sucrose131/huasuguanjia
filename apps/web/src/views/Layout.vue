@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   ArrowDown,
@@ -20,6 +20,7 @@ import {
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/api';
+import { ElMessage } from 'element-plus';
 import huasuLogo from '@/assets/huasu-logo.png';
 
 const route = useRoute();
@@ -122,6 +123,48 @@ watch(
 async function logout() {
   await auth.logout();
   router.push('/login');
+}
+
+// ── 修改密码 ──
+const passwordDialog = ref(false);
+const passwordSaving = ref(false);
+const passwordForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+});
+async function openPasswordDialog() {
+  passwordForm.oldPassword = '';
+  passwordForm.newPassword = '';
+  passwordForm.confirmPassword = '';
+  passwordDialog.value = true;
+}
+async function submitPassword() {
+  if (!passwordForm.oldPassword || !passwordForm.newPassword) {
+    ElMessage.warning('请填写旧密码和新密码');
+    return;
+  }
+  if (passwordForm.newPassword.length < 6) {
+    ElMessage.warning('新密码至少6个字符');
+    return;
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致');
+    return;
+  }
+  passwordSaving.value = true;
+  try {
+    const result: any = await api.post('/auth/change-password', {
+      oldPassword: passwordForm.oldPassword,
+      newPassword: passwordForm.newPassword,
+    });
+    ElMessage.success(result?.message ?? '密码修改成功');
+    passwordDialog.value = false;
+  } catch {
+    // axios 拦截器已提示
+  } finally {
+    passwordSaving.value = false;
+  }
 }
 function navigate(path?: string | null) {
   if (path) {
@@ -252,6 +295,9 @@ function navigate(path?: string | null) {
             <strong>{{ auth.user?.username || '加载中' }}</strong
             ><small>{{ auth.user?.roleName || '未配置角色' }}</small>
           </div>
+          <button title="修改密码" @click="openPasswordDialog">
+            <el-icon><Setting /></el-icon>
+          </button>
           <button title="退出登录" @click="logout">
             <el-icon><SwitchButton /></el-icon>
           </button>
@@ -260,6 +306,24 @@ function navigate(path?: string | null) {
       <main class="content"><router-view :key="route.fullPath" /></main>
     </div>
   </div>
+
+  <el-dialog v-model="passwordDialog" title="修改密码" width="420px" :close-on-click-modal="false">
+    <el-form label-position="top">
+      <el-form-item label="旧密码">
+        <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入当前登录密码" />
+      </el-form-item>
+      <el-form-item label="新密码">
+        <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少6个字符" />
+      </el-form-item>
+      <el-form-item label="确认新密码">
+        <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="再次输入新密码" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="passwordDialog = false">取消</el-button>
+      <el-button type="primary" :loading="passwordSaving" @click="submitPassword">确定</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>

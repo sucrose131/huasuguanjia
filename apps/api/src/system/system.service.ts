@@ -554,8 +554,28 @@ export class SystemService {
       where: { id: targetId, deleted_at: null },
     });
     if (!old) throw new NotFoundException('用户不存在');
-    if (old.staff_id)
-      throw new BadRequestException('OA同步人员的身份、角色和组织授权不能在本地手工修改');
+    if (old.staff_id) {
+      // OA 同步人员的身份、角色和组织授权由 OA 维护，本地不能手工修改；
+      // 仅放行「重置密码」这一单一操作（body 只含 password 字段）。
+      const allowedKeys = new Set(['password']);
+      const hasNonPasswordChange = Object.keys(body).some((key) => !allowedKeys.has(key));
+      if (hasNonPasswordChange) {
+        throw new BadRequestException('OA同步人员的身份、角色和组织授权不能在本地手工修改');
+      }
+      const password = String(body.password ?? '');
+      if (password && (password.length < 6 || password.length > 64))
+        throw new BadRequestException('重置密码长度应为6至64个字符');
+      if (!password) throw new BadRequestException('OA同步用户仅支持重置密码，且密码不能为空');
+      await this.prisma.hspsi_sys_user.update({
+        where: { id: targetId },
+        data: {
+          password: await hash(password, 12),
+          updated_by: BigInt(userId),
+          updated_at: new Date(),
+        },
+      });
+      return { id, message: '密码重置成功' };
+    }
     const name = this.text(body.name ?? old.nickname ?? old.username, '用户姓名', 1, 50);
     const status = this.integer(body.status ?? old.status ?? 1, '账号状态', 1);
     if (old.username === 'admin' && status !== 1)
