@@ -14,6 +14,7 @@ import {
 } from '@element-plus/icons-vue';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import { dateText as formatDateText } from '@/utils/format';
 
 const route = useRoute();
 const router = useRouter();
@@ -50,6 +51,8 @@ const todoQuery = reactive({ page: 1, pageSize: 20, keyword: '', sourceType: '' 
 const messageRows = ref<any[]>([]);
 const messageTotal = ref(0);
 const messageCategory = ref('全部消息');
+const messageQuery = reactive({ page: 1, pageSize: 20 });
+const categoryCounts = ref<Record<string, number>>({});
 const categories = ['全部消息', '审批消息', '预警消息', '业务消息'];
 
 const greeting = computed(() => {
@@ -60,15 +63,14 @@ const greeting = computed(() => {
 const maxTrend = computed(() =>
   Math.max(1, ...dashboard.trend.flatMap((item: any) => [item.sales, item.purchase])),
 );
-const filteredMessages = computed(() =>
-  messageCategory.value === '全部消息'
-    ? messageRows.value
-    : messageRows.value.filter((item) => item.category === messageCategory.value),
-);
+// 分类过滤由后端执行，这里直接使用当前页数据
+const filteredMessages = computed(() => messageRows.value);
 const categoryCount = (category: string) =>
   category === '全部消息'
-    ? messageRows.value.length
-    : messageRows.value.filter((item) => item.category === category).length;
+    ? (categoryCounts.value['审批消息'] ?? 0) +
+      (categoryCounts.value['预警消息'] ?? 0) +
+      (categoryCounts.value['业务消息'] ?? 0)
+    : (categoryCounts.value[category] ?? 0);
 const money = (value: any) =>
   auth.amountAccess.canViewAmount
     ? `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`
@@ -77,7 +79,9 @@ const messageText = (item: any) =>
   Object.prototype.hasOwnProperty.call(item, 'amount')
     ? `${item.content || ''} ${money(item.amount)}。`
     : item.content || '暂无消息内容';
-const dateText = (value: any) => (value ? String(value).replace('T', ' ').slice(0, 16) : '—');
+// 复用项目标准时间格式化（@/utils/format），本地时区转换后仅展示到分钟
+const dateText = (value: any) =>
+  value ? String(formatDateText(value, true)).replace('T', ' ').slice(0, 16) : '—';
 
 async function loadOverview() {
   const data = (await api.get('/dashboard')) as any;
@@ -90,11 +94,22 @@ async function loadTodos() {
 }
 async function loadMessages() {
   const data = (await api.get('/dashboard/messages', {
-    params: { page: 1, pageSize: 100 },
+    params: {
+      page: messageQuery.page,
+      pageSize: messageQuery.pageSize,
+      category: messageCategory.value,
+    },
   })) as any;
   messageRows.value = data.items ?? [];
   messageTotal.value = data.total ?? 0;
   dashboard.unreadCount = data.unreadCount ?? 0;
+  categoryCounts.value = data.categoryCounts ?? {};
+}
+function switchCategory(category: string) {
+  if (category === messageCategory.value) return;
+  messageCategory.value = category;
+  messageQuery.page = 1;
+  loadMessages();
 }
 async function load() {
   loading.value = true;
@@ -234,34 +249,63 @@ onMounted(load);
             v-for="category in categories"
             :key="category"
             :class="{ active: messageCategory === category }"
-            @click="messageCategory = category"
+            @click="switchCategory(category)"
           >
             <el-icon><Bell /></el-icon><span>{{ category }}</span
             ><b>{{ categoryCount(category) }}</b>
           </button>
         </aside>
         <div class="message-list">
-          <button
+          <div
             v-for="item in filteredMessages"
             :key="item.id"
             class="message-row"
+            role="button"
+            tabindex="0"
             :class="{ unread: !item.isRead }"
             @click="readMessage(item)"
+            @keydown.enter="readMessage(item)"
           >
             <span class="message-icon"
               ><el-icon
                 ><Warning v-if="item.category === '预警消息'" /><CircleCheck
                   v-else-if="item.category === '审批消息'" /><Bell v-else /></el-icon></span
             ><span class="message-copy"
-              ><strong>{{ item.title }}<i v-if="!item.isRead" /></strong
+              ><strong
+                >{{ item.title }}<i v-if="!item.isRead" /><el-tag
+                  :type="item.isRead ? 'info' : 'danger'"
+                  size="small"
+                  effect="plain"
+                  class="read-tag"
+                  >{{ item.isRead ? '已读' : '未读' }}</el-tag
+                ></strong
               ><small>{{ messageText(item) }}</small
               ><time>{{ dateText(item.createdAt) }}</time></span
-            ><b>›</b>
-          </button>
+            ><span class="message-actions"
+              ><el-button
+                v-if="!item.isRead"
+                link
+                type="primary"
+                size="small"
+                @click.stop="readMessage(item)"
+                >标记已读</el-button
+              ><b>›</b></span
+            >
+          </div>
           <div v-if="!filteredMessages.length" class="dashboard-empty">
             {{ messageCategory === '全部消息' ? '暂无消息' : `暂无${messageCategory}` }}
           </div>
         </div>
+        <footer class="table-footer message-footer">
+          <span>共 {{ messageTotal }} 条记录</span
+          ><el-pagination
+            v-model:current-page="messageQuery.page"
+            v-model:page-size="messageQuery.pageSize"
+            :total="messageTotal"
+            layout="prev,pager,next"
+            @change="loadMessages"
+          />
+        </footer>
       </div>
     </template>
 
@@ -793,6 +837,9 @@ onMounted(load);
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
 }
+.message-footer {
+  grid-column: 1 / -1;
+}
 .message-categories {
   padding: 12px;
   border-right: 1px solid var(--hs-border);
@@ -823,7 +870,7 @@ onMounted(load);
   width: 100%;
   min-height: 86px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 18px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 14px 18px;
@@ -849,6 +896,8 @@ onMounted(load);
   display: block;
 }
 .message-copy strong {
+  display: flex;
+  align-items: center;
   font-size: 12px;
 }
 .message-copy strong i {
@@ -859,6 +908,10 @@ onMounted(load);
   border-radius: 50%;
   background: var(--hs-primary);
 }
+.read-tag {
+  margin-left: 8px;
+  font-size: 10px;
+}
 .message-copy small {
   margin-top: 5px;
   color: var(--hs-muted);
@@ -867,6 +920,15 @@ onMounted(load);
   margin-top: 5px;
   color: #929cac;
   font-size: 9px;
+}
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a3adbb;
+}
+.message-actions b {
+  font-size: 18px;
 }
 .shortcut-grid {
   display: grid;

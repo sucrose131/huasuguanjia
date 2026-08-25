@@ -41,13 +41,16 @@ function fixture() {
   const production = { handleOaApprovalResult: vi.fn() };
   const sales = { handleOaApprovalResult: vi.fn() };
   const salesOa = { submitDiscountOrder: vi.fn() };
+  const message = { sendApprovalNotification: vi.fn().mockResolvedValue(undefined) };
   const prisma = {
     hspsi_oa_approval_callback_log: {
       create: vi.fn().mockResolvedValue({ id: 9n }),
       update: vi.fn(),
     },
     hspsi_oa_approval_instance: {
-      findFirst: vi.fn().mockResolvedValue({ business_type: 'requisition_application' }),
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ business_type: 'requisition_application', business_id: 7n }),
     },
     hspsi_oa_form_template: {
       findFirst: vi.fn().mockResolvedValue({ id: 1n }),
@@ -64,6 +67,7 @@ function fixture() {
       production as never,
       sales as never,
       salesOa as never,
+      message as never,
     ),
     inner,
     envelope,
@@ -75,6 +79,7 @@ function fixture() {
     production,
     sales,
     salesOa,
+    message,
     prisma,
   };
 }
@@ -131,6 +136,7 @@ describe('RequisitionOaCallbackController', () => {
     const { controller, inner, envelope, prisma, purchase, requisition } = fixture();
     prisma.hspsi_oa_approval_instance.findFirst.mockResolvedValueOnce({
       business_type: 'purchase_application',
+      business_id: 7n,
     });
 
     await controller.receiveEvent(envelope);
@@ -146,6 +152,7 @@ describe('RequisitionOaCallbackController', () => {
     const context = fixture();
     context.prisma.hspsi_oa_approval_instance.findFirst.mockResolvedValueOnce({
       business_type: businessType,
+      business_id: 7n,
     });
     const service = target === 'production' ? context.production : context.sales;
     service.handleOaApprovalResult.mockResolvedValueOnce({ processed: true });
@@ -157,6 +164,65 @@ describe('RequisitionOaCallbackController', () => {
       context.envelope,
       9n,
     );
+  });
+
+  it('sends an approval notification to the creator when the approval passes', async () => {
+    const { controller, envelope, message } = fixture();
+
+    await controller.receiveEvent(envelope);
+
+    expect(message.sendApprovalNotification).toHaveBeenCalledWith({
+      businessType: 'requisition_application',
+      businessId: 7n,
+      procStatus: 'PASSED',
+    });
+  });
+
+  it('does not send the notification again for a duplicate callback', async () => {
+    const { controller, envelope, requisition, message } = fixture();
+    requisition.handleOaApprovalResult.mockResolvedValueOnce({
+      processed: true,
+      duplicate: true,
+      procStatus: 'PASSED',
+    });
+
+    await controller.receiveEvent(envelope);
+
+    expect(message.sendApprovalNotification).not.toHaveBeenCalled();
+  });
+
+  it('sends an approval notification when the approval is rejected', async () => {
+    const { controller, envelope, callback, inner, message } = fixture();
+    callback.handleProcessFinishEvent.mockReturnValue({ ...inner, procStatus: 'REJECTED' });
+
+    await controller.receiveEvent(envelope);
+
+    expect(message.sendApprovalNotification).toHaveBeenCalledWith({
+      businessType: 'requisition_application',
+      businessId: 7n,
+      procStatus: 'REJECTED',
+    });
+  });
+
+  it('does not send an approval notification for a canceled process', async () => {
+    const { controller, envelope, callback, inner, message } = fixture();
+    callback.handleProcessFinishEvent.mockReturnValue({ ...inner, procStatus: 'CANCELED' });
+
+    await controller.receiveEvent(envelope);
+
+    expect(message.sendApprovalNotification).not.toHaveBeenCalled();
+  });
+
+  it('does not send an approval notification when the business id is missing', async () => {
+    const { controller, envelope, prisma, message } = fixture();
+    prisma.hspsi_oa_approval_instance.findFirst.mockResolvedValueOnce({
+      business_type: 'requisition_application',
+      business_id: null,
+    });
+
+    await controller.receiveEvent(envelope);
+
+    expect(message.sendApprovalNotification).not.toHaveBeenCalled();
   });
 
   it('returns the documented failure ack when signature verification fails', async () => {

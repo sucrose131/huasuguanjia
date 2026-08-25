@@ -454,7 +454,7 @@ export class DashboardService {
         })
       : [];
     const noticeMap = new Map(notices.map((notice) => [notice.id, notice]));
-    let rows: Array<Record<string, any>> = all.map((message) => {
+    const rows: Array<Record<string, any>> = all.map((message) => {
       const notice = noticeMap.get(message.notice_id);
       const messageCategory =
         (notice?.level ?? 1) >= 2
@@ -472,96 +472,22 @@ export class DashboardService {
         createdAt: message.created_at,
       };
     });
-    const org = this.orgWhere(user);
-    const [todoResult, stockAlert, latestSale, latestPurchase, latestProduction] =
-      await Promise.all([
-        this.todos(user, { page: '1', pageSize: '3' }),
-        this.prisma.hspsi_inventory_alert_qty.findFirst({
-          where: { safe_less_qty: { gt: 0 } },
-          orderBy: { safe_less_qty: 'desc' },
-        }),
-        this.prisma.hspsi_sale_order.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
-        this.prisma.hspsi_purchase_order.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
-        this.prisma.hspsi_production_plan.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
-      ]);
-    const generated: Array<Record<string, any>> = todoResult.items.map((item) => ({
-      id: `generated-approval-${item.id}`,
-      title: `${item.docType}待处理`,
-      content: `单据 ${item.docNo} 已进入待审批队列，请及时处理。`,
-      category: '审批消息',
-      isRead: 1,
-      readTime: null,
-      createdAt: item.createdAt,
-    }));
-    if (stockAlert) {
-      const [goods, warehouse] = await Promise.all([
-        this.prisma.hspsi_goods_info.findFirst({ where: { goods_id: stockAlert.goods_id } }),
-        this.prisma.hspsi_basic_warehouse.findFirst({
-          where: { warehouse_id: Number(stockAlert.warehouse_id) },
-        }),
-      ]);
-      generated.push({
-        id: `generated-stock-${stockAlert.id}`,
-        title: '库存低于安全库存',
-        content: `${goods?.goods_name ?? `商品 #${stockAlert.goods_id}`} 在${warehouse?.name ? `“${warehouse.name}”` : '当前仓库'}的库存为 ${Number(stockAlert.fact_qty)}，安全库存为 ${Number(stockAlert.safe_qty)}，建议补货 ${Number(stockAlert.purchase_qty)}。`,
-        category: '预警消息',
-        isRead: 1,
-        readTime: null,
-        createdAt: stockAlert.updated_at ?? stockAlert.created_at,
-      });
-    }
-    if (latestSale)
-      generated.push({
-        id: `generated-sales-${latestSale.so_id}`,
-        title: '销售订单业务动态',
-        content: `销售订单 ${latestSale.so_no}，客户“${latestSale.customer_name}”，订单金额`,
-        amount: Number(latestSale.fact_amount),
-        category: '业务消息',
-        isRead: 1,
-        readTime: null,
-        createdAt: latestSale.updated_at ?? latestSale.created_at,
-      });
-    if (latestPurchase)
-      generated.push({
-        id: `generated-purchase-${latestPurchase.po_id}`,
-        title: '采购订单业务动态',
-        content: `采购订单 ${latestPurchase.po_no}，采购金额`,
-        amount: Number(latestPurchase.pay_amout),
-        category: '业务消息',
-        isRead: 1,
-        readTime: null,
-        createdAt: latestPurchase.updated_at ?? latestPurchase.created_at,
-      });
-    if (latestProduction)
-      generated.push({
-        id: `generated-production-${latestProduction.plan_id}`,
-        title: '生产计划业务动态',
-        content: `生产计划 ${latestProduction.plan_no}，计划数量 ${Number(latestProduction.plan_qty).toLocaleString('zh-CN')}，可在生产管理中查看执行状态。`,
-        category: '业务消息',
-        isRead: 1,
-        readTime: null,
-        createdAt: latestProduction.updated_at ?? latestProduction.created_at,
-      });
-    rows = [...rows, ...generated].sort((left, right) =>
-      String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
-    );
+    // 各类消息总数（基于全量未过滤数据，供前端侧栏徽标使用，不受当前分类/分页影响）
+    const categoryCounts = {
+      审批消息: rows.filter((item) => item.category === '审批消息').length,
+      预警消息: rows.filter((item) => item.category === '预警消息').length,
+      业务消息: rows.filter((item) => item.category === '业务消息').length,
+    };
+    let result = rows;
     if (category && category !== '全部消息')
-      rows = rows.filter((item) => item.category === category);
+      result = result.filter((item) => item.category === category);
     return {
-      items: rows.slice((page - 1) * pageSize, page * pageSize),
-      total: rows.length,
+      items: result.slice((page - 1) * pageSize, page * pageSize),
+      total: result.length,
       page,
       pageSize,
       unreadCount: all.filter((item) => item.is_read === 0).length,
+      categoryCounts,
     };
   }
 

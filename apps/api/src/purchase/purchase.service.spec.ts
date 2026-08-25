@@ -5,6 +5,7 @@ import { PurchaseService } from './purchase.service';
 function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
+  message: Record<string, any> = { sendPurchaseReceiptNotification: vi.fn() },
 ) {
   return new PurchaseService(
     prisma as never,
@@ -13,6 +14,7 @@ function serviceWith(
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
+    message as never,
   );
 }
 
@@ -195,8 +197,9 @@ describe('PurchaseService quick catalog materialization', () => {
 });
 
 describe('PurchaseService receipt confirmation', () => {
-  it('posts inventory and marks a pending receipt as confirmed', async () => {
+  it('posts inventory, marks a pending receipt as confirmed and notifies the order creator', async () => {
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const message = { sendPurchaseReceiptNotification: vi.fn().mockResolvedValue(undefined) };
     const receiptUpdate = vi.fn();
     const tx = {
       $queryRaw: vi.fn(),
@@ -208,6 +211,7 @@ describe('PurchaseService receipt confirmation', () => {
           warehouse_id: 2n,
           comfirm_status: 0,
           posting_version: 0,
+          input_qty: 2,
         }),
         findMany: vi.fn().mockResolvedValue([]),
         update: receiptUpdate,
@@ -236,7 +240,7 @@ describe('PurchaseService receipt confirmation', () => {
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = serviceWith(prisma, trace);
+    const service = serviceWith(prisma, trace, message);
     const postReceipt = vi.spyOn(service as any, 'postReceipt').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'syncProductionShortageState').mockResolvedValue(undefined);
 
@@ -257,7 +261,43 @@ describe('PurchaseService receipt confirmation', () => {
       where: { po_input_id: 501n },
       data: expect.objectContaining({ comfirm_status: 1, posting_version: 1, updated_by: 9n }),
     });
+    expect(message.sendPurchaseReceiptNotification).toHaveBeenCalledWith({
+      poId: 401n,
+      receiptNo: 'GA501',
+      orderNo: 'PO401',
+      quantity: 2,
+    });
     expect(result.message).toBe('入库已确认，库存已增加');
+  });
+
+  it('does not notify again when the same receipt is confirmed twice', async () => {
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const message = { sendPurchaseReceiptNotification: vi.fn().mockResolvedValue(undefined) };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_input_id: 501n,
+          po_input_no: 'GA501',
+          po_id: 401n,
+          warehouse_id: 2n,
+          comfirm_status: 1,
+          posting_version: 1,
+          input_qty: 2,
+        }),
+        findMany: vi.fn().mockResolvedValue([]),
+        update: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace, message);
+
+    const result = await service.confirmReceipt('501', true, '再次确认', '9');
+
+    expect(result.message).toBe('入库已确认');
+    expect(message.sendPurchaseReceiptNotification).not.toHaveBeenCalled();
   });
 });
 
