@@ -809,6 +809,7 @@ describe('inventory stocks keyword search (BUG-NEW-01)', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     vi.spyOn(service as any, 'names').mockResolvedValue({
       goods: [],

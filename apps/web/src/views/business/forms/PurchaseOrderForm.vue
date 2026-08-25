@@ -23,7 +23,6 @@ const options = reactive<Record<string, any>>({
   receivers: [],
   vendors: [],
   units: [],
-  receivers: [],
   contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
