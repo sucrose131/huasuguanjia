@@ -5,7 +5,7 @@ import InventoryLossForm from '../forms/InventoryLossForm.vue';
 
 export const inventoryLossConfig: BusinessDocumentConfig = {
   key: 'inventory/losses',
-  title: '报损/报亏单',
+  title: '报损出库单',
   subtitle: '支持盘点损坏生成和日常独立报损，按处置方式完成库存闭环',
   endpoint: '/inventory/losses',
   documentType: 'inventory_loss',
@@ -51,7 +51,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: true,
-  createText: '新增报损单',
+  createText: '新增报损出库单',
   createPreset: () => ({ businessKind: 2 }),
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossForm,
@@ -93,7 +93,10 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
       label: '通过',
       kind: 'success',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      show: (row) =>
+        Number(row.businessKind) === 2 &&
+        Number(row.approveStatus) === 0 &&
+        Number(row.status) === 1,
       confirm: (row) =>
         Number(row.businessKind) === 1
           ? '审批通过将自动生成报亏出库单并扣减库存，是否继续？'
@@ -112,7 +115,10 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
       label: '驳回',
       kind: 'danger',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      show: (row) =>
+        Number(row.businessKind) === 2 &&
+        Number(row.approveStatus) === 0 &&
+        Number(row.status) === 1,
       handler: async (row) => {
         const result = await ElMessageBox.prompt('请输入驳回原因', '驳回审批', {
           inputValidator: (value) => !!String(value).trim() || '驳回原因不能为空',

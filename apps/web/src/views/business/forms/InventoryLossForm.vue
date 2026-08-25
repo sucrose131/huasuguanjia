@@ -3,7 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
-import { dateText } from '@/utils/format';
+import { dateText, moneyText } from '@/utils/format';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -24,6 +25,16 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
+);
+const totalQty = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.quantity || 0), 0),
+);
+const totalAmount = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.amount || 0), 0),
+);
+
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
 async function loadOrgWarehouses(orgId: unknown) {
   if (!orgId) {
@@ -35,13 +46,7 @@ async function loadOrgWarehouses(orgId: unknown) {
     .catch(() => [])) as any[];
 }
 
-const businessKindLabel = computed(() => {
-  if (form.value.businessKindName) return form.value.businessKindName;
-  return Number(form.value.businessKind) === 1 ? '报亏单' : '报损出库单';
-});
-
-function blankLine() {
-  return {
+function blankLine() {  return {
     stockKey: '',
     goodsId: '',
     goodsCode: '',
@@ -145,12 +150,14 @@ async function lossDisposalChanged(value: unknown) {
 }
 
 async function loadDicts() {
-  const [lossType, disposal] = await Promise.all([
+  const [lossType, disposal, outputType] = await Promise.all([
     api.get('/dictionaries/inventory_loss_type').catch(() => []),
     api.get('/dictionaries/inventory_loss_disposal').catch(() => []),
+    api.get('/dictionaries/inventory_loss_output_type').catch(() => []),
   ]);
   dicts.inventory_loss_type = lossType as any[];
   dicts.inventory_loss_disposal = disposal as any[];
+  dicts.inventory_loss_output_type = outputType as any[];
 }
 
 async function loadStocks() {
@@ -290,41 +297,20 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
-      <el-form-item v-if="form.sourceCheckNo" label="来源盘点" class="span-2">
+      <el-form-item v-if="form.sourceCheckNo" label="来源盘点单" class="span-2">
         <el-input :model-value="form.sourceCheckNo" disabled />
       </el-form-item>
-      <el-form-item label="类型">
-        <el-input :model-value="businessKindLabel" disabled />
+      <el-form-item label="业务类别">
+        <el-input model-value="报损出库单" disabled />
       </el-form-item>
-      <el-form-item label="单据类型">
-        <el-select v-model="form.documentType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.inventory_loss_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="报损去向">
-        <el-select
-          v-model="form.goWhere"
-          clearable
-          :disabled="isView"
-          placeholder="提交前必须选择"
-          @change="lossDisposalChanged"
-        >
-          <el-option
-            v-for="item in dicts.inventory_loss_disposal || []"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="所属组织" required>
-        <el-select
+      <el-form-item label="组织" prop="orgId">
+        <el-tree-select
           v-model="form.orgId"
+          :data="organizationTree"
+          filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           :disabled="isView"
           @change="
             form.warehouseId = '';
@@ -332,11 +318,9 @@ onMounted(async () => {
             loadOrgWarehouses(form.orgId);
             loadStocks();
           "
-        >
-          <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
+        />
       </el-form-item>
-      <el-form-item label="仓库" required>
+      <el-form-item label="仓库" prop="warehouseId">
         <el-select
           v-model="form.warehouseId"
           filterable
@@ -364,17 +348,50 @@ onMounted(async () => {
           />
         </el-select>
       </el-form-item>
+      <el-form-item
+        :label="Number(form.businessKind) === 2 ? '报损类型' : '报亏类型'"
+      >
+        <el-select v-model="form.documentType" :disabled="isView">
+          <el-option
+            v-for="item in Number(form.businessKind) === 1
+              ? dicts.inventory_loss_output_type || []
+              : dicts.inventory_loss_type || []"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="原因" prop="reason" class="span-2">
+        <el-input v-model="form.reason" :disabled="isView" />
+      </el-form-item>
+      <el-form-item
+        v-if="Number(form.businessKind) === 2"
+        label="报损去向"
+        required
+      >
+        <el-select
+          v-model="form.goWhere"
+          :disabled="isView"
+          placeholder="提交前必须选择"
+          @change="lossDisposalChanged"
+        >
+          <el-option
+            v-for="item in dicts.inventory_loss_disposal || []"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
       <el-form-item label="日期">
         <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
       </el-form-item>
       <el-form-item label="经办人">
-        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+        <el-input :model-value="form.operatorName" disabled />
       </el-form-item>
-      <el-form-item label="原因" required class="span-2">
-        <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />
-      </el-form-item>
-      <el-form-item label="备注" class="span-2">
-        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
+      <el-form-item label="备注" class="span-all">
+        <el-input v-model="form.remark" :disabled="isView" />
       </el-form-item>
     </div>
 
@@ -409,7 +426,10 @@ onMounted(async () => {
       <el-table-column label="当前库存" width="95" align="right">
         <template #default="s">{{ Number(s.row.inventoryQty ?? 0).toLocaleString() }}</template>
       </el-table-column>
-      <el-table-column label="报损数量" width="145">
+      <el-table-column
+        :label="Number(form.businessKind) === 1 ? '报亏数量' : '报损数量'"
+        width="145"
+      >
         <template #default="s">
           <el-input-number
             v-model="s.row.quantity"
@@ -427,13 +447,13 @@ onMounted(async () => {
             v-model="s.row.unitPrice"
             :min="0"
             :precision="2"
-            :disabled="isView"
+            :disabled="isView || !auth.amountAccess?.canEditAmount"
             @change="recalcLine(s.row)"
           />
         </template>
       </el-table-column>
       <el-table-column label="金额" width="100" align="right">
-        <template #default="s">¥ {{ Number(s.row.amount ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</template>
+        <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
       </el-table-column>
       <el-table-column prop="batchNo" label="批号" width="125">
         <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
@@ -455,12 +475,21 @@ onMounted(async () => {
           </el-select>
         </template>
       </el-table-column>
-      <el-table-column v-if="!isView" label="" width="60">
+      <el-table-column v-if="!isView" label="" width="70">
         <template #default="s">
           <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <div v-if="(form.details ?? []).length" class="modal-totals">
+      <span
+        >合计数量
+        <strong>{{
+          totalQty.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+        }}</strong></span
+      ><span>合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span>
+    </div>
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>

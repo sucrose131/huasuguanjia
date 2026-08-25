@@ -123,6 +123,8 @@ export type BusinessDocumentConfig = {
   formComponent?: Component;
   /** 通用表单弹框布局；复杂业务弹框仍由薄页面通过 business-dialogs 插槽挂载。 */
   dialog?: { width?: string; top?: string; className?: string };
+  /** 弹框标题；缺省按模式生成「查看/编辑/新增 + title」 */
+  dialogTitle?: string;
   /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
   loadDetail?: (id: string | number) => Promise<Record<string, any>>;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */

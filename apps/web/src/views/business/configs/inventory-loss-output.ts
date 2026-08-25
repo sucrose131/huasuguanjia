@@ -1,11 +1,11 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import InventoryLossOutputForm from '../forms/InventoryLossOutputForm.vue';
 
 export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   key: 'inventory/loss-outputs',
-  title: '报损出库单',
+  title: '报亏出库单',
   subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
   documentType: 'inventory_loss_output',
@@ -81,6 +81,23 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       handler: async (row) => {
         await api.post(`/inventory/loss-outputs/${row.id}/confirm`, { comment: '确认出库' });
         ElMessage.success('已确认出库');
+      },
+    },
+    {
+      key: 'reject',
+      label: '驳回',
+      kind: 'danger',
+      primary: false,
+      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      handler: async (row) => {
+        const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回审批', {
+          inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',
+        });
+        await api.post(`/inventory/loss-outputs/${row.id}/approve`, {
+          approved: false,
+          comment: String(prompt.value).trim(),
+        });
+        ElMessage.success('单据已驳回');
       },
     },
   ],

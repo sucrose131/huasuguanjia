@@ -148,10 +148,10 @@ function displayCell(
   return String(value);
 }
 
-// 金额：无查看权限掩码，有权限加 ¥ 前缀
+// 金额：无查看权限时仍带 ¥ 前缀掩码（对齐旧版「¥ ****」），有权限加 ¥ 前缀
 const protectedMoney = (value: unknown) => {
   const text = moneyText(value);
-  return text === '****' ? text : `¥ ${text}`;
+  return text === '****' ? '¥ ****' : `¥ ${text}`;
 };
 
 async function runAction(action: RowAction, row: Record<string, any>) {
@@ -265,6 +265,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle || '真实业务数据、来源追溯与库存事务处理' }}</p>
       </div>
       <div class="page-actions">
+        <el-button @click="load">刷新</el-button>
         <slot name="page-actions" :refresh="load" :open-create="openCreate" />
         <el-button
           v-if="canCreate"
@@ -396,6 +397,11 @@ onMounted(async () => {
                 :value="column.statusDict && column.render ? displayCell(s.row, column) : s.row[column.prop]"
                 :dict-code="column.statusDict"
                 :label="column.render && !column.statusDict ? displayCell(s.row, column) : undefined"
+                :type="
+                  typeof column.statusType === 'function'
+                    ? column.statusType(s.row)
+                    : column.statusType
+                "
               />
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
@@ -460,7 +466,10 @@ onMounted(async () => {
 
     <el-dialog
       v-model="formDialog"
-      :title="config.title"
+      :title="
+        config.dialogTitle ||
+        `${formMode === 'view' ? '查看' : formMode === 'edit' ? '编辑' : '新增'}${config.title}`
+      "
       :width="config.dialog?.width || '720px'"
       :top="config.dialog?.top || '3vh'"
       :class="config.dialog?.className"

@@ -77,7 +77,7 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="true">
     <div class="master-grid">
-      <el-form-item label="来源盘点/报损" class="span-2">
+      <el-form-item label="来源盘点单" class="span-2">
         <el-input :model-value="sourceLabel" disabled />
       </el-form-item>
       <el-form-item label="组织">
@@ -121,10 +121,10 @@ onMounted(async () => {
         <el-input :model-value="form.operatorName || '—'" disabled />
       </el-form-item>
       <el-form-item label="原因" class="span-2">
-        <el-input :model-value="form.reason || '—'" type="textarea" :rows="2" disabled />
+        <el-input :model-value="form.reason || '—'" disabled />
       </el-form-item>
       <el-form-item label="备注" class="span-all">
-        <el-input :model-value="form.remark || '—'" type="textarea" :rows="2" disabled />
+        <el-input :model-value="form.remark || '—'" disabled />
       </el-form-item>
     </div>
 
@@ -140,13 +140,13 @@ onMounted(async () => {
       <el-table-column label="当前库存" width="95" align="right">
         <template #default="s">{{ quantity(s.row.inventoryQty) }}</template>
       </el-table-column>
-      <el-table-column label="报亏数量" width="110" align="right">
+      <el-table-column label="报亏数量" width="145">
         <template #default="s">{{ quantity(s.row.quantity) }}</template>
       </el-table-column>
-      <el-table-column label="单价" width="120" align="right">
+      <el-table-column label="单价" width="130">
         <template #default="s">¥ {{ moneyText(s.row.unitPrice) }}</template>
       </el-table-column>
-      <el-table-column label="金额" width="110" align="right">
+      <el-table-column label="金额" width="100" align="right">
         <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
       </el-table-column>
       <el-table-column prop="batchNo" label="批号" min-width="120" />
