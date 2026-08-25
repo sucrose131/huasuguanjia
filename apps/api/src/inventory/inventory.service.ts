@@ -218,9 +218,13 @@ export class InventoryService {
           select: { sku_id: true },
         }),
       ]);
+      const skuIds = skus.map((item) => item.sku_id);
+      // keyword 为数字时同时精确匹配 sku_id（如直接输入 SKU 编号）
+      const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
       where.OR = [
         { goods_id: { in: goods.map((item) => item.goods_id) } },
-        { sku_id: { in: skus.map((item) => item.sku_id) } },
+        { sku_id: { in: skuIds } },
+        ...(numericSkuId ? [{ sku_id: numericSkuId }] : []),
       ];
     }
     const [records, total, summaryRows] = await Promise.all([
