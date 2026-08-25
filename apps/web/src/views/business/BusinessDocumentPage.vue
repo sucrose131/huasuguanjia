@@ -441,7 +441,7 @@ onMounted(async () => {
 
     <el-dialog
       v-model="formDialog"
-      :title="config.title"
+      :title="config.dialogTitle ? config.dialogTitle(formMode) : config.title"
       :width="config.dialog?.width || '720px'"
       :top="config.dialog?.top || '3vh'"
       :class="config.dialog?.className"

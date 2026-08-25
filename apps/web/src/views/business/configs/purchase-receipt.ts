@@ -10,6 +10,7 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
   endpoint: '/purchase/receipts',
   documentType: 'purchase_receipt',
   no: 'receiptNo',
+  dialogTitle: (mode) => (mode === 'view' ? '查看采购入库单' : '办理采购入库'),
   columns: [
     { prop: 'receiptNo', label: '入库单号', minWidth: 160 },
     {
@@ -17,6 +18,12 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
       label: '数据来源',
       minWidth: 160,
       render: (row) => row.orderNo || row.orderId || '—',
+    },
+    {
+      prop: 'vendorName',
+      label: '供应商',
+      minWidth: 176,
+      render: (row) => row.vendorName || '—',
     },
     {
       prop: 'warehouseId',

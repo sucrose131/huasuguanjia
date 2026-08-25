@@ -2324,7 +2324,16 @@ export class PurchaseService {
     const orders = poIds.length
       ? await this.prisma.hspsi_purchase_order.findMany({
           where: { po_id: { in: poIds } },
-          select: { po_id: true, po_no: true, pur_id: true },
+          select: { po_id: true, po_no: true, pur_id: true, vendor_id: true },
+        })
+      : [];
+    const vendorIds = [
+      ...new Set(orders.map((item) => item.vendor_id).filter((id) => id > 0n)),
+    ];
+    const vendors = vendorIds.length
+      ? await this.prisma.hspsi_basic_vendor.findMany({
+          where: { vendor_id: { in: vendorIds } },
+          select: { vendor_id: true, conpany_name: true },
         })
       : [];
     const purIds = [...new Set(orders.map((item) => item.pur_id).filter((id) => id > 0n))];
@@ -2337,6 +2346,7 @@ export class PurchaseService {
     return {
       items: items.map((item) => {
         const ord = orders.find((o) => o.po_id === item.po_id);
+        const vendor = vendors.find((v) => v.vendor_id === ord?.vendor_id);
         return {
           id: item.po_input_id,
           receiptNo: item.po_input_no,
@@ -2344,6 +2354,8 @@ export class PurchaseService {
           orderNo: ord?.po_no ?? null,
           applicationNo:
             applications.find((application) => application.pur_id === ord?.pur_id)?.pur_no ?? null,
+          vendorId: ord?.vendor_id ?? null,
+          vendorName: vendor?.conpany_name ?? '',
           orgId: item.org_id,
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
