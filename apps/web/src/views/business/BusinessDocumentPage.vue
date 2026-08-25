@@ -446,6 +446,7 @@ onMounted(async () => {
       :top="config.dialog?.top || '3vh'"
       :class="config.dialog?.className"
       :close-on-click-modal="false"
+      destroy-on-close
     >
       <component
         :is="config.formComponent"
