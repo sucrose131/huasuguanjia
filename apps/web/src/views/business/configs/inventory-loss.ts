@@ -80,7 +80,14 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
       kind: 'success',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
-      confirm: '通过后将生成对应处置流程，是否继续？',
+      confirm: (row) =>
+        Number(row.businessKind) === 1
+          ? '审批通过将自动生成报亏出库单并扣减库存，是否继续？'
+          : Number(row.goWhere) === 1
+            ? '审批通过将生成折价销售单，本次不会扣减库存，是否继续？'
+            : Number(row.goWhere) === 2
+              ? '审批通过将按原采购入库来源生成采购退货草稿，本次不会扣减库存，是否继续？'
+              : '审批通过将按直接报废去向扣减库存，是否继续？',
       handler: async (row) => {
         await api.post(`/inventory/losses/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');

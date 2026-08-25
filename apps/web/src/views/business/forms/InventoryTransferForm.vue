@@ -40,12 +40,28 @@ async function loadWarehousesByOrg(target: 'out' | 'in', orgId: unknown) {
     .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
     .catch(() => [])) as any[];
 }
-/** 调入仓库：调入组织范围内，且排除调出仓库本身（业务规则保留前端判断） */
-const inWarehouses = computed(() =>
-  (options.inWarehouses ?? []).filter(
-    (w: any) => String(w.value) !== String(form.value.warehouseId),
-  ),
-);
+/** 调入仓库：调入组织范围内，排除调出仓库本身，并按「调出仓库 + 明细商品」类型过滤同类型仓库 */
+const optionWarehouseType = (item: any) =>
+  Number(item?.warehouseType ?? item?.raw?.warehouseType ?? 0);
+const inWarehouses = computed(() => {
+  const requiredTypes = new Set(
+    (form.value.details ?? [])
+      .map((line: any) => Number(line.categoryWarehouseType))
+      .filter((value: number) => Number.isFinite(value) && value > 0),
+  );
+  const source = (options.outWarehouses ?? []).find(
+    (item: any) => String(item.value) === String(form.value.warehouseId),
+  );
+  const sourceType = optionWarehouseType(source);
+  if (sourceType > 0) requiredTypes.add(sourceType);
+  return (options.inWarehouses ?? []).filter((item: any) => {
+    const isCurrentViewValue = isView.value && String(item.value) === String(form.value.toWarehouseId);
+    const differentWarehouse = String(item.value) !== String(form.value.warehouseId);
+    const matchesType =
+      !requiredTypes.size || requiredTypes.has(optionWarehouseType(item));
+    return isCurrentViewValue || (differentWarehouse && matchesType);
+  });
+});
 
 function blankLine() {
   return {
@@ -92,6 +108,7 @@ function stockChanged(line: any) {
     goodsId: stock.goodsId,
     goodsCode: stock.goodsCode,
     goodsName: stock.goodsName,
+    categoryWarehouseType: stock.categoryWarehouseType,
     skuId: stock.skuId,
     skuSpec: stock.skuSpec,
     batchNo: stock.batchNo ?? '',

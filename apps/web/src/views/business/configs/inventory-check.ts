@@ -68,7 +68,7 @@ export const inventoryCheckConfig: BusinessDocumentConfig = {
       kind: 'success',
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
-      confirm: '通过后将按盘盈盘亏生成对应单据，是否继续？',
+      confirm: '审批通过只会按差异类型生成后续单据：每个损坏批次生成一张独立报损出库单，盘亏生成报亏出库单，盘盈生成报盈入库单；本步骤不会直接改变库存，是否继续？',
       handler: async (row) => {
         await api.post(`/inventory/checks/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');

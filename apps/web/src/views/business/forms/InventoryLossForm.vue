@@ -58,6 +58,7 @@ function blankLine() {
     amount: 0,
     remark: '',
     sourceReceiptDetailId: '',
+    purchaseSourceOptions: [],
   };
 }
 
@@ -75,6 +76,46 @@ function lineStockOptions(line: any) {
 
 function recalcLine(line: any) {
   line.amount = Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0);
+}
+
+/** 报损去向=退货(goWhere=2)时，按商品/SKU/批次加载原采购入库来源选项 */
+async function loadLossPurchaseSources(line: any) {
+  line.purchaseSourceOptions = [];
+  if (
+    Number(form.value.goWhere) !== 2 ||
+    !form.value.orgId ||
+    !form.value.warehouseId ||
+    !line.goodsId ||
+    !line.skuId
+  )
+    return;
+  const result = (await api
+    .get('/inventory/losses/purchase-source-options', {
+      params: {
+        orgId: form.value.orgId,
+        warehouseId: form.value.warehouseId,
+        goodsId: line.goodsId,
+        skuId: line.skuId,
+        batchNo: line.batchNo ?? '',
+      },
+    })
+    .catch(() => [])) as any[];
+  line.purchaseSourceOptions = result;
+  if (!result.some((option: any) => String(option.value) === String(line.sourceReceiptDetailId))) {
+    line.sourceReceiptDetailId = result.length === 1 ? result[0]?.value : '';
+  }
+}
+
+/** 报损去向切换：非退货时清空来源，退货时按明细加载原采购入库来源 */
+async function lossDisposalChanged(value: unknown) {
+  if (Number(value) !== 2) {
+    for (const line of form.value.details ?? []) {
+      line.sourceReceiptDetailId = '';
+      line.purchaseSourceOptions = [];
+    }
+    return;
+  }
+  await Promise.all((form.value.details ?? []).map((line: any) => loadLossPurchaseSources(line)));
 }
 
 async function loadDicts() {
@@ -161,6 +202,11 @@ function validate() {
     ElMessage.warning('请输入原因');
     return false;
   }
+  // 报损出库单（businessKind=2）提交前必须明确选择直接报废、折价出售或退货
+  if (Number(form.value.businessKind) === 2 && !String(form.value.goWhere ?? '').trim()) {
+    ElMessage.warning('报损出库单提交前必须选择直接报废、折价出售或退货');
+    return false;
+  }
   const details = form.value.details ?? [];
   if (!details.length) {
     ElMessage.warning('至少需要一条明细');
@@ -173,6 +219,10 @@ function validate() {
     }
     if (Number(line.quantity) <= 0) {
       ElMessage.warning('明细数量必须大于 0');
+      return false;
+    }
+    if (Number(form.value.goWhere) === 2 && !line.sourceReceiptDetailId) {
+      ElMessage.warning(`${line.goodsName || '商品'}未选择原采购入库来源`);
       return false;
     }
   }
@@ -247,6 +297,10 @@ onMounted(async () => {
   }
   await loadOrgWarehouses(form.value.orgId);
   await loadStocks();
+  // 报损去向=退货时，为已有明细回显原采购入库来源
+  if (Number(form.value.goWhere) === 2) {
+    await Promise.all((form.value.details ?? []).map((line: any) => loadLossPurchaseSources(line)));
+  }
 });
 </script>
 
@@ -267,7 +321,13 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="报损去向">
-        <el-select v-model="form.goWhere" clearable :disabled="isView" placeholder="提交前必须选择">
+        <el-select
+          v-model="form.goWhere"
+          clearable
+          :disabled="isView"
+          placeholder="提交前必须选择"
+          @change="lossDisposalChanged"
+        >
           <el-option
             v-for="item in dicts.inventory_loss_disposal || []"
             :key="item.value"
@@ -401,6 +461,23 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="备注" min-width="130">
         <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
+      </el-table-column>
+      <el-table-column v-if="Number(form.goWhere) === 2" label="原采购入库来源" min-width="220">
+        <template #default="s">
+          <el-select
+            v-model="s.row.sourceReceiptDetailId"
+            filterable
+            :disabled="isView"
+            placeholder="请选择来源入库单"
+          >
+            <el-option
+              v-for="option in s.row.purchaseSourceOptions || []"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </template>
       </el-table-column>
       <el-table-column v-if="!isView" label="" width="60">
         <template #default="s">
