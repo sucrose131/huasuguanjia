@@ -5,7 +5,7 @@ import InventoryLossOutputForm from '../forms/InventoryLossOutputForm.vue';
 
 export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   key: 'inventory/loss-outputs',
-  title: '报损出库单',
+  title: '报亏出库单',
   subtitle: '仅由库存盘点的数量盘亏生成，整单审核通过后一次性扣减来源批次库存',
   endpoint: '/inventory/loss-outputs',
   documentType: 'inventory_loss_output',
@@ -51,6 +51,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
   creatable: false,
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossOutputForm,
+  viewCloseInForm: true,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
       const detail: any = await api.get(`/inventory/loss-outputs/${query.documentId}`);
@@ -66,6 +67,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && [0, 1].includes(Number(row.status)),
       confirm: '审核通过将按来源批次扣减库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/loss-outputs/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过，库存已扣减');
@@ -78,6 +80,7 @@ export const inventoryLossOutputConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 1,
       confirm: '确认后将扣减库存，是否继续？',
+      confirmTitle: '库存影响确认',
       handler: async (row) => {
         await api.post(`/inventory/loss-outputs/${row.id}/confirm`, { comment: '确认出库' });
         ElMessage.success('已确认出库');

@@ -145,6 +145,7 @@ export const purchasePaymentConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.netPaid ?? 0) <= Number(row.effectivePayable ?? 0),
       confirm: '撤销后将从累计已付中回退，是否继续？',
+      confirmTitle: '确认撤销付款',
       handler: async (row) => {
         const result: any = await api.delete(`/purchase/payments/${row.id}`);
         ElMessage.success(result?.message ?? '付款已撤销');

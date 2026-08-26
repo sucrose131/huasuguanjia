@@ -38,6 +38,7 @@ export const productionInputConfig: BusinessDocumentConfig = {
       label: '删除',
       kind: 'danger',
       primary: false,
+      show: (row) => Number(row.confirmStatus ?? row.status) === 0,
       confirm: '删除后将回退库存，是否继续？',
       handler: async (row) => {
         const result: any = await api.delete(`/production/inputs/${row.id}`);

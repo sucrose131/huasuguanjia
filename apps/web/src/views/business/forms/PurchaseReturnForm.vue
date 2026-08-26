@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { dateText } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -11,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const form = computed(() => props.modelValue);
+const auth = useAuthStore();
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
@@ -65,6 +67,9 @@ async function sourceReceiptChanged() {
     .get(`/purchase/receipts/${form.value.receiptId}`)
     .catch(() => null);
   if (!source) return;
+  const sourceOrder: any = source.orderId
+    ? await api.get(`/purchase/orders/${source.orderId}`).catch(() => null)
+    : null;
   Object.assign(form.value, {
     orderId: source.orderId ?? source.po_id ?? '',
     orderNo: source.orderNo ?? '',
@@ -72,6 +77,9 @@ async function sourceReceiptChanged() {
     orgId: source.orgId ?? source.org_id ?? '',
     warehouseId: source.warehouseId ?? source.warehouse_id ?? '',
     deptId: source.deptId ?? source.dept_id ?? '',
+    vendorId: source.vendorId ?? source.vendor_id ?? sourceOrder?.vendorId ?? '',
+    vendorName: source.vendorName ?? sourceOrder?.vendorName ?? '',
+    returnerName: auth.user?.username ?? '',
     sourceType: 'receipt',
     sourceTypeLabel: '已入库退货',
   });
@@ -116,7 +124,7 @@ function validate() {
   return true;
 }
 
-async function save() {
+async function save(submit = false) {
   if (!validate()) return;
   saving.value = true;
   try {
@@ -142,7 +150,8 @@ async function save() {
       props.mode === 'edit'
         ? await api.patch(`${url}/${form.value.id}`, payload)
         : await api.post(url, payload);
-    ElMessage.success(result?.message ?? '保存成功');
+    if (submit) await api.post(`${url}/${result?.id ?? form.value.id}/submit`);
+    ElMessage.success(submit ? '已提交审批' : (result?.message ?? '草稿已保存'));
     emit('saved');
   } catch {
     // axios 拦截器已提示
@@ -201,6 +210,8 @@ onMounted(async () => {
           form.value.warehouseId =
             receipt.warehouseId ?? receipt.warehouse_id ?? form.value.warehouseId;
           form.value.deptId = receipt.deptId ?? receipt.dept_id ?? form.value.deptId;
+          form.value.vendorId = receipt.vendorId ?? receipt.vendor_id ?? form.value.vendorId;
+          form.value.vendorName = receipt.vendorName ?? form.value.vendorName;
         }
       }
       if (form.value.orgId) await loadOrgOptions(form.value.orgId);
@@ -226,6 +237,12 @@ onMounted(async () => {
       </el-form-item>
       <el-form-item label="部门">
         <el-input :model-value="deptName(form.deptId)" readonly />
+      </el-form-item>
+      <el-form-item label="供应商">
+        <el-input :model-value="form.vendorName || form.vendorId || '—'" readonly />
+      </el-form-item>
+      <el-form-item label="退货人">
+        <el-input :model-value="form.returnerName || form.createdByName || auth.user?.username || '—'" readonly />
       </el-form-item>
       <el-form-item label="退货日期">
         <el-date-picker
@@ -299,7 +316,8 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
+      <el-button type="primary" :loading="saving" @click="save(true)">保存并提交</el-button>
     </div>
   </el-form>
 </template>

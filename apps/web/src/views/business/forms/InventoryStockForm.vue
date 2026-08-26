@@ -98,6 +98,9 @@ onMounted(loadLedger);
           s.row.operationTypeName || s.row.operationType || '—'
         }}</template>
       </el-table-column>
+      <el-table-column label="业务模式/单据类型" width="150">
+        <template #default="s">{{ s.row.businessModeName || s.row.sourceType || '—' }}</template>
+      </el-table-column>
       <el-table-column label="数量" width="110" align="right">
         <template #default="s">{{ quantity(s.row.operationQty) }}</template>
       </el-table-column>
@@ -107,11 +110,17 @@ onMounted(loadLedger);
       <el-table-column label="关联单号" min-width="140">
         <template #default="s">{{ text(s.row.sourceNo) }}</template>
       </el-table-column>
+      <el-table-column label="批号" width="120">
+        <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
+      </el-table-column>
       <el-table-column label="操作人" width="100">
         <template #default="s">{{ text(s.row.operatorName) }}</template>
       </el-table-column>
       <el-table-column label="时间" width="160">
         <template #default="s">{{ dateText(s.row.createdAt, true) }}</template>
+      </el-table-column>
+      <el-table-column label="备注" min-width="140" show-overflow-tooltip>
+        <template #default="s">{{ text(s.row.remark) }}</template>
       </el-table-column>
     </el-table>
 

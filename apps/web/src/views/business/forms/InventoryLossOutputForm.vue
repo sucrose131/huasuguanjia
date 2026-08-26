@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive } from 'vue';
 import { api } from '@/api';
-import { dateText, moneyText } from '@/utils/format';
+import { moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
 const props = defineProps<{
@@ -24,17 +24,6 @@ const organizationTree = computed(() =>
   buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
 );
 
-const orgName = computed(() => form.value.orgName ?? '—');
-const warehouseName = computed(() => form.value.warehouseName ?? '—');
-const deptName = computed(() => form.value.deptName ?? '—');
-const documentTypeName = computed(
-  () =>
-    form.value.documentTypeName ??
-    (dicts.lossOutputType ?? []).find(
-      (x) => String(x.value) === String(form.value.documentType),
-    )?.label ??
-    '—',
-);
 const sourceLabel = computed(
   () =>
     form.value.sourceCheckNo ??
@@ -77,7 +66,7 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="true">
     <div class="master-grid">
-      <el-form-item label="来源盘点/报损" class="span-2">
+      <el-form-item label="来源盘点单" class="span-2">
         <el-input :model-value="sourceLabel" disabled />
       </el-form-item>
       <el-form-item label="组织">
@@ -112,24 +101,31 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="报亏类型">
-        <el-input :model-value="documentTypeName" disabled />
+        <el-select :model-value="form.documentType" disabled>
+          <el-option
+            v-for="item in dicts.lossOutputType || []"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="原因" class="span-2">
+        <el-input :model-value="form.reason || '—'" disabled />
       </el-form-item>
       <el-form-item label="日期">
-        <el-input :model-value="dateText(form.date)" disabled />
+        <el-date-picker :model-value="form.date" type="date" value-format="YYYY-MM-DD" disabled />
       </el-form-item>
       <el-form-item label="经办人">
         <el-input :model-value="form.operatorName || '—'" disabled />
       </el-form-item>
-      <el-form-item label="原因" class="span-2">
-        <el-input :model-value="form.reason || '—'" type="textarea" :rows="2" disabled />
-      </el-form-item>
       <el-form-item label="备注" class="span-all">
-        <el-input :model-value="form.remark || '—'" type="textarea" :rows="2" disabled />
+        <el-input :model-value="form.remark || '—'" disabled />
       </el-form-item>
     </div>
 
     <div class="details-header">
-      <span class="details-title">报亏明细</span>
+      <span class="details-title">商品明细</span>
       <span class="muted">共 {{ form.details?.length ?? 0 }} 项</span>
     </div>
     <el-table :data="form.details ?? []" border size="small" table-layout="fixed">
@@ -140,16 +136,20 @@ onMounted(async () => {
       <el-table-column label="当前库存" width="95" align="right">
         <template #default="s">{{ quantity(s.row.inventoryQty) }}</template>
       </el-table-column>
-      <el-table-column label="报亏数量" width="110" align="right">
-        <template #default="s">{{ quantity(s.row.quantity) }}</template>
+      <el-table-column label="报亏数量" width="145">
+        <template #default="s">
+          <el-input-number :model-value="s.row.quantity" :min="1" :precision="0" :step="1" disabled />
+        </template>
       </el-table-column>
-      <el-table-column label="单价" width="120" align="right">
-        <template #default="s">¥ {{ moneyText(s.row.unitPrice) }}</template>
+      <el-table-column label="单价" width="130">
+        <template #default="s">
+          <el-input-number :model-value="s.row.unitPrice" :min="0" :precision="2" disabled />
+        </template>
       </el-table-column>
-      <el-table-column label="金额" width="110" align="right">
+      <el-table-column label="金额" width="100">
         <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
       </el-table-column>
-      <el-table-column prop="batchNo" label="批号" min-width="120" />
+      <el-table-column prop="batchNo" label="批号" width="125" />
     </el-table>
     <div v-if="(form.details ?? []).length" class="modal-totals">
       <span>合计数量 <strong>{{ quantity(totalQuantity) }}</strong></span>

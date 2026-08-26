@@ -34,6 +34,11 @@ const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20
 const formDialog = ref(false);
 const formMode = ref<'create' | 'edit' | 'view'>('create');
 const form = ref<Record<string, any>>({});
+const formDialogTitle = computed(() => {
+  if (props.config.dialogTitle) return props.config.dialogTitle(formMode.value);
+  const prefix = { create: '新增', edit: '编辑', view: '查看' }[formMode.value];
+  return `${prefix}${props.config.title}`;
+});
 const detailLoading = ref(false);
 const traceRef = ref<InstanceType<typeof BusinessDocumentTrace>>();
 const { canCreate, canRunAction } = useBusinessDocumentPermissions(() => props.config);
@@ -165,12 +170,26 @@ async function runAction(action: RowAction, row: Record<string, any>) {
     }
     if (action.confirm) {
       const text = typeof action.confirm === 'function' ? action.confirm(row) : action.confirm;
-      await ElMessageBox.confirm(text, '提示', { type: 'warning' });
+      const actionLabel = typeof action.label === 'function' ? action.label(row) : action.label;
+      const title =
+        typeof action.confirmTitle === 'function'
+          ? action.confirmTitle(row)
+          : action.confirmTitle || actionLabel || '操作确认';
+      await ElMessageBox.confirm(text, title, {
+        type: action.confirmType ?? 'warning',
+        confirmButtonText: action.confirmButtonText ?? '确认',
+        cancelButtonText: action.cancelButtonText ?? '取消',
+      });
     }
     await action.handler(row, ctx);
     await load();
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(error instanceof Error ? error.message : String(error));
+    const action =
+      typeof error === 'object' && error && 'action' in error
+        ? String((error as { action?: unknown }).action ?? '')
+        : String(error ?? '');
+    if (!['cancel', 'close'].includes(action))
+      ElMessage.error(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -467,7 +486,7 @@ onMounted(async () => {
 
     <el-dialog
       v-model="formDialog"
-      :title="config.dialogTitle ? config.dialogTitle(formMode) : config.title"
+      :title="formDialogTitle"
       :width="config.dialog?.width || '720px'"
       :top="config.dialog?.top || '3vh'"
       :class="config.dialog?.className"
@@ -488,6 +507,12 @@ onMounted(async () => {
         :document-type="config.documentType"
         :document-id="form.id"
       />
+      <div
+        v-if="formMode === 'view' && !config.viewCloseInForm"
+        class="business-view-footer"
+      >
+        <el-button @click="closeForm">关闭</el-button>
+      </div>
     </el-dialog>
     <slot name="business-dialogs" :refresh="load" />
     <BusinessDocumentTrace
@@ -511,5 +536,10 @@ onMounted(async () => {
 }
 .document-link:hover {
   text-decoration: underline;
+}
+.business-view-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
 }
 </style>

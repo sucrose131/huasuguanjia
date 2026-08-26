@@ -65,6 +65,11 @@ export type RowAction = {
   show?: (row: Record<string, any>) => boolean;
   /** 操作前的确认文案（可动态按行生成） */
   confirm?: string | ((row: Record<string, any>) => string);
+  /** 旧版确认框标题和按钮文案；未配置时按当前操作名称生成。 */
+  confirmTitle?: string | ((row: Record<string, any>) => string);
+  confirmButtonText?: string;
+  cancelButtonText?: string;
+  confirmType?: 'success' | 'warning' | 'info' | 'error';
   /** 预检：返回非空文案时中止操作（不发请求、不弹确认框），用于“先编辑补数据再操作”的引导 */
   verify?: (row: Record<string, any>) => string | null | undefined | Promise<string | null | undefined>;
   /** 是否作为主操作平铺展示（默认 true：平铺在操作列；false 时收进“更多”下拉） */
@@ -127,6 +132,8 @@ export type BusinessDocumentConfig = {
   dialog?: { width?: string; top?: string; className?: string };
   /** 表单弹框标题定制（如采购入库的「办理采购入库」）；缺省用 title */
   dialogTitle?: (mode: 'create' | 'edit' | 'view') => string;
+  /** 查看态关闭按钮已经由专属表单提供；缺省由共享弹框统一提供。 */
+  viewCloseInForm?: boolean;
   /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
   loadDetail?: (id: string | number) => Promise<Record<string, any>>;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */

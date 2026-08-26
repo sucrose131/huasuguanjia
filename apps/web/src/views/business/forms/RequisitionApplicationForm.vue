@@ -47,12 +47,20 @@ function blankLine() {
 }
 
 async function loadDicts() {
-  const [drawType, yesNo] = await Promise.all([
+  const [drawType, yesNo, status, approvalStatus] = await Promise.all([
     api.get('/dictionaries/draw_type').catch(() => []),
     api.get('/dictionaries/yes_no').catch(() => []),
+    api.get('/dictionaries/requisition_status').catch(() => []),
+    api.get('/dictionaries/requisition_approval_status').catch(() => []),
   ]);
   dicts.draw_type = drawType as any[];
   dicts.yes_no = yesNo as any[];
+  dicts.requisition_status = status as any[];
+  dicts.requisition_approval_status = approvalStatus as any[];
+}
+
+function dictLabel(code: string, value: unknown) {
+  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
 }
 
 async function loadRequisitionOptions(orgId: unknown) {
@@ -368,6 +376,23 @@ onMounted(async () => {
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
+      <template v-if="isView">
+        <el-form-item label="单据状态">
+          <el-input :model-value="form.statusName || dictLabel('requisition_status', form.status)" readonly />
+        </el-form-item>
+        <el-form-item label="审批状态">
+          <el-input :model-value="form.approveStatusName || dictLabel('requisition_approval_status', form.approveStatus)" readonly />
+        </el-form-item>
+        <el-form-item label="审批人">
+          <el-input :model-value="form.approveByName || '—'" readonly />
+        </el-form-item>
+        <el-form-item label="审批时间">
+          <el-input :model-value="form.approveDate ? dateText(form.approveDate, true) : '—'" readonly />
+        </el-form-item>
+        <el-form-item label="审批意见" class="span-2">
+          <el-input :model-value="form.approveComment || '—'" readonly />
+        </el-form-item>
+      </template>
     </div>
 
     <div class="details-header">

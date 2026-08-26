@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { buildCategoryTree } from '@/utils/category-tree';
+import { canPageAction } from '@/utils/permission';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import PurchaseReceiptDetails from '@/components/PurchaseReceiptDetails.vue';
 
@@ -35,6 +36,14 @@ const isView = computed(() => props.mode === 'view');
 const isDirect = computed(() => Boolean(form.value.directReceipt));
 
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+const canExecuteReceipt = computed(
+  () =>
+    canPageAction(
+      auth.user,
+      '/purchase/receipts',
+      props.mode === 'create' ? 'create' : 'update',
+    ) && canPageAction(auth.user, '/purchase/receipts', 'confirm'),
+);
 const organizationOptions = reactive<{ orgId: string; departments: any[]; warehouses: any[] }>({
   orgId: '',
   departments: [],
@@ -668,12 +677,6 @@ async function doSave(): Promise<any | null> {
     saving.value = false;
   }
 }
-async function save() {
-  const result = await doSave();
-  if (!result) return;
-  ElMessage.success(result?.message ?? '保存成功');
-  emit('saved');
-}
 async function execute() {
   const result = await doSave();
   if (!result) return;
@@ -685,7 +688,7 @@ async function execute() {
     ElMessage.success('采购入库办理完成，库存已增加');
     emit('saved');
   } catch {
-    // confirm 失败时保持表单打开（单据已保存，可重试或另存草稿）
+    // confirm 失败时保持表单打开（入库单已保存，可重试执行入库）
     ElMessage.warning('入库单已保存，但确认入库失败，请稍后重试');
   }
 }
@@ -1031,8 +1034,13 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button :loading="saving" @click="save">保存</el-button>
-      <el-button type="primary" :loading="saving" @click="execute">执行入库</el-button>
+      <el-button
+        v-if="canExecuteReceipt"
+        type="primary"
+        :loading="saving"
+        @click="execute"
+        >执行入库</el-button
+      >
     </div>
   </el-form>
 

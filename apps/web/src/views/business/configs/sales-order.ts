@@ -52,6 +52,15 @@ export const salesOrderConfig: BusinessDocumentConfig = {
   rowActions: [
     { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
     {
+      key: 'edit',
+      label: '编辑',
+      show: (row) =>
+        !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? '')) &&
+        Number(row.confirmStatus ?? row.comfirm_status) !== 1 &&
+        Number(row.approveStatus ?? row.approve_status) !== 1,
+      handler: (row, ctx) => ctx.openEdit(row),
+    },
+    {
       key: 'analyze',
       label: '缺口分析',
       show: (row) => Number(row.propertyType) === 1 && Number(row.orderStatus) === 1,

@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
+import {
+  confirmPendingSupplement as confirmSupplement,
+  supplementHistoryAction,
+} from './supplement-history-actions';
 import { dateText } from '@/utils/format';
 
 type BusinessRow = Record<string, any>;
 
 const props = defineProps<{ modelValue: boolean; outDoc: BusinessRow }>();
-const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>();
+const emit = defineEmits<{
+  (event: 'update:modelValue', value: boolean): void;
+  (event: 'updated'): void;
+  (event: 'bom-return', row: BusinessRow): void;
+}>();
 
 const loading = ref(false);
 const error = ref('');
@@ -31,12 +39,20 @@ async function load() {
   }
 }
 
+async function confirmPendingSupplement(row: BusinessRow) {
+  await confirmSupplement(row);
+  await load();
+  emit('updated');
+}
+
 watch(
   () => [props.modelValue, props.outDoc?.id],
   ([opened]) => {
     if (opened) load();
   },
 );
+
+defineExpose({ load });
 </script>
 
 <template>
@@ -75,6 +91,20 @@ watch(
             <el-table-column prop="batchNo" label="批号" min-width="120" />
             <el-table-column prop="quantity" label="补料数量" min-width="105" align="right" />
             <el-table-column prop="unitName" label="单位" width="90" />
+            <el-table-column label="操作" width="120" align="center">
+              <template #default>
+                <el-button
+                  v-if="supplementHistoryAction(item) === 'confirm'"
+                  link
+                  type="primary"
+                  @click="confirmPendingSupplement(item)"
+                  >确认出库</el-button
+                >
+                <el-button v-else link type="success" @click="emit('bom-return', item)"
+                  >BOM退库</el-button
+                >
+              </template>
+            </el-table-column>
           </el-table>
         </el-collapse-item>
       </el-collapse>

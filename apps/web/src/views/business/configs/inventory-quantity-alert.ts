@@ -38,6 +38,7 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   pagination: false,
   dialog: { width: '520px', top: '4vh' },
   formComponent: InventoryQuantityAlertForm,
+  viewCloseInForm: true,
   rowActions: [
     { key: 'edit', label: '配置', handler: (row, ctx) => ctx.openEdit(row) },
   ],

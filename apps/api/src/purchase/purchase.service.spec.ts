@@ -21,6 +21,7 @@ function serviceWith(
   );
   vi.spyOn(service as any, 'assertReceiverScope').mockResolvedValue(undefined);
   vi.spyOn(service as any, 'syncPurchaseOrderTodo').mockResolvedValue(undefined);
+  vi.spyOn(service as any, 'recalcOrderStatus').mockResolvedValue({});
   return Object.assign(service, { __todoService: todoService });
 }
 
@@ -322,6 +323,21 @@ describe('PurchaseService receipt confirmation', () => {
     const service = serviceWith(prisma, trace, message);
     const postReceipt = vi.spyOn(service as any, 'postReceipt').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'syncProductionShortageState').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lineProgress: new Map([
+        [
+          '101:202',
+          {
+            ordered: 2,
+            cancelled: 0,
+            confirmedNormal: 0,
+            pendingNormal: 2,
+            exchangeReturned: 0,
+            confirmedExchange: 0,
+          },
+        ],
+      ]),
+    });
 
     const result = await service.confirmReceipt('501', true, '办理采购入库', '9');
 
@@ -340,6 +356,11 @@ describe('PurchaseService receipt confirmation', () => {
       where: { po_input_id: 501n },
       data: expect.objectContaining({ comfirm_status: 1, posting_version: 1, updated_by: 9n }),
     });
+    const recalcOrderStatus = (service as any).recalcOrderStatus as ReturnType<typeof vi.fn>;
+    expect(recalcOrderStatus).toHaveBeenCalledWith(tx, 401n);
+    expect(receiptUpdate.mock.invocationCallOrder[0]!).toBeLessThan(
+      recalcOrderStatus.mock.invocationCallOrder[0]!,
+    );
     expect(message.sendPurchaseReceiptNotification).toHaveBeenCalledWith({
       poId: 401n,
       receiptNo: 'GA501',
@@ -758,61 +779,64 @@ describe('PurchaseService production-shortage guards', () => {
     );
   });
 
-  it('rejects cancelling a shortage purchase order below its unresolved gap', async () => {
+  it('reopens a production shortage when the effective received quantity no longer covers it', async () => {
+    const shortageUpdate = vi.fn();
+    const planUpdate = vi.fn();
     const tx = {
-      $queryRaw: vi.fn(),
-      hspsi_purchase_order: {
-        findFirst: vi.fn().mockResolvedValue({ po_id: 20n, pur_id: 7n, status: 2 }),
-        findUniqueOrThrow: vi
-          .fn()
-          .mockResolvedValue({ po_id: 20n, pcs_qty: 10, arrival_qty: 0, is_all_arrival: 0 }),
-        findMany: vi.fn().mockResolvedValue([{ po_id: 20n }]),
-        update: vi.fn(),
-      },
+      hspsi_purchase_order: { findMany: vi.fn().mockResolvedValue([{ po_id: 20n }]) },
       hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          { goods_id: 10n, sku_id: 11n, actual_qty: 4 },
+        ]),
+      },
+      hspsi_purchase_approve_detail: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { source_shortage_id: 8n, goods_id: 10n, sku_id: 11n, qty: 10 },
+          ]),
+      },
+      hspsi_production_shortage: {
         findMany: vi
           .fn()
           .mockResolvedValueOnce([
             {
-              id: 1n,
-              po_id: 20n,
-              goods_id: 10n,
-              sku_id: 11n,
-              qty: 10,
-              actual_qty: 0,
-              cancel_qty: 0,
+              shortage_id: 8n,
+              plan_id: 6n,
+              status: 2,
+              suggest_purchase_qty: 10,
+              require_qty: 15,
             },
           ])
-          .mockResolvedValueOnce([{ goods_id: 10n, sku_id: 11n, qty: 10, cancel_qty: 2 }]),
-        update: vi.fn(),
+          .mockResolvedValueOnce([{ shortage_id: 8n, status: 1 }]),
+        update: shortageUpdate,
       },
-      hspsi_purchase_order_input: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_order_input_detail: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_approve_detail: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([{ source_shortage_id: 8n, goods_id: 10n, sku_id: 11n }]),
+      hspsi_production_plan: {
+        findFirst: vi.fn().mockResolvedValue({
+          plan_id: 6n,
+          plan_status: 4,
+          delivered_qty: 0,
+        }),
+        update: planUpdate,
       },
-      hspsi_production_shortage: {
-        findMany: vi.fn().mockResolvedValue([{ shortage_id: 8n, suggest_purchase_qty: 10 }]),
-      },
-      hspsi_purchase_order_input_exit: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_order_input_exit_detail: { aggregate: vi.fn() },
-    };
-    const prisma = {
-      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      hspsi_production_material_out: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_production_plan_input: { count: vi.fn().mockResolvedValue(0) },
     };
 
-    await expect(
-      serviceWith(prisma).cancelOrderPending(
-        '20',
-        {
-          details: [{ goodsId: 10, skuId: 11, cancelQuantity: 2 }],
-        },
-        '3',
-      ),
-    ).rejects.toThrow('不能低于尚未解决的缺料数量');
-    expect(tx.hspsi_purchase_order.update).not.toHaveBeenCalled();
+    await (serviceWith({}) as any).syncProductionShortageState(tx, 7n, '3');
+
+    expect(shortageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 1, fact_qty: 9 }) }),
+    );
+    expect(planUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          plan_status: 7,
+          material_status: 3,
+          stock_check_status: 2,
+        }),
+      }),
+    );
   });
 
   it('blocks direct deletion of a production-shortage purchase order', async () => {
@@ -868,8 +892,12 @@ describe('PurchaseService production-shortage guards', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
 
+    const service = serviceWith(prisma);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lifecycle: { canCancelUnarrived: true },
+    });
     await expect(
-      serviceWith(prisma).cancelOrderPending(
+      service.cancelOrderPending(
         '20',
         {
           details: [{ goodsId: 10, skuId: 11, cancelQuantity: 8 }],
@@ -882,7 +910,6 @@ describe('PurchaseService production-shortage guards', () => {
 
   it('cancels a pending receipt without posting inventory and releases its quantity', async () => {
     const receiptUpdate = vi.fn();
-    const orderUpdate = vi.fn();
     const tx = {
       $queryRaw: vi.fn(),
       hspsi_purchase_order_input: {
@@ -897,7 +924,7 @@ describe('PurchaseService production-shortage guards', () => {
           is_all_arrival: 0,
           status: 2,
         }),
-        update: orderUpdate,
+        update: vi.fn(),
       },
       hspsi_purchase_order_detail: {
         findMany: vi.fn().mockResolvedValue([{ qty: 12, actual_qty: 0, cancel_qty: 0 }]),
@@ -909,12 +936,13 @@ describe('PurchaseService production-shortage guards', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
 
-    const result = await serviceWith(prisma).cancelReceipt('90', '客户取消到货', '3');
+    const service = serviceWith(prisma);
+    const result = await service.cancelReceipt('90', '客户取消到货', '3');
 
     expect(receiptUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ comfirm_status: 2 }) }),
     );
-    expect(orderUpdate).toHaveBeenCalled();
+    expect((service as any).recalcOrderStatus).toHaveBeenCalledWith(tx, 20n);
     expect(result.message).toContain('锁定数量已释放');
   });
 
@@ -1468,7 +1496,11 @@ describe('PurchaseService production-shortage guards', () => {
           .fn()
           .mockResolvedValue([{ goods_catg_id: 30n, goods_name: '成品', warehouse_type: 1 }]),
       },
-      hspsi_purchase_order_input: { create: receiptCreate, update: vi.fn() },
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: receiptCreate,
+        update: vi.fn(),
+      },
       hspsi_purchase_order_input_detail: { deleteMany: vi.fn(), createMany: vi.fn() },
     };
     const prisma = {
@@ -1504,6 +1536,7 @@ describe('PurchaseService production-shortage guards', () => {
   it('generates a pending receipt immediately and falls back to the goods default warehouse when the order warehouse is incompatible', async () => {
     const receiptCreate = vi.fn().mockResolvedValue({ po_input_id: 91n });
     const tx = {
+      $queryRaw: vi.fn(),
       hspsi_goods_info: {
         findMany: vi
           .fn()
@@ -1523,28 +1556,61 @@ describe('PurchaseService production-shortage guards', () => {
           .mockResolvedValueOnce({ warehouse_id: 9n })
           .mockResolvedValueOnce({ name: '健服-医疗耗材仓', warehouse_type: 9 }),
       },
-      hspsi_purchase_order_input: { create: receiptCreate, update: vi.fn() },
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'PO20',
+          org_id: 1n,
+          warehouse_id: 15n,
+          dept_id: 2n,
+          receiver_id: 9n,
+          pcs_qty: 12,
+          status: 3,
+        }),
+      },
+      hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 1n,
+            goods_id: 10n,
+            sku_id: 11n,
+            qty: 12,
+            cancel_qty: 0,
+            unit_type: 1,
+            remark: '',
+          },
+        ]),
+      },
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: receiptCreate,
+        update: vi.fn(),
+      },
       hspsi_purchase_order_input_detail: { createMany: vi.fn() },
     };
     const prisma = {
-      hspsi_purchase_order_input: { findFirst: vi.fn().mockResolvedValue(null) },
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const service = serviceWith(prisma, trace);
-    vi.spyOn(service, 'order').mockResolvedValue({
-      po_id: 20n,
-      orderNo: 'PO20',
-      org_id: 1n,
-      warehouse_id: 15n,
-      dept_id: 2n,
-      receiver_id: 9n,
-      pcs_qty: 12,
-      status: 3,
-      details: [
-        { goodsId: 10n, skuId: 11n, quantity: 12, remainingQuantity: 7, unitType: 1, remark: '' },
-      ],
-    } as never);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lifecycle: { status: 3 },
+      lineProgress: new Map([
+        [
+          '10:11',
+          {
+            ordered: 12,
+            cancelled: 0,
+            confirmedNormal: 5,
+            pendingNormal: 0,
+            purchaseReturned: 0,
+            exchangeReturned: 0,
+            confirmedExchange: 0,
+            pendingExchange: 0,
+          },
+        ],
+      ]),
+    });
 
     const result = await service.generateReceipt('20', '9');
 

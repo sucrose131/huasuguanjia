@@ -3,9 +3,10 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
-import { dateText } from '@/utils/format';
+import { dateText, moneyText } from '@/utils/format';
 import { filterGoodsByWarehouseType, warehouseTypeOf } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -29,6 +30,22 @@ const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
+const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+
+function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
+  quickCatalogRef.value?.open(line, mode);
+}
+
+async function selectExistingGoods(line: any, goods: any) {
+  delete line.newGoods;
+  delete line.newSku;
+  line.goodsId = goods.id;
+  await lineGoodsChanged(line);
+}
+
+function quickCatalogStaged() {
+  if (form.value.warehouseId) warehouseChanged();
+}
 
 function blankLine() {
   return {
@@ -63,14 +80,40 @@ const orderQuantity = computed(() =>
     0,
   ),
 );
+const orderEffectivePayable = computed(() => Number(form.value.effectivePayable ?? orderTotal.value));
+const orderNetPaidAmount = computed(() =>
+  Number(form.value.netPaidAmount ?? Number(form.value.paidAmount ?? 0) - Number(form.value.refundedAmount ?? 0)),
+);
+const orderRemainingAfterPayment = computed(() =>
+  Math.max(0, orderEffectivePayable.value - orderNetPaidAmount.value - Number(form.value.currentPaymentAmount ?? 0)),
+);
+const orderPreviewProgressStatus = computed(() => {
+  if (orderRemainingAfterPayment.value <= 0 && orderEffectivePayable.value > 0) return 2;
+  if (orderNetPaidAmount.value + Number(form.value.currentPaymentAmount ?? 0) > 0) return 1;
+  return 0;
+});
+
+function protectedMoney(value: unknown) {
+  return canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
+}
+
+function dictLabel(code: string, value: unknown) {
+  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
+}
 
 async function loadDicts() {
-  const [arrivalType, settlementType] = await Promise.all([
+  const [arrivalType, deliveryType, settlementType, paymentChannel, paymentProgress] = await Promise.all([
     api.get('/dictionaries/purchase_arrival_type').catch(() => []),
+    api.get('/dictionaries/purchase_delivery_type').catch(() => []),
     api.get('/dictionaries/purchase_settlement_type').catch(() => []),
+    api.get('/dictionaries/payment_channel').catch(() => []),
+    api.get('/dictionaries/purchase_payment_progress_status').catch(() => []),
   ]);
   dicts.purchase_arrival_type = arrivalType as any[];
+  dicts.purchase_delivery_type = deliveryType as any[];
   dicts.purchase_settlement_type = settlementType as any[];
+  dicts.payment_channel = paymentChannel as any[];
+  dicts.purchase_payment_progress_status = paymentProgress as any[];
 }
 
 async function loadOrgScopedOptions(orgId: unknown) {
@@ -345,6 +388,10 @@ function validate() {
       return false;
     }
   }
+  if (props.mode === 'create' && Number(form.value.currentPaymentAmount ?? 0) > orderTotal.value) {
+    ElMessage.warning('本次付款金额不能超过订单总金额');
+    return false;
+  }
   return true;
 }
 
@@ -402,6 +449,10 @@ onMounted(async () => {
       deliveryNo: '',
       paymentType: 1,
       planPayDate: '',
+      currentPaymentAmount: 0,
+      currentPaymentDate: dateText(new Date()),
+      currentPaymentChannel: Number(dicts.payment_channel?.[0]?.value ?? 1),
+      currentPaymentRemark: '',
       remark: '',
       details: [blankLine()],
     });
@@ -541,6 +592,19 @@ onMounted(async () => {
           :disabled="isView"
         />
       </el-form-item>
+      <el-form-item label="运输方式">
+        <el-select v-model="form.deliveryType" :disabled="isView">
+          <el-option
+            v-for="item in dicts.purchase_delivery_type || []"
+            :key="item.value"
+            :label="item.label"
+            :value="Number(item.value)"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="物流单号">
+        <el-input v-model="form.deliveryNo" :disabled="isView" />
+      </el-form-item>
       <el-form-item label="结算方式">
         <el-select v-model="form.paymentType" :disabled="isView">
           <el-option
@@ -580,11 +644,16 @@ onMounted(async () => {
             placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
           />
+          <el-button v-if="!isView && !form.applicationId" link type="primary" @click="openQuickCatalog(s.row, 'goods')">快捷新增商品</el-button>
+          <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">
+          <span>{{ s.row.skuSpec || s.row.skuId || '—' }}</span>
+          <el-button v-if="!isView && !form.applicationId && s.row.goodsId && !s.row.newGoods" link type="primary" @click="openQuickCatalog(s.row, 'sku')">补充 SKU</el-button>
+        </template>
       </el-table-column>
       <el-table-column label="单位" width="80">
         <template #default="s">{{ unitName(s.row) }}</template>
@@ -641,12 +710,53 @@ onMounted(async () => {
       {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
     </div>
 
+    <div class="section-title">
+      <strong>金额与付款</strong>
+      <span>订单金额自动汇总；本次付款可为 0，后续仍可从订单操作列分次付款</span>
+    </div>
+    <div class="form-grid order-payment-summary">
+      <el-form-item label="订单总金额"><el-input :model-value="protectedMoney(orderTotal)" disabled /></el-form-item>
+      <el-form-item label="退货后应付"><el-input :model-value="protectedMoney(orderEffectivePayable)" disabled /></el-form-item>
+      <el-form-item label="累计付款"><el-input :model-value="protectedMoney(form.paidAmount ?? 0)" disabled /></el-form-item>
+      <el-form-item label="累计退款"><el-input :model-value="protectedMoney(form.refundedAmount ?? 0)" disabled /></el-form-item>
+      <el-form-item label="净已付款"><el-input :model-value="protectedMoney(orderNetPaidAmount)" disabled /></el-form-item>
+      <el-form-item label="本次付款金额">
+        <el-input-number
+          v-if="mode === 'create' && canEditAmount"
+          v-model="form.currentPaymentAmount"
+          :min="0"
+          :max="orderTotal"
+          :precision="2"
+          controls-position="right"
+          style="width: 100%"
+        />
+        <el-input v-else model-value="—" disabled />
+      </el-form-item>
+      <el-form-item label="付款后待付"><el-input :model-value="protectedMoney(orderRemainingAfterPayment)" disabled /></el-form-item>
+      <el-form-item label="付款进度"><el-input :model-value="dictLabel('purchase_payment_progress_status', orderPreviewProgressStatus)" disabled /></el-form-item>
+      <el-form-item label="本次付款日期">
+        <el-date-picker v-if="mode === 'create'" v-model="form.currentPaymentDate" value-format="YYYY-MM-DD" :disabled="!Number(form.currentPaymentAmount)" />
+        <el-input v-else model-value="—" disabled />
+      </el-form-item>
+      <el-form-item label="本次付款渠道">
+        <el-select v-if="mode === 'create'" v-model="form.currentPaymentChannel" :disabled="!Number(form.currentPaymentAmount)">
+          <el-option v-for="item in dicts.payment_channel || []" :key="item.value" :label="item.label" :value="Number(item.value)" />
+        </el-select>
+        <el-input v-else model-value="—" disabled />
+      </el-form-item>
+      <el-form-item label="付款备注" class="span-2">
+        <el-input v-if="mode === 'create'" v-model="form.currentPaymentRemark" :disabled="!Number(form.currentPaymentAmount)" />
+        <el-input v-else model-value="—" disabled />
+      </el-form-item>
+    </div>
+
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
       <el-button type="primary" :loading="saving" :disabled="!canEditAmount" @click="save">
         保存
       </el-button>
     </div>
+    <PurchaseQuickCatalogDialog ref="quickCatalogRef" :can-edit-amount="canEditAmount" @selected-existing="selectExistingGoods" @staged="quickCatalogStaged" />
   </el-form>
 </template>
 
@@ -672,6 +782,16 @@ onMounted(async () => {
 }
 .details-title {
   font-weight: 600;
+}
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.section-title span {
+  color: #909399;
+  font-size: 12px;
 }
 .form-total {
   margin-top: 12px;

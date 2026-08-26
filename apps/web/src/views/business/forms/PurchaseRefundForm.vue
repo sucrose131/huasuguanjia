@@ -84,6 +84,15 @@ async function recordFlow() {
     ElMessage.warning('请选择退款渠道和退款日期');
     return;
   }
+  try {
+    await ElMessageBox.confirm(`确认记录本次退款 ¥ ${moneyText(amount)} ？`, '确认采购退款', {
+      type: 'warning',
+      confirmButtonText: '确认退款',
+      cancelButtonText: '取消',
+    });
+  } catch {
+    return;
+  }
   saving.value = true;
   try {
     const result: any = await api.post(`/purchase/refunds/${form.value.id}/flows`, {

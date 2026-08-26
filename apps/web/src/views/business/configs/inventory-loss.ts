@@ -5,7 +5,7 @@ import InventoryLossForm from '../forms/InventoryLossForm.vue';
 
 export const inventoryLossConfig: BusinessDocumentConfig = {
   key: 'inventory/losses',
-  title: '报损/报亏单',
+  title: '报损出库单',
   subtitle: '支持盘点损坏生成和日常独立报损，按处置方式完成库存闭环',
   endpoint: '/inventory/losses',
   documentType: 'inventory_loss',
@@ -51,7 +51,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: true,
-  createText: '新增报损单',
+  createText: '新增报损出库单',
   createPreset: () => ({ businessKind: 2 }),
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryLossForm,
@@ -83,6 +83,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
         Number(row.status) === 0 &&
         [0, 2].includes(Number(row.approveStatus)),
       confirm: '提交后进入审批流程，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         await api.post(`/inventory/losses/${row.id}/submit`);
         ElMessage.success('已提交审批');
@@ -102,6 +103,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
             : Number(row.goWhere) === 2
               ? '审批通过将按原采购入库来源生成采购退货草稿，本次不会扣减库存，是否继续？'
               : '审批通过将按直接报废去向扣减库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/losses/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');
@@ -150,6 +152,7 @@ export const inventoryLossConfig: BusinessDocumentConfig = {
         Number(row.status) === 0 &&
         [0, 2].includes(Number(row.approveStatus)),
       confirm: '确认删除该报损单？',
+      confirmTitle: '删除确认',
       handler: async (row) => {
         await api.delete(`/inventory/losses/${row.id}`);
         ElMessage.success('删除成功');

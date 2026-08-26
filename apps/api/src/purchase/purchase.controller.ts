@@ -166,7 +166,7 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.generateReceipt(id, u.id, b.warehouseId);
+    return this.service.generateReceipt(id, u.id, b.warehouseId, b.inputType);
   }
   @RequirePermissions('purchase')
   @Delete('orders/:id')

@@ -65,6 +65,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '提交后进入审批，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         await api.post(`/inventory/adjustments/${row.id}/submit`);
         ElMessage.success('已提交审批');
@@ -77,6 +78,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后立即调整库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/adjustments/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');
@@ -106,6 +108,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '确认删除该调整单？',
+      confirmTitle: '删除确认',
       handler: async (row) => {
         await api.delete(`/inventory/adjustments/${row.id}`);
         ElMessage.success('删除成功');

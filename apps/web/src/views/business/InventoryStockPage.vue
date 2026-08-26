@@ -496,7 +496,7 @@ onMounted(async () => {
       </el-table>
     </div>
 
-    <el-dialog v-model="ledgerDialog" :title="ledgerContext.title" width="900px" top="5vh">
+    <el-dialog v-model="ledgerDialog" :title="ledgerContext.title" width="1120px" top="5vh">
       <p class="muted" style="margin: 0 0 12px">{{ ledgerContext.subtitle }}</p>
       <el-table :data="ledger" border size="small" max-height="460">
         <el-table-column label="时间" width="155">
@@ -504,6 +504,9 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作类型" min-width="110">
           <template #default="s">{{ s.row.operationTypeName || s.row.operationType || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="业务模式/单据类型" width="150">
+          <template #default="s">{{ s.row.businessModeName || s.row.sourceType || '—' }}</template>
         </el-table-column>
         <el-table-column label="入库" width="90" align="right">
           <template #default="s">{{ quantity(s.row.inputQty) }}</template>
@@ -515,7 +518,13 @@ onMounted(async () => {
           <template #default="s">{{ quantity(s.row.afterQty) }}</template>
         </el-table-column>
         <el-table-column prop="sourceNo" label="来源单号" min-width="140" />
+        <el-table-column label="批号" width="120">
+          <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
+        </el-table-column>
         <el-table-column prop="operatorName" label="操作人" width="90" />
+        <el-table-column label="备注" min-width="140" show-overflow-tooltip>
+          <template #default="s">{{ s.row.remark || '—' }}</template>
+        </el-table-column>
       </el-table>
     </el-dialog>
   </section>

@@ -116,6 +116,7 @@ export const purchaseRefundConfig: BusinessDocumentConfig = {
   summary: true,
   creatable: false,
   formComponent: PurchaseRefundForm,
+  viewCloseInForm: true,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) ctx.openView({ id: String(query.documentId) });
   },

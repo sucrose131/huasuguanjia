@@ -340,6 +340,17 @@ onMounted(async () => {
         <el-form-item label="外部申请号">
           <el-input :model-value="form.externalRequestNo || form.externalRequestId" readonly />
         </el-form-item>
+        <el-form-item label="接收时间">
+          <el-input :model-value="dateText(form.receivedAt, true)" readonly />
+        </el-form-item>
+        <el-form-item label="外部原始申请（只读）" class="span-2">
+          <el-input
+            :model-value="JSON.stringify(form.externalPayload || {}, null, 2)"
+            type="textarea"
+            :rows="8"
+            readonly
+          />
+        </el-form-item>
       </template>
 
       <el-form-item v-if="mode === 'create' && !form.orderId" label="销售订单" required>
