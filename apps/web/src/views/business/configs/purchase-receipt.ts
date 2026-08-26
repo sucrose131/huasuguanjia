@@ -96,27 +96,14 @@ export const purchaseReceiptConfig: BusinessDocumentConfig = {
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {
-      key: 'confirm',
-      label: '确认入库',
-      kind: 'success',
-      primary: false,
-      show: (row) => Number(row.confirmStatus) === 0,
-      confirm: '确认后将按批次过账入库，是否继续？',
-      handler: async (row) => {
-        await api.post(`/purchase/receipts/${row.id}/confirm`, {
-          confirmed: true,
-          comment: '确认入库',
-        });
-        ElMessage.success('确认入库成功');
-      },
-    },
-    {
       key: 'cancel',
       label: '撤销待入库',
       kind: 'warning',
       primary: false,
       show: (row) => Number(row.confirmStatus) === 0,
       confirm: '撤销后草稿将失效，是否继续？',
+      confirmTitle: '撤销待入库单',
+      confirmButtonText: '确认撤销',
       handler: async (row) => {
         await api.post(`/purchase/receipts/${row.id}/cancel`, { comment: '撤销待入库' });
         ElMessage.success('待入库单已撤销');

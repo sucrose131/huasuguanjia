@@ -3,6 +3,16 @@ import { api } from '@/api';
 import { ElMessage } from 'element-plus';
 import RequisitionApplicationForm from '../forms/RequisitionApplicationForm.vue';
 
+const hasActiveOaApproval = (row: Record<string, any>) =>
+  ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? ''));
+const canApproveApplication = (row: Record<string, any>) =>
+  !hasActiveOaApproval(row) &&
+  Number(row.approveStatus ?? row.approve_status) === 0 &&
+  Number(row.status) === 1;
+const canRejectApplication = (row: Record<string, any>) =>
+  canApproveApplication(row) ||
+  (Boolean(row.reverseGenerated) && Number(row.approveStatus ?? row.approve_status) === 1);
+
 export const requisitionApplicationConfig: BusinessDocumentConfig = {
   key: 'requisitions/applications',
   title: '领用申请单',
@@ -70,6 +80,34 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
         const result: any = await api.post(`/requisitions/applications/${row.id}/submit-oa`, {});
         if (result?.procStatus === 'PUSH_FAILED') ElMessage.warning(result?.message ?? '提交OA失败');
         else ElMessage.success(result?.message ?? '已提交OA审批');
+      },
+    },
+    {
+      key: 'approve',
+      label: '通过',
+      kind: 'success',
+      primary: false,
+      show: canApproveApplication,
+      handler: async (row) => {
+        const result: any = await api.post(`/requisitions/applications/${row.id}/approve`, {
+          approved: true,
+          comment: '',
+        });
+        ElMessage.success(result?.message ?? '操作成功');
+      },
+    },
+    {
+      key: 'reject',
+      label: '驳回',
+      kind: 'danger',
+      primary: false,
+      show: canRejectApplication,
+      handler: async (row) => {
+        const result: any = await api.post(`/requisitions/applications/${row.id}/approve`, {
+          approved: false,
+          comment: '',
+        });
+        ElMessage.success(result?.message ?? '操作成功');
       },
     },
     {

@@ -128,6 +128,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '提交后将进入审批流程，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         const result: any = await api.post(`/purchase/applications/${row.id}/submit`, {});
         ElMessage.success(result?.message ?? '已提交审批');
@@ -140,6 +141,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后进入采购流程，是否继续？',
+      confirmTitle: '确认审批通过',
       handler: async (row) => {
         const result: any = await api.post(`/purchase/applications/${row.id}/approve`, {
           approved: true,
@@ -172,6 +174,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '确认删除该采购申请单？',
+      confirmTitle: '确认删除',
       handler: async (row) => {
         await api.delete(`/purchase/applications/${row.id}`);
         ElMessage.success('删除成功');

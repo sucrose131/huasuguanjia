@@ -70,6 +70,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '提交后进入审批流程，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         await api.post(`/inventory/transfers/${row.id}/submit`);
         ElMessage.success('已提交审批');
@@ -82,6 +83,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后将立即调拨过账并调整两边库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/transfers/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');
@@ -111,6 +113,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '确认删除该未过账单据？',
+      confirmTitle: '删除确认',
       handler: async (row) => {
         await api.delete(`/inventory/transfers/${row.id}`);
         ElMessage.success('删除成功');

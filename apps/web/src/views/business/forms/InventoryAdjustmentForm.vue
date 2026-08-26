@@ -184,7 +184,7 @@ function validate() {
   return true;
 }
 
-async function save() {
+async function save(submit = false) {
   if (!validate()) return;
   saving.value = true;
   try {
@@ -193,6 +193,7 @@ async function save() {
       reason: form.value.reason,
       applicantDate: form.value.applicantDate,
       remark: form.value.remark,
+      submit,
       details: (form.value.details ?? []).map((line: any) => ({
         goodsId: line.goodsId,
         skuId: line.skuId,
@@ -207,7 +208,7 @@ async function save() {
       props.mode === 'edit'
         ? await api.patch(`${url}/${form.value.id}`, payload)
         : await api.post(url, payload);
-    ElMessage.success(result?.message ?? '保存成功');
+    ElMessage.success(result?.message ?? (submit ? '已保存并提交审核' : '草稿已保存'));
     emit('saved');
   } catch {
     // axios 拦截器已提示
@@ -394,7 +395,8 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
+      <el-button type="primary" :loading="saving" @click="save(true)">保存并提交审核</el-button>
     </div>
   </el-form>
 </template>

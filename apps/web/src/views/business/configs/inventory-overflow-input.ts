@@ -60,6 +60,7 @@ export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
   creatable: false,
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryOverflowInputForm,
+  viewCloseInForm: true,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
       const detail: any = await api.get(`/inventory/overflow-inputs/${query.documentId}`);

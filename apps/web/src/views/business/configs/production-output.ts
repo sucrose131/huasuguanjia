@@ -38,7 +38,7 @@ export const productionOutputConfig: BusinessDocumentConfig = {
       width: 150,
     },
   ],
-  creatable: true,
+  creatable: false,
   createText: '新增临时出库',
   createPreset: () => ({ outType: 3, destinationType: 1 }),
   formComponent: ProductionOutputForm,

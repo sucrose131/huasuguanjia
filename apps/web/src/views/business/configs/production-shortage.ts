@@ -27,6 +27,7 @@ export const productionShortageConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['production_shortage_status'],
   formComponent: ShortageViewForm,
+  viewCloseInForm: true,
   rowActions: [
     { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
     {

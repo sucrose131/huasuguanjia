@@ -7,14 +7,24 @@ import ExecuteOutDialog from '@/components/production/ExecuteOutDialog.vue';
 import TempSupplementDialog from '@/components/production/TempSupplementDialog.vue';
 import BomReturnDialog from '@/components/production/BomReturnDialog.vue';
 import SupplementHistoryDialog from '@/components/production/SupplementHistoryDialog.vue';
+import LabOutboundDialog from '@/components/production/LabOutboundDialog.vue';
+import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 
 type B = Record<string, any>;
 
+const auth = useAuthStore();
+const pageRef = ref<InstanceType<typeof BusinessDocumentPage> | null>(null);
+const supplementHistoryRef = ref<InstanceType<typeof SupplementHistoryDialog> | null>(null);
 const selectedOutRow = ref<B | null>(null);
 const executeOutVisible = ref(false);
 const tempSupplVisible = ref(false);
 const bomReturnVisible = ref(false);
 const supplementHistoryVisible = ref(false);
+const labOutVisible = ref(false);
+const canCreateTemporaryOutput = computed(() =>
+  canPageAction(auth.user, '/production/outputs', 'create'),
+);
 
 let resolveExecute: (() => void) | null = null;
 let resolveTempSuppl: (() => void) | null = null;
@@ -40,20 +50,36 @@ function openDialog(flag: 'execute' | 'temp-suppl' | 'bom-return', row: B) {
   });
 }
 
-function onDialogDone(flag: 'execute' | 'temp-suppl' | 'bom-return') {
+async function onDialogDone(flag: 'execute' | 'temp-suppl' | 'bom-return') {
+  let handledByRowAction = false;
   if (flag === 'execute') {
     executeOutVisible.value = false;
+    handledByRowAction = Boolean(resolveExecute);
     resolveExecute?.();
     resolveExecute = null;
   } else if (flag === 'temp-suppl') {
     tempSupplVisible.value = false;
+    handledByRowAction = Boolean(resolveTempSuppl);
     resolveTempSuppl?.();
     resolveTempSuppl = null;
   } else {
     bomReturnVisible.value = false;
+    handledByRowAction = Boolean(resolveBomReturn);
     resolveBomReturn?.();
     resolveBomReturn = null;
   }
+  if (!handledByRowAction) await pageRef.value?.load();
+  if (supplementHistoryVisible.value) await supplementHistoryRef.value?.load();
+}
+
+async function onLabOutboundDone() {
+  labOutVisible.value = false;
+  await pageRef.value?.load();
+}
+
+function openSupplementBomReturn(row: B) {
+  selectedOutRow.value = row;
+  bomReturnVisible.value = true;
 }
 
 // 用户直接关闭弹窗时也结束等待，避免 runAction 挂起
@@ -95,7 +121,7 @@ const shellActions: RowAction[] = [
   },
   {
     key: 'bom-return',
-    label: '材料退回',
+    label: 'BOM退库',
     show: (row) =>
       Number(row.outType) === 1 && Number(row.confirmStatus) === 1,
     handler: (row) => openDialog('bom-return', row),
@@ -121,7 +147,16 @@ const config = computed<BusinessDocumentConfig>(() => ({
 </script>
 
 <template>
-  <BusinessDocumentPage :config="config" />
+  <BusinessDocumentPage ref="pageRef" :config="config">
+    <template #page-actions>
+      <el-button
+        v-if="canCreateTemporaryOutput"
+        type="primary"
+        @click="labOutVisible = true"
+        >新增临时出库</el-button
+      >
+    </template>
+  </BusinessDocumentPage>
   <ExecuteOutDialog
     v-model="executeOutVisible"
     :out-doc="selectedOutRow ?? {}"
@@ -138,7 +173,11 @@ const config = computed<BusinessDocumentConfig>(() => ({
     @done="onDialogDone('bom-return')"
   />
   <SupplementHistoryDialog
+    ref="supplementHistoryRef"
     v-model="supplementHistoryVisible"
     :out-doc="selectedOutRow ?? {}"
+    @updated="pageRef?.load()"
+    @bom-return="openSupplementBomReturn"
   />
+  <LabOutboundDialog v-model="labOutVisible" @done="onLabOutboundDone" />
 </template>

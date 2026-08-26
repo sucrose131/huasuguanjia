@@ -78,6 +78,7 @@ export const inventoryOverflowConfig: BusinessDocumentConfig = {
         Number(row.status) === 1 &&
         Number(row.sourceCheckId ?? 0) > 0,
       confirm: '审批通过将直接完成报盈入库并增加对应批次库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/overflows/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');

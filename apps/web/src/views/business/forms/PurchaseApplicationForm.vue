@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { filterGoodsByWarehouseType, warehouseTypeOf } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -23,6 +24,22 @@ const options = reactive<Record<string, any>>({
   contextGoods: [],
 });
 const isView = computed(() => props.mode === 'view');
+const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+
+function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
+  quickCatalogRef.value?.open(line, mode);
+}
+
+async function selectExistingGoods(line: any, goods: any) {
+  delete line.newGoods;
+  delete line.newSku;
+  line.goodsId = goods.id;
+  await lineGoodsChanged(line);
+}
+
+function quickCatalogStaged() {
+  if (form.value.warehouseId) warehouseChanged();
+}
 
 function blankLine() {
   return {
@@ -221,7 +238,7 @@ function validate() {
   return true;
 }
 
-async function save() {
+async function save(submit = false) {
   if (!validate()) return;
   saving.value = true;
   try {
@@ -231,7 +248,8 @@ async function save() {
       props.mode === 'edit'
         ? await api.patch(`${url}/${form.value.id}`, payload)
         : await api.post(url, payload);
-    ElMessage.success(result?.message ?? '保存成功');
+    if (submit) await api.post(`${url}/${result?.id ?? form.value.id}/submit`);
+    ElMessage.success(submit ? '已提交审批' : (result?.message ?? '草稿已保存'));
     emit('saved');
   } catch {
     // axios 拦截器已提示
@@ -310,6 +328,9 @@ onMounted(async () => {
           已按明细商品类型匹配仓库
         </div>
       </el-form-item>
+      <el-form-item label="申请人">
+        <el-input :model-value="form.applicantName || auth.user?.username || '—'" disabled />
+      </el-form-item>
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />
       </el-form-item>
@@ -331,11 +352,16 @@ onMounted(async () => {
             placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
           />
+          <el-button v-if="!isView" link type="primary" @click="openQuickCatalog(s.row, 'goods')">快捷新增商品</el-button>
+          <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="130">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">
+          <span>{{ s.row.skuSpec || s.row.skuId || '—' }}</span>
+          <el-button v-if="!isView && s.row.goodsId && !s.row.newGoods" link type="primary" @click="openQuickCatalog(s.row, 'sku')">补充 SKU</el-button>
+        </template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ unitName(s.row) }}</template>
@@ -369,8 +395,10 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
+      <el-button type="primary" :loading="saving" @click="save(true)">提交审批</el-button>
     </div>
+    <PurchaseQuickCatalogDialog ref="quickCatalogRef" :can-edit-amount="auth.amountAccess.canEditAmount" @selected-existing="selectExistingGoods" @staged="quickCatalogStaged" />
   </el-form>
 </template>
 

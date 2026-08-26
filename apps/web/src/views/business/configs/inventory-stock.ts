@@ -28,5 +28,6 @@ export const inventoryStockConfig: BusinessDocumentConfig = {
   dictionaries: [],
   creatable: false,
   formComponent: InventoryStockForm,
+  viewCloseInForm: true,
   rowActions: [{ key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) }],
 };
