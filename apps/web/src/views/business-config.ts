@@ -8,6 +8,10 @@ export type BusinessColumn = {
   align?: 'left' | 'center' | 'right';
   /** 状态列的字典 code（StatusTag 按字典 label 自动配色） */
   statusDict?: string;
+  /** 状态列显式标签颜色（可函数按行返回；缺省按 label 正则推导） */
+  statusType?: 'primary' | 'success' | 'warning' | 'danger' | 'info' | ((
+    row: Record<string, any>,
+  ) => 'primary' | 'success' | 'warning' | 'danger' | 'info');
   /** 是否启用悬停溢出提示（长文本列用；缺省 false，避免数字/日期列误弹 tooltip） */
   tooltip?: boolean;
   /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */

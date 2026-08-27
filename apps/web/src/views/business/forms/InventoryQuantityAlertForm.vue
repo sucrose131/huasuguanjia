@@ -16,12 +16,8 @@ const isView = computed(() => props.mode === 'view');
 async function save() {
   const safeQty = Number(form.value.safeQty ?? 0);
   const purchaseQty = Number(form.value.purchaseQty ?? 0);
-  if (!Number.isInteger(safeQty) || safeQty < 0) {
-    ElMessage.warning('预警阈值必须是非负整数');
-    return;
-  }
-  if (!Number.isInteger(purchaseQty) || purchaseQty < 0) {
-    ElMessage.warning('建议补货数量必须是非负整数');
+  if (safeQty < 0 || purchaseQty < 0) {
+    ElMessage.warning('安全库存和建议补货数量不能小于0');
     return;
   }
   saving.value = true;
@@ -34,7 +30,7 @@ async function save() {
       safeQty,
       purchaseQty,
     });
-    ElMessage.success(result?.message ?? '预警阈值已保存');
+    ElMessage.success(result?.message ?? '库存预警配置已保存');
     emit('saved');
   } catch {
     // axios 拦截器已提示
@@ -52,9 +48,12 @@ async function save() {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="当前实际库存">
-        <el-input :model-value="Number(form.factQty ?? 0).toLocaleString()" disabled />
+        <el-input
+          :model-value="Number(form.factQty ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 })"
+          disabled
+        />
       </el-form-item>
-      <el-form-item label="预警阈值">
+      <el-form-item label="安全库存">
         <el-input-number v-model="form.safeQty" :min="0" :precision="0" :step="1" controls-position="right" />
       </el-form-item>
       <el-form-item label="当前缺口">
@@ -73,7 +72,7 @@ async function save() {
 
   <div v-if="!isView" class="form-actions">
     <el-button @click="emit('cancel')">取消</el-button>
-    <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+    <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
   </div>
   <div v-else class="form-actions">
     <el-button @click="emit('cancel')">关闭</el-button>

@@ -154,22 +154,26 @@ function validate() {
     ElMessage.warning('请选择发出人和接收人');
     return false;
   }
+  if (!String(form.value.reason ?? '').trim()) {
+    ElMessage.warning('请输入调拨理由');
+    return false;
+  }
   const lines = form.value.details ?? [];
   if (!lines.length) {
     ElMessage.warning('请至少添加一条调拨明细');
     return false;
   }
   for (const line of lines) {
-    if (!line.goodsId || !line.skuId || !line.stockKey) {
-      ElMessage.warning('请选择完整的商品与库存批次');
+    if (!line.goodsId || !line.skuId || !(line.warehouseId ?? form.value.warehouseId)) {
+      ElMessage.warning('请选择有效的库存商品');
       return false;
     }
     if (Number(line.quantity) <= 0) {
-      ElMessage.warning('调拨数量必须大于 0');
+      ElMessage.warning('明细数量必须大于 0');
       return false;
     }
     if (Number(line.quantity) > Number(line.inventoryQty ?? 0)) {
-      ElMessage.warning(`${line.goodsName || '商品'} 调拨数量超过当前库存`);
+      ElMessage.warning(`${line.goodsName || '商品'} 数量超过当前库存`);
       return false;
     }
   }
@@ -364,7 +368,7 @@ onMounted(async () => {
       <el-form-item label="调拨理由" required>
         <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
-      <el-form-item label="调拨日期" required>
+      <el-form-item label="调拨日期">
         <el-date-picker
           v-model="form.transferDate"
           type="date"
@@ -373,10 +377,10 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="经办人">
-        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+        <el-input :model-value="form.operatorName" disabled />
       </el-form-item>
       <el-form-item label="备注" class="span-2">
-        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
+        <el-input v-model="form.remark" :disabled="isView" />
       </el-form-item>
     </div>
 
@@ -422,13 +426,8 @@ onMounted(async () => {
           />
         </template>
       </el-table-column>
-      <el-table-column prop="batchNo" label="批号" min-width="130">
-        <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
-      </el-table-column>
-      <el-table-column label="备注" min-width="130">
-        <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
-      </el-table-column>
-      <el-table-column v-if="!isView" label="" width="60">
+      <el-table-column prop="batchNo" label="批号" width="130" />
+      <el-table-column v-if="!isView" label="" width="70">
         <template #default="s">
           <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
         </template>

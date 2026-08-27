@@ -5,7 +5,7 @@ import InventoryTransferForm from '../forms/InventoryTransferForm.vue';
 
 export const inventoryTransferConfig: BusinessDocumentConfig = {
   key: 'inventory/transfers',
-  title: '库存调拨',
+  title: '库存调拨单',
   subtitle: '同类型仓库之间的双边库存调拨与审批',
   endpoint: '/inventory/transfers',
   documentType: 'inventory_transfer',
@@ -35,17 +35,17 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
       label: '仓库',
       type: 'select',
       dependsOn: 'orgId',
+      loadOnEmptyDep: true,
       width: 180,
       loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
         return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
+          params: deps.orgId ? { orgId: deps.orgId } : {},
         })) as any[];
       },
     },
   ],
   creatable: true,
-  createText: '新增调拨单',
+  createText: '新增库存调拨单',
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryTransferForm,
   openFromRoute: async (query, ctx) => {

@@ -1084,6 +1084,68 @@ export class RequisitionService {
     return { ...header, draw_output_no: outputNo };
   }
 
+  /**
+   * 领用申请审批通过后的待办同步：
+   * - 关闭该申请原有的「待审批」待办（写给审批人的，审批已处理即失效）；
+   * - 给领用人（applicant）+ 出库执行人（权限码 requisitions:outputs:confirm 配置化解析）下发待办。
+   * 幂等由 TodoService.create / completeByBusiness 保证，可在系统审批与 OA 回调两处共用。
+   */
+  private async syncApprovedRequisitionTodos(
+    tx: Prisma.TransactionClient,
+    application: {
+      draw_id: bigint;
+      draw_no: string;
+      org_id: bigint;
+      applicant_id: bigint;
+    },
+    actorUserId: string,
+  ) {
+    await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
+    // 领用人：applicant_id 为 basic_staff.id，需先映射到 hspsi_sys_user.id
+    const applicantUser =
+      application.applicant_id > 0n
+        ? await tx.hspsi_sys_user.findFirst({
+            where: { staff_id: application.applicant_id, status: 1, deleted_at: null },
+            select: { id: true },
+          })
+        : null;
+    const applicantUserId = applicantUser ? Number(applicantUser.id) : 0;
+    if (applicantUserId > 0) {
+      await this.todoService.create(
+        {
+          userId: applicantUserId,
+          organizationId: Number(application.org_id),
+          title: application.draw_no,
+          content: '领用申请已审批通过，可前往仓库办理领用',
+          businessType: 'draw_approve_output',
+          businessId: Number(application.draw_id),
+          actorUserId,
+        },
+        tx,
+      );
+    }
+    const executors = await this.todoService.resolveRecipients(
+      'requisitions:outputs:confirm',
+      Number(application.org_id),
+      tx,
+    );
+    for (const executorId of executors) {
+      if (executorId === applicantUserId) continue;
+      await this.todoService.create(
+        {
+          userId: executorId,
+          organizationId: Number(application.org_id),
+          title: application.draw_no,
+          content: '领用申请已审批通过，请办理领用出库',
+          businessType: 'draw_approve_output',
+          businessId: Number(application.draw_id),
+          actorUserId,
+        },
+        tx,
+      );
+    }
+  }
+
   async approve(id: string, approved: boolean, comment: string, userId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
       const drawId = BigInt(id);
@@ -1170,14 +1232,17 @@ export class RequisitionService {
           updated_by: BigInt(userId),
         },
       });
-      if (!approved)
+      if (!approved) {
+        await this.todoService.completeByBusiness('draw_approve', Number(drawId), tx);
         return {
           outputId: null,
           returnId: null,
           alreadyApproved: false,
           rejectedDirectOutput: false,
         };
+      }
       const output = await this.ensureAutomaticOutput(tx, drawId, userId);
+      await this.syncApprovedRequisitionTodos(tx, application, userId);
       return {
         outputId: output.draw_output_id,
         returnId: null,
@@ -1252,10 +1317,14 @@ export class RequisitionService {
         if (approved) {
           const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
           outputId = output.draw_output_id;
+          await this.syncApprovedRequisitionTodos(tx, application, '0');
+        } else {
+          await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
         }
       } else if (payload.procStatus === 'PASSED') {
         const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
         outputId = output.draw_output_id;
+        await this.syncApprovedRequisitionTodos(tx, application, '0');
       }
 
       await tx.hspsi_oa_approval_instance.update({

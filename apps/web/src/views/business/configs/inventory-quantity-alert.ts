@@ -4,7 +4,7 @@ import InventoryQuantityAlertForm from '../forms/InventoryQuantityAlertForm.vue'
 
 export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   key: 'inventory/quantity-alerts',
-  title: '数量预警',
+  title: '库存预警',
   subtitle: '按仓库监控安全库存、缺口及建议补货数量',
   endpoint: '/inventory/quantity-alerts',
   no: 'goodsName',
@@ -23,6 +23,7 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
       minWidth: 95,
       kind: 'status',
       statusDict: 'inventory_stock_health_status',
+      statusType: (row) => (row.warning ? 'danger' : 'success'),
       render: (row) => String(row.warning ? 1 : 0),
     },
   ],

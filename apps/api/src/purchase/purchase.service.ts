@@ -504,6 +504,7 @@ export class PurchaseService {
     },
     actorId?: string,
     closed = false,
+    paid = false,
   ) {
     const existing = await tx.hspsi_sys_todo.findFirst({
       where: {
@@ -519,7 +520,9 @@ export class PurchaseService {
       organization_id: Number(order.org_id),
       user_id: Number(order.receiver_id),
       title: `采购订单 ${order.po_no} 待收货`,
-      content: `请办理采购订单 ${order.po_no} 的到货及入库`,
+      content: paid
+        ? `采购订单 ${order.po_no} 已完成付款，请关注到货/收货`
+        : `请办理采购订单 ${order.po_no} 的到货及入库`,
       source_type: 'purchase_order',
       source_id: order.po_id,
       business_type: 'purchase_receipt',
@@ -1498,6 +1501,27 @@ export class PurchaseService {
         updated_by: BigInt(userId),
       },
     });
+    // 审批通过 → 给该组织下「采购经理」（权限码 purchase:applications:generate-order）下发待办，
+    // 提示生成采购订单。接收人由权限码+组织授权配置化解析，不写死角色。
+    const managerIds = await this.todoService.resolveRecipients(
+      'purchase:applications:generate-order',
+      Number(app.org_id),
+      tx,
+    );
+    for (const managerId of managerIds) {
+      await this.todoService.create(
+        {
+          userId: managerId,
+          organizationId: Number(app.org_id),
+          title: app.pur_no,
+          content: '采购申请已审批通过，请生成采购订单',
+          businessType: 'purchase_application',
+          businessId: Number(purId),
+          actorUserId: userId,
+        },
+        tx,
+      );
+    }
     return { id, message: '审批通过，请由采购人员生成采购订单' };
   }
 
@@ -1716,6 +1740,8 @@ export class PurchaseService {
         },
         userId,
       );
+      // 采购订单已生成，关闭「采购申请待生成订单」的待办
+      await this.todoService.completeByBusiness('purchase_application', Number(purId), tx);
       return {
         id: order.po_id,
         businessNo: orderNo,
@@ -4602,21 +4628,25 @@ export class PurchaseService {
         receiver_id: true,
         po_no: true,
         org_id: true,
+        created_by: true,
       },
     });
     if (!order || Number(order.status) !== 2 || Number(order.pay_status) !== 1) return;
     if (!order.receiver_id || order.receiver_id <= 0n) return;
-    await this.todoService.create(
-      {
-        userId: Number(order.receiver_id),
-        organizationId: Number(order.org_id),
-        title: order.po_no,
-        content: '采购订单已完成付款，请关注到货/收货',
-        businessType: 'purchase_order',
-        businessId: Number(poId),
-        actorUserId: String(order.receiver_id),
-      },
+    // 与「待收货」合并为同一条待办：付款完成后更新文案为「已完成付款，请关注到货/收货」
+    await this.syncPurchaseOrderTodo(
       tx,
+      {
+        po_id: poId,
+        po_no: order.po_no,
+        org_id: order.org_id,
+        receiver_id: order.receiver_id,
+        status: Number(order.status),
+        created_by: order.created_by ?? 0n,
+      },
+      String(order.receiver_id),
+      false,
+      true,
     );
   }
   async savePayment(id: string | null, body: Body, userId: string) {

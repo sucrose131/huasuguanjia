@@ -5,7 +5,7 @@ import InventoryOverflowInputForm from '../forms/InventoryOverflowInputForm.vue'
 
 export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
   key: 'inventory/overflow-inputs',
-  title: '盘盈入库单',
+  title: '报盈入库单',
   subtitle: '查看由报盈单审批生成并完成过账的独立入库记录',
   endpoint: '/inventory/overflow-inputs',
   documentType: 'inventory_overflow_input',
@@ -48,11 +48,11 @@ export const inventoryOverflowInputConfig: BusinessDocumentConfig = {
       label: '仓库',
       type: 'select',
       dependsOn: 'orgId',
+      loadOnEmptyDep: true,
       width: 180,
       loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
         return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
+          params: deps.orgId ? { orgId: deps.orgId } : {},
         })) as any[];
       },
     },

@@ -5,7 +5,7 @@ import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
 
 export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   key: 'inventory/adjustments',
-  title: '库存调整',
+  title: '库存调整记录',
   subtitle: '通过审批流程修正账面库存并保留调整依据',
   endpoint: '/inventory/adjustments',
   documentType: 'inventory_adjust',
@@ -30,17 +30,17 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       label: '仓库',
       type: 'select',
       dependsOn: 'orgId',
+      loadOnEmptyDep: true,
       width: 180,
       loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
         return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
+          params: deps.orgId ? { orgId: deps.orgId } : {},
         })) as any[];
       },
     },
   ],
   creatable: true,
-  createText: '新增调整单',
+  createText: '新增库存调整',
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryAdjustmentForm,
   openFromRoute: async (query, ctx) => {

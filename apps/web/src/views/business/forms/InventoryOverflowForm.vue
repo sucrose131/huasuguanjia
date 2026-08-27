@@ -3,8 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
-import { dateText } from '@/utils/format';
-import RemoteSelect from '@/components/RemoteSelect.vue';
+import { dateText, moneyText } from '@/utils/format';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
@@ -25,6 +25,16 @@ const options = reactive<Record<string, any>>({
 const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
+
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
+);
+const totalQty = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.quantity || 0), 0),
+);
+const totalAmount = computed(() =>
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.amount || 0), 0),
+);
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
 async function loadOrgWarehouses(orgId: unknown) {
@@ -60,12 +70,36 @@ function stockKey(stock: any) {
   return `${stock.goodsId}-${stock.skuId}-${stock.warehouseId}-${stock.batchNo ?? ''}`;
 }
 
-function lineStockOptions(line: any) {
-  return (options.stocks as any[]).filter(
-    (s) =>
-      (!line.goodsId || String(s.goodsId) === String(line.goodsId)) &&
-      (!line.skuId || String(s.skuId) === String(line.skuId)),
-  );
+function stockLabel(stock: any) {
+  return `${stock.goodsCode || ''} ${stock.goodsName} · ${stock.skuSpec || '默认规格'} · ${
+    stock.batchNo || '无批号'
+  }（库存 ${Number(stock.inventoryQty ?? 0).toLocaleString()}）`;
+}
+
+function stockIdentity(line: any) {
+  return `${line.goodsCode || '—'} ${line.goodsName || '—'} · ${line.skuSpec || '默认规格'} · ${
+    line.batchNo || '无批号'
+  }`;
+}
+
+/** 选择库存批次：一次填充商品/SKU/批次/库存/单价 */
+function selectStock(line: any, key: string) {
+  const stock = (options.stocks as any[]).find((s) => stockKey(s) === key);
+  if (!stock) return;
+  Object.assign(line, {
+    stockKey: key,
+    goodsId: stock.goodsId,
+    goodsCode: stock.goodsCode,
+    goodsName: stock.goodsName,
+    skuId: stock.skuId,
+    skuSpec: stock.skuSpec,
+    batchNo: stock.batchNo ?? '',
+    unitType: stock.unitType,
+    unitName: stock.unitName,
+    inventoryQty: Number(stock.inventoryQty ?? 0),
+    unitPrice: Number(line.unitPrice ?? stock.unitPrice ?? 0),
+  });
+  recalcLine(line);
 }
 
 function recalcLine(line: any) {
@@ -87,55 +121,6 @@ async function loadStocks() {
   options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
     () => [],
   );
-}
-
-async function searchGoodsOptions(keyword: string) {
-  // 商品选项取自按 orgId+warehouseId 加载的库存（后端已过滤仓库类型），未选仓库时为空
-  const kw = String(keyword ?? '')
-    .trim()
-    .toLowerCase();
-  const seen = new Map<string, any>();
-  for (const s of options.stocks as any[]) {
-    if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
-    if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
-  }
-  return [...seen.values()].map((s: any) => ({
-    value: s.goodsId,
-    label: `${s.goodsCode || ''} ${s.goodsName || ''}`.trim(),
-  }));
-}
-
-async function lineGoodsChanged(line: any) {
-  if (!line.goodsId) return;
-  const g: any = await api.get(`/goods/${line.goodsId}`);
-  const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
-  line.skuId = sku?.id ?? '';
-  line.unitType = sku?.unitType ?? 0;
-  line.goodsCode = g.queryCode ?? '';
-  line.goodsName = g.goodsName ?? '';
-  line.skuSpec = sku?.specModels ?? '';
-  line.stockKey = '';
-  line.batchNo = '';
-  line.inventoryQty = 0;
-  line.unitPrice = 0;
-}
-
-function lineBatchChanged(line: any) {
-  const stock = (options.stocks as any[]).find((s) => stockKey(s) === line.stockKey);
-  if (!stock) return;
-  Object.assign(line, {
-    goodsId: stock.goodsId,
-    goodsCode: stock.goodsCode,
-    goodsName: stock.goodsName,
-    skuId: stock.skuId,
-    skuSpec: stock.skuSpec,
-    batchNo: stock.batchNo,
-    unitType: stock.unitType,
-    unitName: stock.unitName,
-    inventoryQty: Number(stock.inventoryQty ?? 0),
-    unitPrice: Number(stock.unitPrice ?? 0),
-  });
-  recalcLine(line);
 }
 
 function addLine() {
@@ -240,10 +225,10 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
-      <el-form-item v-if="form.sourceCheckNo" label="来源盘点" class="span-2">
+      <el-form-item v-if="form.sourceCheckNo" label="来源盘点单" class="span-2">
         <el-input :model-value="form.sourceCheckNo" disabled />
       </el-form-item>
-      <el-form-item label="单据类型">
+      <el-form-item label="报盈类型">
         <el-select v-model="form.documentType" :disabled="isView">
           <el-option
             v-for="item in dicts.inventory_overflow_type || []"
@@ -253,9 +238,14 @@ onMounted(async () => {
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="所属组织" required>
-        <el-select
+      <el-form-item label="组织" prop="orgId">
+        <el-tree-select
           v-model="form.orgId"
+          :data="organizationTree"
+          filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           :disabled="isView"
           @change="
             form.warehouseId = '';
@@ -263,11 +253,9 @@ onMounted(async () => {
             loadOrgWarehouses(form.orgId);
             loadStocks();
           "
-        >
-          <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
+        />
       </el-form-item>
-      <el-form-item label="仓库" required>
+      <el-form-item label="仓库" prop="warehouseId">
         <el-select
           v-model="form.warehouseId"
           filterable
@@ -304,13 +292,13 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="经办人">
-        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+        <el-input :model-value="form.operatorName" disabled />
       </el-form-item>
       <el-form-item label="原因" required class="span-2">
-        <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />
+        <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
       <el-form-item label="备注" class="span-2">
-        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
+        <el-input v-model="form.remark" :disabled="isView" />
       </el-form-item>
     </div>
 
@@ -319,44 +307,43 @@ onMounted(async () => {
       <el-button v-if="!isView" link type="primary" @click="addLine">+ 添加明细</el-button>
     </div>
     <el-table :data="form.details ?? []" border size="small">
-      <el-table-column label="商品" min-width="210">
+      <el-table-column label="商品 / SKU / 批次" min-width="300">
         <template #default="s">
-          <RemoteSelect
-            v-if="!isView"
-            v-model="s.row.goodsId"
-            :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="isView || !form.warehouseId"
-            placeholder="请先选择仓库，再搜索库存商品"
-            @change="lineGoodsChanged(s.row)"
-          />
-          <span v-else>{{ s.row.goodsName || s.row.goodsId || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="批号" min-width="200">
-        <template #default="s">
+          <span v-if="isView" class="readonly-cell">{{ stockIdentity(s.row) }}</span>
           <el-select
-            v-if="!isView"
+            v-else
             v-model="s.row.stockKey"
             filterable
-            placeholder="选择库存批次"
-            @change="lineBatchChanged(s.row)"
+            :disabled="!form.warehouseId"
+            placeholder="请先选择仓库，再选择库存批次"
+            @change="selectStock(s.row, $event)"
           >
             <el-option
-              v-for="x in lineStockOptions(s.row)"
-              :key="stockKey(x)"
-              :label="`${x.batchNo || '无批号'} · 库存 ${x.inventoryQty}`"
-              :value="stockKey(x)"
+              v-for="stock in options.stocks ?? []"
+              :key="stockKey(stock)"
+              :label="stockLabel(stock)"
+              :value="stockKey(stock)"
             />
           </el-select>
-          <span v-else>{{ s.row.batchNo || '无批号' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="当前库存" width="95">
+      <el-table-column label="单位" width="70">
+        <template #default="s">{{ s.row.unitName || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="当前库存" width="95" align="right">
         <template #default="s">{{ Number(s.row.inventoryQty ?? 0).toLocaleString() }}</template>
+      </el-table-column>
+      <el-table-column label="报盈数量" width="145">
+        <template #default="s">
+          <el-input-number
+            v-model="s.row.quantity"
+            :min="1"
+            :precision="0"
+            :step="1"
+            :disabled="isView"
+            @change="recalcLine(s.row)"
+          />
+        </template>
       </el-table-column>
       <el-table-column label="单价" width="130">
         <template #default="s">
@@ -369,32 +356,27 @@ onMounted(async () => {
           />
         </template>
       </el-table-column>
-      <el-table-column label="数量" width="130">
-        <template #default="s">
-          <el-input-number
-            v-model="s.row.quantity"
-            :min="1"
-            :precision="0"
-            :step="1"
-            :disabled="isView"
-            @change="recalcLine(s.row)"
-          />
-        </template>
+      <el-table-column label="金额" width="100" align="right">
+        <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
       </el-table-column>
-      <el-table-column label="金额" width="110">
-        <template #default="s">{{
-          Number(s.row.amount ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
-        }}</template>
+      <el-table-column prop="batchNo" label="批号" width="125">
+        <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
       </el-table-column>
-      <el-table-column label="备注" min-width="130">
-        <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
-      </el-table-column>
-      <el-table-column v-if="!isView" label="" width="60">
+      <el-table-column v-if="!isView" label="" width="70">
         <template #default="s">
           <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <div v-if="(form.details ?? []).length" class="modal-totals">
+      <span
+        >合计数量
+        <strong>{{
+          totalQty.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+        }}</strong></span
+      ><span>合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span>
+    </div>
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>

@@ -44,6 +44,8 @@ export type QueryField = {
   optionBag?: OptionBagName;
   /** 依赖字段：该字段值变化时，清空本字段值并重新加载选项、重新查询（如 仓库 依赖 组织） */
   dependsOn?: string;
+  /** 依赖字段为空时也加载选项（配合 loadOptions：不选组织时默认加载授权组织下的仓库，选中后收窄） */
+  loadOnEmptyDep?: boolean;
   /** 动态选项加载（走后端）：返回 {value,label,raw?}[]，优先于 optionBag/options/dictionary；常用于按依赖字段过滤的选项 */
   loadOptions?: (deps: Record<string, any>) => Promise<Array<{ value: string | number; label: string; raw?: any }>>;
   /** 远程搜索（remote-select 用）：返回 {value,label}[] */
@@ -78,6 +80,11 @@ export type RowAction = {
   permission?: string;
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
+  /**
+   * handler 完成后是否刷新列表。默认 true；调用 ctx.openCreate/openEdit/openView/navigate
+   * 时共享引擎会自动跳过刷新。仅供不经过 ctx 打开的只读自定义弹框显式设为 false。
+   */
+  refreshAfter?: boolean;
 };
 
 /** 引擎上下文（传给表单组件 / 行操作） */
@@ -136,6 +143,8 @@ export type BusinessDocumentConfig = {
   viewCloseInForm?: boolean;
   /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
   loadDetail?: (id: string | number) => Promise<Record<string, any>>;
+  /** 表单实际读取详情的接口前缀；缺省与 endpoint 相同。 */
+  detailEndpoint?: string;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */
   openFromRoute?: (
     query: Record<string, any>,

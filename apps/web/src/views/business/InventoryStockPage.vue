@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { api } from '@/api';
-import { dateText } from '@/utils/format';
+import { api } from '@/api';import { dateText, moneyText } from '@/utils/format';
 import { canPageAction } from '@/utils/permission';
 import { useAuthStore } from '@/stores/auth';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import TableRowActions from '@/components/business/TableRowActions.vue';
-import StatusTag from '@/components/StatusTag.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import InventoryQuickAdjustDialog from '@/components/inventory/InventoryQuickAdjustDialog.vue';
 
 type Row = Record<string, any>;
@@ -65,17 +64,7 @@ const stockReceivers = computed(() =>
 );
 
 function quantity(value: unknown) {
-  const n = Number(value);
-  return value === null || value === undefined || value === '' || Number.isNaN(n)
-    ? '—'
-    : n.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
-}
-function money(value: unknown) {
-  const n = Number(value);
-  if (value === null || value === undefined || value === '' || Number.isNaN(n)) return '—';
-  const level = localStorage.getItem('hspsi_amount_access') ?? 'none';
-  if (!['view', 'edit'].includes(level)) return '****';
-  return `¥ ${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
 }
 
 function params() {
@@ -105,9 +94,7 @@ async function loadWarehouseTabs(orgId: unknown) {
     : [];
 }
 function warehouseTabCount(item: any) {
-  const key = String(item.value);
-  if (stockView.value === 'requisition') return total;
-  return rows.value.filter((r: Row) => String(r.warehouseId) === key).length;
+  return Number(item.count ?? 0);
 }
 
 async function load() {
@@ -237,6 +224,9 @@ onMounted(async () => {
         <h2>库存查询</h2>
         <p class="page-subtitle">按仓库查看即时库存、库存金额及可追溯流水</p>
       </div>
+      <div class="page-actions">
+        <el-button @click="load">刷新</el-button>
+      </div>
     </header>
 
     <div class="panel">
@@ -275,7 +265,7 @@ onMounted(async () => {
           </div>
           <div class="summary-item">
             <span class="summary-label">库存总值</span
-            ><strong class="summary-value">{{ money(summary.totalAmount) }}</strong>
+            ><strong class="summary-value">¥ {{ moneyText(summary.totalAmount) }}</strong>
           </div>
           <div class="summary-item">
             <span class="summary-label">库存预警</span
@@ -305,8 +295,7 @@ onMounted(async () => {
       <div v-if="stockScopeReady && stockView === 'inventory'" class="warehouse-tabs">
         <button :class="{ active: !query.warehouseId }" @click="selectWarehouse('')">
           全部 <span>{{ summary.itemCount || total }}</span>
-        </button>
-        <button
+        </button>        <button
           v-for="item in options.warehouseTabs"
           :key="item.value"
           :class="{ active: String(query.warehouseId) === String(item.value) }"
@@ -373,8 +362,10 @@ onMounted(async () => {
       </div>
 
       <div v-if="stockScopeReady" class="table-wrap">
-        <el-table :data="rows" v-loading="loading" border stripe row-key="id">
+        <el-table :data="rows" v-loading="loading" border row-key="id">
           <template v-if="stockView === 'inventory'">
+            <el-table-column type="index" label="序号" width="58" />
+            <el-table-column prop="id" label="ID" width="100" />
             <el-table-column prop="goodsCode" label="商品编码" width="125" />
             <el-table-column prop="goodsName" label="商品名称" min-width="150" />
             <el-table-column prop="skuSpec" label="规格" min-width="120" />
@@ -390,14 +381,16 @@ onMounted(async () => {
               <template #default="s">{{ quantity(s.row.outputQty) }}</template>
             </el-table-column>
             <el-table-column label="单位成本" width="100" align="right">
-              <template #default="s">{{ money(s.row.unitCost) }}</template>
+              <template #default="s">¥ {{ moneyText(s.row.unitCost) }}</template>
             </el-table-column>
             <el-table-column label="库存金额" width="110" align="right">
-              <template #default="s">{{ money(s.row.inventoryAmount) }}</template>
+              <template #default="s">¥ {{ moneyText(s.row.inventoryAmount) }}</template>
             </el-table-column>
             <el-table-column label="库存状态" width="90">
               <template #default="s">
-                <StatusTag :value="Number(s.row.inventoryQty) > 0 ? '正常' : '无库存'" />
+                <el-tag :type="Number(s.row.inventoryQty) > 0 ? 'success' : 'info'">{{
+                  s.row.inventoryStatus
+                }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="132" fixed="right" align="center">
@@ -441,7 +434,17 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="归还状态" width="95" fixed="right">
               <template #default="s">
-                <StatusTag :value="s.row.holdingStatusName || '—'" />
+                <el-tag
+                  :type="
+                    !s.row.returnable
+                      ? 'info'
+                      : Number(s.row.remainingQty) > 0
+                        ? 'warning'
+                        : 'success'
+                  "
+                  effect="plain"
+                  >{{ s.row.holdingStatusName }}</el-tag
+                >
               </template>
             </el-table-column>
           </template>
@@ -455,9 +458,9 @@ onMounted(async () => {
           v-model:page-size="query.pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="load"
-          @size-change="query.page = 1; load()"
+          :teleported="false"
+          layout="prev, pager, next, sizes"
+          @change="load"
         />
       </div>
     </div>
@@ -486,36 +489,36 @@ onMounted(async () => {
       </el-table>
     </div>
 
-    <el-dialog v-model="ledgerDialog" :title="ledgerContext.title" width="1120px" top="5vh">
-      <p class="muted" style="margin: 0 0 12px">{{ ledgerContext.subtitle }}</p>
-      <el-table :data="ledger" border size="small" max-height="460">
-        <el-table-column label="时间" width="155">
+    <el-dialog v-model="ledgerDialog" :title="ledgerContext.title" width="1080px">
+      <p class="dialog-subtitle">{{ ledgerContext.subtitle }}</p>
+      <el-table :data="ledger" border>
+        <el-table-column label="发生时间" width="150">
           <template #default="s">{{ dateText(s.row.createdAt, true) }}</template>
         </el-table-column>
-        <el-table-column label="操作类型" min-width="110">
-          <template #default="s">{{ s.row.operationTypeName || s.row.operationType || '—' }}</template>
-        </el-table-column>
         <el-table-column label="业务模式/单据类型" width="150">
-          <template #default="s">{{ s.row.businessModeName || s.row.sourceType || '—' }}</template>
+          <template #default="s">{{ s.row.businessModeName || s.row.sourceType }}</template>
         </el-table-column>
-        <el-table-column label="入库" width="90" align="right">
+        <el-table-column prop="sourceNo" label="来源单号" width="145" />
+        <el-table-column label="入库数量" width="90" align="right">
           <template #default="s">{{ quantity(s.row.inputQty) }}</template>
         </el-table-column>
-        <el-table-column label="出库" width="90" align="right">
+        <el-table-column label="出库数量" width="90" align="right">
           <template #default="s">{{ quantity(s.row.outputQty) }}</template>
         </el-table-column>
-        <el-table-column label="结存" width="95" align="right">
+        <el-table-column label="变动后库存" width="105" align="right">
           <template #default="s">{{ quantity(s.row.afterQty) }}</template>
         </el-table-column>
-        <el-table-column prop="sourceNo" label="来源单号" min-width="140" />
-        <el-table-column label="批号" width="120">
-          <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
-        </el-table-column>
+        <el-table-column prop="batchNo" label="批号" width="120" />
         <el-table-column prop="operatorName" label="操作人" width="90" />
-        <el-table-column label="备注" min-width="140" show-overflow-tooltip>
-          <template #default="s">{{ s.row.remark || '—' }}</template>
+        <el-table-column label="备注" min-width="140">
+          <template #default="s">
+            <OverflowTooltipCell :content="s.row.remark || '—'">{{
+              s.row.remark || '—'
+            }}</OverflowTooltipCell>
+          </template>
         </el-table-column>
       </el-table>
+      <template #footer><el-button @click="ledgerDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <InventoryQuickAdjustDialog ref="quickAdjustDialog" @saved="load" />

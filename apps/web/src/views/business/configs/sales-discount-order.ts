@@ -20,6 +20,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
   key: 'sales/discount-orders',
   title: '折价销售单',
   endpoint: '/sales/discount-orders',
+  detailEndpoint: '/sales/orders',
   no: 'orderNo',
   columns: [
     { prop: 'orderNo', label: '折价销售单号', minWidth: 165, tooltip: true },

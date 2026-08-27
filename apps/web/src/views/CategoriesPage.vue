@@ -6,6 +6,7 @@ import SummaryStrip from '@/components/SummaryStrip.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, display } from '@/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { canPageAction } from '@/utils/permission';
@@ -241,8 +242,12 @@ onMounted(async () => {
           <el-table-column label="仓库类型" width="110">
             <template #default="s">{{ dict(warehouseTypes, s.row.warehouseType) }}</template>
           </el-table-column>
-          <el-table-column label="关联属性" min-width="190" show-overflow-tooltip>
-            <template #default="s">{{ s.row.propertyNames?.join('、') || '—' }}</template>
+          <el-table-column label="关联属性" min-width="190">
+            <template #default="s">
+              <OverflowTooltipCell :content="s.row.propertyNames?.join('、') || '—'">{{
+                s.row.propertyNames?.join('、') || '—'
+              }}</OverflowTooltipCell>
+            </template>
           </el-table-column>
           <el-table-column prop="propertyCount" label="属性数" width="80" />
           <el-table-column prop="goodsCount" label="商品数" width="80" />

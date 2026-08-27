@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api } from '@/api';
+import { api, primeDetailHandoff } from '@/api';
 import { moneyText } from '@/utils/format';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
@@ -10,6 +10,7 @@ import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.v
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { useBusinessDocumentPermissions } from './use-business-document-permissions';
 import { useBusinessDocumentOptions } from './use-business-document-options';
 import type {
@@ -156,13 +157,25 @@ function displayCell(
   return String(value);
 }
 
-// 金额：无查看权限掩码，有权限加 ¥ 前缀
+// 金额：无查看权限时仍带 ¥ 前缀掩码（对齐旧版「¥ ****」），有权限加 ¥ 前缀
 const protectedMoney = (value: unknown) => {
   const text = moneyText(value);
-  return text === '****' ? text : `¥ ${text}`;
+  return text === '****' ? '¥ ****' : `¥ ${text}`;
 };
 
+let openingFromRoute = false;
+
+function handoffResolvedDetail(row: Record<string, any>) {
+  if (row.id == null) return;
+  const endpoint = props.config.detailEndpoint ?? props.config.endpoint;
+  primeDetailHandoff(`${endpoint}/${row.id}`, row);
+}
+
 async function runAction(action: RowAction, row: Record<string, any>) {
+  // 打开弹框或跨页跳转属于只读/界面操作，不应在操作完成后刷新当前列表。
+  // 使用递增序号记录 handler 是否触发了这类交互；真正修改业务数据的 action
+  // 沿用成功后刷新，避免 100+ 份业务配置各自重复声明刷新规则。
+  const interactionVersionBefore = interactionVersion;
   try {
     if (action.verify) {
       const problem = await action.verify(row);
@@ -185,7 +198,9 @@ async function runAction(action: RowAction, row: Record<string, any>) {
       });
     }
     await action.handler(row, ctx);
-    await load();
+    if (action.refreshAfter !== false && interactionVersion === interactionVersionBefore) {
+      await load();
+    }
   } catch (error) {
     const action =
       typeof error === 'object' && error && 'action' in error
@@ -209,7 +224,10 @@ const moreActions = (row: Record<string, any>) =>
 const hasMoreActions = (row: Record<string, any>) =>
   moreActions(row).length > 0 || Boolean(slots['more-actions']) || Boolean(props.config.documentType);
 
+let interactionVersion = 0;
+
 function openCreate(initial: Record<string, any> = {}) {
+  interactionVersion += 1;
   formMode.value = 'create';
   form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
   formDialog.value = true;
@@ -226,11 +244,17 @@ async function resolveDetail(row: Record<string, any>) {
   }
 }
 async function openEdit(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'edit';
   form.value = await resolveDetail(row);
   formDialog.value = true;
 }
 async function openView(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'view';
   form.value = await resolveDetail(row);
   formDialog.value = true;
@@ -245,6 +269,7 @@ const ctx: BusinessDocumentContext = {
   openEdit,
   openView,
   navigate: async (path, query) => {
+    interactionVersion += 1;
     await router.push({ path, query });
   },
 };
@@ -262,7 +287,8 @@ watch(
     await loadOptionBags();
     // 深链/回显场景：依赖字段已有值时先加载下游选项
     for (const field of props.config.queryFields ?? []) {
-      if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+      if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+        await loadFieldOptions(field);
     }
     await load();
   },
@@ -273,7 +299,8 @@ onMounted(async () => {
   await loadOptionBags();
   // 深链/回显场景：依赖字段已有值时先加载下游选项
   for (const field of props.config.queryFields ?? []) {
-    if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+    if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+      await loadFieldOptions(field);
   }
   await load();
   if (String(route.query.create ?? '') === '1') {
@@ -281,7 +308,12 @@ onMounted(async () => {
     delete initial.create;
     openCreate(initial);
   } else if (props.config.openFromRoute && Object.keys(route.query).length) {
-    await props.config.openFromRoute(route.query, ctx);
+    openingFromRoute = true;
+    try {
+      await props.config.openFromRoute(route.query, ctx);
+    } finally {
+      openingFromRoute = false;
+    }
   }
 });
 </script>
@@ -294,6 +326,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle || '真实业务数据、来源追溯与库存事务处理' }}</p>
       </div>
       <div class="page-actions">
+        <el-button @click="load">刷新</el-button>
         <slot name="page-actions" :refresh="load" :open-create="openCreate" />
         <el-button
           v-if="canCreate"
@@ -400,9 +433,9 @@ onMounted(async () => {
       </div>
 
       <div class="table-wrap">
-        <el-table :data="rows" v-loading="loading" border stripe row-key="id">
-          <el-table-column type="index" label="序号" width="65" fixed="left" />
-          <el-table-column prop="id" label="ID" width="100" fixed="left" />
+        <el-table :data="rows" v-loading="loading" border row-key="id">
+          <el-table-column type="index" label="序号" width="58" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column
             v-for="column in config.columns"
             :key="column.prop"
@@ -410,7 +443,6 @@ onMounted(async () => {
             :width="column.width"
             :min-width="column.minWidth"
             :align="column.align"
-            :show-overflow-tooltip="column.tooltip"
           >
             <template #default="s">
               <button
@@ -431,7 +463,17 @@ onMounted(async () => {
                 :value="column.statusDict && column.render ? displayCell(s.row, column) : s.row[column.prop]"
                 :dict-code="column.statusDict"
                 :label="column.render && !column.statusDict ? displayCell(s.row, column) : undefined"
+                :type="
+                  typeof column.statusType === 'function'
+                    ? column.statusType(s.row)
+                    : column.statusType
+                "
               />
+              <OverflowTooltipCell
+                v-else-if="column.tooltip"
+                :content="displayCell(s.row, column)"
+                >{{ displayCell(s.row, column) }}</OverflowTooltipCell
+              >
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
           </el-table-column>
@@ -486,9 +528,9 @@ onMounted(async () => {
           v-model:page-size="query.pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="load"
-          @size-change="query.page = 1; load()"
+          :teleported="false"
+          layout="prev, pager, next, sizes"
+          @change="load"
         />
       </div>
     </div>
