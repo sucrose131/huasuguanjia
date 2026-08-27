@@ -28,7 +28,17 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   ],
   dictionaries: ['inventory_stock_health_status'],
   optionBags: ['orgs'],
-  queryFields: [{ key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 }],
+  autoStatusFilter: false,
+  queryFields: [
+    { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
+    {
+      key: 'status',
+      label: '库存状态',
+      type: 'select',
+      dictionary: 'inventory_stock_health_status',
+      width: 160,
+    },
+  ],
   summaryLabels: [
     { label: '库存品项', key: 'itemCount', kind: 'number' },
     { label: '库存总值', key: 'totalAmount', kind: 'money' },

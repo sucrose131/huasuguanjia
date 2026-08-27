@@ -54,6 +54,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
+      primary: false,
       show: (row) =>
         !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? '')) &&
         Number(row.confirmStatus ?? row.comfirm_status) !== 1 &&
@@ -63,6 +64,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'analyze',
       label: '缺口分析',
+      primary: false,
       show: (row) => Number(row.propertyType) === 1 && Number(row.orderStatus) === 1,
       confirm: '按未分配/未计划数量生成生产计划缺口，是否继续？',
       handler: async (row) => {
@@ -111,6 +113,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'return',
       label: '发起退货',
       permission: 'sales:returns:create',
+      primary: false,
       show: (row) => Number(row.deliveryQty ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/returns', { create: '1', orderId: String(row.id) }),
@@ -119,6 +122,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       key: 'service',
       label: '登记售后',
       permission: 'sales:services:create',
+      primary: false,
       show: (row) => Number(row.deliveryQty ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/services', { create: '1', orderId: String(row.id) }),
