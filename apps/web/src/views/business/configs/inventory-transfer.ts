@@ -5,7 +5,7 @@ import InventoryTransferForm from '../forms/InventoryTransferForm.vue';
 
 export const inventoryTransferConfig: BusinessDocumentConfig = {
   key: 'inventory/transfers',
-  title: '库存调拨',
+  title: '库存调拨单',
   subtitle: '同类型仓库之间的双边库存调拨与审批',
   endpoint: '/inventory/transfers',
   documentType: 'inventory_transfer',
@@ -45,7 +45,7 @@ export const inventoryTransferConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: true,
-  createText: '新增调拨单',
+  createText: '新增库存调拨单',
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryTransferForm,
   openFromRoute: async (query, ctx) => {

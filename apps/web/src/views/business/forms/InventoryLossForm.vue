@@ -188,7 +188,7 @@ function removeLine(index: number) {
   form.value.details.splice(index, 1);
 }
 
-function validate() {
+function validate(submit = false) {
   if (!form.value.orgId || !form.value.warehouseId) {
     ElMessage.warning('请选择所属组织和仓库');
     return false;
@@ -198,7 +198,11 @@ function validate() {
     return false;
   }
   // 报损出库单（businessKind=2）提交前必须明确选择直接报废、折价出售或退货
-  if (Number(form.value.businessKind) === 2 && !String(form.value.goWhere ?? '').trim()) {
+  if (
+    submit &&
+    Number(form.value.businessKind) === 2 &&
+    !String(form.value.goWhere ?? '').trim()
+  ) {
     ElMessage.warning('报损出库单提交前必须选择直接报废、折价出售或退货');
     return false;
   }
@@ -229,7 +233,7 @@ function validate() {
 }
 
 async function save(submit = false) {
-  if (!validate()) return;
+  if (!validate(submit)) return;
   saving.value = true;
   try {
     const url = '/inventory/losses';
@@ -330,7 +334,7 @@ onMounted(async () => {
           "
         />
       </el-form-item>
-      <el-form-item label="仓库" required>
+      <el-form-item label="仓库" prop="warehouseId">
         <el-select
           v-model="form.warehouseId"
           filterable
@@ -397,7 +401,7 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="经办人">
-        <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
+        <el-input :model-value="form.operatorName" disabled />
       </el-form-item>
       <el-form-item label="备注" class="span-all">
         <el-input v-model="form.remark" :disabled="isView" />
@@ -407,7 +411,7 @@ onMounted(async () => {
     <div class="details-header">
       <span class="details-title">商品明细</span>
     </div>
-    <el-table :data="form.details ?? []" border table-layout="fixed" empty-text="暂无明细">
+    <el-table :data="form.details ?? []" border table-layout="fixed" size="small" empty-text="暂无明细">
       <el-table-column label="商品 / SKU / 批次" min-width="300">
         <template #default="s">
           <span v-if="isView" class="readonly-cell">{{ stockIdentity(s.row) }}</span>
@@ -454,8 +458,11 @@ onMounted(async () => {
           />
         </template>
       </el-table-column>
-      <el-table-column label="金额" width="100">
+      <el-table-column label="金额" width="100" align="right">
         <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
+      </el-table-column>
+      <el-table-column prop="batchNo" label="批号" width="125">
+        <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
       </el-table-column>
       <el-table-column prop="batchNo" label="批号" width="125" />
       <el-table-column v-if="Number(form.goWhere) === 2" label="原采购入库来源" min-width="220">

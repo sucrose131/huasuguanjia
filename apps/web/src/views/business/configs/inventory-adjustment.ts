@@ -5,7 +5,7 @@ import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
 
 export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   key: 'inventory/adjustments',
-  title: '库存调整',
+  title: '库存调整记录',
   subtitle: '通过审批流程修正账面库存并保留调整依据',
   endpoint: '/inventory/adjustments',
   documentType: 'inventory_adjust',
@@ -40,7 +40,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: true,
-  createText: '新增调整单',
+  createText: '新增库存调整',
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryAdjustmentForm,
   openFromRoute: async (query, ctx) => {

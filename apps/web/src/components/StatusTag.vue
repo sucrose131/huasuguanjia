@@ -8,6 +8,8 @@ const props = defineProps<{
   dictCode?: string;
   label?: string;
   options?: Array<{ value: string | number; label: string }>;
+  /** 显式标签类型（如旧版库存状态列的 danger），缺省按 label 正则推导 */
+  type?: TagType;
 }>();
 const loadedOptions = ref<Array<{ value: string | number; label: string }>>([]);
 async function loadDefaultDictionary() {
@@ -29,7 +31,7 @@ const state = computed(() => {
   else if (/启用|正常|通过|已审批|已确认|已完成|已入库|已出库|已收款|已退款|充足/.test(label))
     type = 'success';
   else if (/进行中|生产中/.test(label)) type = 'primary';
-  return { label, type };
+  return { label, type: props.type ?? type };
 });
 </script>
 <template>
