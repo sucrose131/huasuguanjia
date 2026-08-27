@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue';
 import { api } from '@/api';
+import { buildOrganizationTree } from '@/utils/organization-tree';
 import type { BusinessDocumentConfig, OptionBagName, QueryField } from './business-document-config';
 
 const OPTION_BAG_ENDPOINTS: Record<OptionBagName, string> = {
@@ -28,17 +29,7 @@ export function useBusinessDocumentOptions(
     return code ? (dicts[code] ?? []) : [];
   });
 
-  const organizationTree = computed(() => {
-    const build = (items: any[], parentId?: string): any[] =>
-      items
-        .filter((item: any) => (item.raw?.parentId ?? item.parentId ?? null) === (parentId ?? null))
-        .map((item: any) => ({
-          value: item.value,
-          label: item.label,
-          children: build(items, item.value),
-        }));
-    return build(options.orgs ?? []);
-  });
+  const organizationTree = computed(() => buildOrganizationTree(options.orgs ?? []));
 
   const fieldOptions = (field: QueryField) => {
     if (field.dependsOn) return dynamicOptions[field.key] ?? [];
