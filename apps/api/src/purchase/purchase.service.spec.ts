@@ -7,7 +7,11 @@ function serviceWith(
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
   message: Record<string, any> = { sendPurchaseReceiptNotification: vi.fn() },
 ) {
-  const todoService = { create: vi.fn().mockResolvedValue({ created: true }) };
+  const todoService = {
+    create: vi.fn().mockResolvedValue({ created: true }),
+    completeByBusiness: vi.fn().mockResolvedValue(0),
+    resolveRecipients: vi.fn().mockResolvedValue([]),
+  };
   const service = new PurchaseService(
     prisma as never,
     { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
@@ -1144,6 +1148,79 @@ describe('PurchaseService production-shortage guards', () => {
     expect(result.message).toBe('审批通过，请由采购人员生成采购订单');
   });
 
+  it('审批通过后按权限码给采购经理下发「生成采购订单」待办', async () => {
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const applicationLines = [
+      { goods_id: 10n, sku_id: 11n, qty: 2, unit_type: 1, reference_price: 5, remark: '' },
+    ];
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          pur_id: 7n,
+          pur_no: 'PA7',
+          org_id: 1n,
+          dept_id: 0n,
+          warehouse_id: 3n,
+          status: 1,
+          approve_status: 0,
+          source_type: 'production_plan',
+          remark: '',
+        }),
+        update: vi.fn(),
+      },
+      hspsi_basic_organization: { findFirst: vi.fn().mockResolvedValue({ org_id: 1n }) },
+      hspsi_basic_dept: {
+        findFirst: vi.fn().mockResolvedValueOnce({ dept_id: 2n }).mockResolvedValue({ org_id: 1n }),
+      },
+      hspsi_basic_warehouse: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 1n, name: '成品一仓', warehouse_type: 1 }),
+      },
+      hspsi_goods_info: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ goods_id: 10n, goods_name: '测试商品', goods_catg_id: 30n }]),
+      },
+      hspsi_goods_info_category: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ goods_catg_id: 30n, goods_name: '成品', warehouse_type: 1 }]),
+      },
+      hspsi_purchase_approve_detail: {
+        findMany: vi.fn().mockResolvedValueOnce(applicationLines).mockResolvedValueOnce([]),
+      },
+      hspsi_purchase_order: { count: vi.fn().mockResolvedValue(0), create: vi.fn() },
+      hspsi_purchase_order_detail: { createMany: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    const todoService = service.__todoService;
+    (todoService.resolveRecipients as ReturnType<typeof vi.fn>).mockResolvedValue([1, 2]);
+
+    await service.approveApplication('7', true, '', '9');
+
+    // 接收人按「权限码 + 组织授权」配置化解析，不写死角色
+    expect(todoService.resolveRecipients).toHaveBeenCalledWith(
+      'purchase:applications:generate-order',
+      1,
+      tx,
+    );
+    expect(todoService.create).toHaveBeenCalledTimes(2);
+    for (const call of todoService.create.mock.calls as any[]) {
+      expect(call[0]).toMatchObject({
+        organizationId: 1,
+        title: 'PA7',
+        content: '采购申请已审批通过，请生成采购订单',
+        businessType: 'purchase_application',
+        businessId: 7,
+      });
+      expect(call[1]).toBe(tx);
+    }
+  });
+
   it('generates selected application lines using total amount as the authoritative price', async () => {
     const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
     const detailCreate = vi.fn();
@@ -1228,6 +1305,12 @@ describe('PurchaseService production-shortage guards', () => {
         status: 1,
       }),
       '9',
+    );
+    // 采购订单已生成 → 关闭「采购申请待生成订单」待办
+    expect((service as any).__todoService.completeByBusiness).toHaveBeenCalledWith(
+      'purchase_application',
+      7,
+      tx,
     );
     expect(result).toEqual(
       expect.objectContaining({ id: 30n, totalAmount: new Prisma.Decimal(100) }),
@@ -1657,9 +1740,26 @@ describe('PurchaseService paid order todo notification', () => {
           receiver_id: 5n,
           pay_amout: new Prisma.Decimal(21),
         }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'CG202608260001',
+          org_id: 9n,
+          status: 2,
+          receiver_id: 5n,
+          created_by: 9n,
+        }),
         update: vi.fn(),
       },
+      hspsi_sys_todo: {
+        findFirst: vi.fn().mockResolvedValue({ id: 1, source_type: 'purchase_order' }),
+        update: vi.fn(),
+        create: vi.fn(),
+      },
       hspsi_purchase_order_detail: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_order_input: {
+        findMany: vi.fn().mockResolvedValue([]),
+        count: vi.fn().mockResolvedValue(0),
+      },
       hspsi_purchase_order_input_exit: { findMany: vi.fn().mockResolvedValue([]) },
       hspsi_purchase_order_payment: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -1677,13 +1777,14 @@ describe('PurchaseService paid order todo notification', () => {
     return tx;
   }
 
-  it('writes a todo to the receiver when payment completes on a purchasing (status=2) order', async () => {
+  it('付款完成时把「待收货」待办更新为“已完成付款”，与待收货合并为同一条（不再重复写 purchase_order 待办）', async () => {
     const tx = paymentTx();
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = serviceWith(prisma) as any;
-    const todoService = service.__todoService;
+    (service.syncPurchaseOrderTodo as ReturnType<typeof vi.fn>).mockRestore();
+    (service.recalcOrderStatus as ReturnType<typeof vi.fn>).mockRestore();
 
     await service.savePayment(
       null,
@@ -1697,39 +1798,40 @@ describe('PurchaseService paid order todo notification', () => {
       '9',
     );
 
-    expect(todoService.create).toHaveBeenCalledTimes(1);
-    expect(todoService.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 5,
-        organizationId: 9,
-        title: 'CG202608260001',
-        content: '采购订单已完成付款，请关注到货/收货',
-        businessType: 'purchase_order',
-        businessId: 20,
-      }),
-      tx,
-    );
+    // 待收货（recalcOrderStatus）与已付款（ensurePurchasePaidTodo）都更新同一条 hspsi_sys_todo
+    const updates = (tx.hspsi_sys_todo.update.mock.calls as any[]).map((call) => call[0].data);
+    expect(updates.some((data) => data.content.includes('已完成付款'))).toBe(true);
+    expect(updates.some((data) => data.content.includes('到货及入库'))).toBe(true);
+    expect(
+      updates.every(
+        (data) =>
+          data.user_id === 5 && data.business_type === 'purchase_receipt' && data.business_id === 20n,
+      ),
+    ).toBe(true);
+    // 不再给同一订单写第二条 purchase_order 类型的待办
+    const serviceTodoCalls = (service.__todoService.create as ReturnType<typeof vi.fn>).mock.calls;
+    expect(serviceTodoCalls.some((call) => call[0]?.businessType === 'purchase_order')).toBe(false);
   });
 
-  it('writes a todo after startOrder when payment was already completed before purchasing', async () => {
-    // 直接验证私有方法：订单已采购中(status=2)且付款完成(pay_status=1) → 写 todo
+  it('startOrder 时若订单已完成付款，同样把待办文案更新为“已完成付款”', async () => {
     const tx = paymentTx();
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = serviceWith(prisma) as any;
-    const todoService = service.__todoService;
 
+    (service.syncPurchaseOrderTodo as ReturnType<typeof vi.fn>).mockRestore();
     await service.ensurePurchasePaidTodo(tx, 20n);
 
-    expect(todoService.create).toHaveBeenCalledTimes(1);
-    expect(todoService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 5, businessType: 'purchase_order', businessId: 20 }),
-      tx,
-    );
+    expect(tx.hspsi_sys_todo.update).toHaveBeenCalledTimes(1);
+    const data = (tx.hspsi_sys_todo.update.mock.calls[0] as any[])[0].data;
+    expect(data.content).toBe('采购订单 CG202608260001 已完成付款，请关注到货/收货');
+    expect(data.user_id).toBe(5);
+    expect(data.business_type).toBe('purchase_receipt');
+    expect(data.business_id).toBe(20n);
   });
 
-  it('does not write a todo when the order is still pending (status=1) or unpaid', async () => {
+  it('订单未采购中（status=1）或未付款时不写“已完成付款”待办', async () => {
     const tx = paymentTx({
       hspsi_purchase_order: {
         findFirst: vi.fn().mockResolvedValue({
@@ -1741,6 +1843,14 @@ describe('PurchaseService paid order todo notification', () => {
           receiver_id: 7n,
           pay_amout: new Prisma.Decimal(100),
         }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          po_id: 22n,
+          po_no: 'CG202608260003',
+          org_id: 9n,
+          status: 1,
+          receiver_id: 7n,
+          created_by: 9n,
+        }),
         update: vi.fn(),
       },
     });
@@ -1748,7 +1858,6 @@ describe('PurchaseService paid order todo notification', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = serviceWith(prisma) as any;
-    const todoService = service.__todoService;
 
     await service.savePayment(
       null,
@@ -1762,6 +1871,7 @@ describe('PurchaseService paid order todo notification', () => {
       '9',
     );
 
-    expect(todoService.create).not.toHaveBeenCalled();
+    const updates = (tx.hspsi_sys_todo.update.mock.calls as any[]).map((call) => call[0].data);
+    expect(updates.some((data) => data.content.includes('已完成付款'))).toBe(false);
   });
 });

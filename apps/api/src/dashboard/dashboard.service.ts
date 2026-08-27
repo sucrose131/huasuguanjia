@@ -352,6 +352,19 @@ export class DashboardService {
     return values.reduce((sum, value) => sum + value, 0);
   }
 
+  /** 持久化待办（hspsi_sys_todo）的跳转路由映射，按 source_type/business_type 匹配 */
+  private todoRoute(item: Record<string, any>) {
+    const businessId = String(item.business_id || item.source_id || '');
+    const type = item.source_type || item.business_type || '';
+    if (!businessId) return '';
+    if (type === 'purchase_order' || type === 'purchase_receipt')
+      return `/purchase/orders?viewId=${businessId}`;
+    if (type === 'purchase_application') return `/purchase/applications?viewId=${businessId}`;
+    if (type === 'draw_approve') return `/requisitions/applications?viewId=${businessId}`;
+    if (type === 'draw_approve_output') return `/requisitions/outputs?viewId=${businessId}`;
+    return '';
+  }
+
   async todos(user: AuthUser, query: Query) {
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
@@ -373,17 +386,13 @@ export class DashboardService {
       amount: null,
       creator: item.created_by ? String(item.created_by) : '',
       status: '待处理',
-      route:
-        item.source_type === 'purchase_order' && (item.business_id || item.source_id)
-          ? `/purchase/orders?viewId=${String(item.business_id || item.source_id)}`
-          : '',
+      route: this.todoRoute(item),
       createdAt: item.created_at,
     }));
 
     const [
       purchase,
       sales,
-      requisitions,
       production,
       transfers,
       checks,
@@ -400,12 +409,6 @@ export class DashboardService {
         : Promise.resolve([]),
       this.canOpenRoute(user, '/sales/orders')
         ? this.prisma.hspsi_sale_order.findMany({
-            where: { ...org, approve_status: 0, deleted_at: null },
-            orderBy: { created_at: 'desc' },
-          })
-        : Promise.resolve([]),
-      this.canOpenRoute(user, '/requisitions/applications')
-        ? this.prisma.hspsi_draw_approve.findMany({
             where: { ...org, approve_status: 0, deleted_at: null },
             orderBy: { created_at: 'desc' },
           })
@@ -497,18 +500,6 @@ export class DashboardService {
           counterparty: item.customer_name,
           amount: Number(item.fact_amount),
           creator: String(item.created_by ?? ''),
-          createdAt: item.created_at,
-        }),
-      ),
-      ...requisitions.map((item) =>
-        row({
-          id: `draw-${item.draw_id}`,
-          sourceId: String(item.draw_id),
-          docNo: item.draw_no,
-          docType: '领用申请单',
-          businessModule: '领用管理',
-          route: '/requisitions/applications',
-          creator: String(item.created_by),
           createdAt: item.created_at,
         }),
       ),
