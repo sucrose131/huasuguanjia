@@ -437,6 +437,13 @@ const indexMethod = (index: number) => (page.value - 1) * pageSize.value + index
 </el-table>
 ```
 
+固定列或超长表格统一复用 `OverflowTooltipCell`。其虚拟 Tooltip 必须使用
+`strategy="fixed"`，并将 Popper 的 `computeStyles.adaptive` 设为 `false`，避免视口高度与
+文档高度不一致时产生整张表格高度级别的垂直漂移。
+
+页面底部带每页数量选择器的 `el-pagination` 应设置 `:teleported="false"`，避免其内部
+`ElSelect` 下拉浮层 teleport 到 `body` 后受到长页面定位参照差异影响。
+
 ## 三、当前系统建议采用的组合
 
 | 使用场景 | 推荐组合 |
@@ -455,9 +462,10 @@ const indexMethod = (index: number) => (page.value - 1) * pageSize.value + index
 2. 列表高度超过可视区域时使用 `max-height`；固定页面布局才使用固定 `height`。
 3. 单据编号、状态和操作列设置明确宽度，名称类字段使用 `min-width`。
 4. 操作列固定在右侧，列表页避免出现双层横向滚动条。
-5. 长文本统一使用 `show-overflow-tooltip`，不允许无限撑宽表格。
+5. 普通表格长文本使用 `show-overflow-tooltip`；固定列或超长表格使用 `OverflowTooltipCell`，不允许无限撑宽表格。
 6. 状态统一使用 `el-tag`，颜色含义在全系统保持一致。
 7. 金额和数量右对齐，金额显示两位小数。
 8. 大数据列表的排序、筛选和分页由后端完成。
 9. 多选表格必须设置稳定的 `row-key`，翻页选择需明确是否保留。
 10. 合并单元格只用于报表，不建议在日常业务操作列表中使用。
+11. 长页面底部分页的数量选择器不得 teleport 到 `body`。
