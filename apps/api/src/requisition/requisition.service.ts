@@ -356,9 +356,14 @@ export class RequisitionService {
     );
   }
 
-  private async confirmedOutputUsage(db: Db, drawId: bigint) {
+  private async confirmedOutputUsage(db: Db, drawId: bigint, excludeOutputId?: bigint) {
     const heads = await db.hspsi_draw_approve_output.findMany({
-      where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
+      where: {
+        draw_id: drawId,
+        comfirm_status: 1,
+        deleted_at: null,
+        ...(excludeOutputId ? { draw_output_id: { not: excludeOutputId } } : {}),
+      },
       select: { draw_output_id: true },
     });
     const details = heads.length
@@ -764,7 +769,8 @@ export class RequisitionService {
 
         // 后端兜底：账套由单据组织决定，提交人按(登录用户, 组织账套)解析身份，
         // 不信任前端/主身份 staff_id（多账套用户可能跨账套错配）。
-        if (!fixedOrgId) throw new ForbiddenException('当前账号未关联固定所属组织，不能发起领用申请');
+        if (!fixedOrgId)
+          throw new ForbiddenException('当前账号未关联固定所属组织，不能发起领用申请');
         const orgId = this.bigint(fixedOrgId, '所属组织');
         if (body.orgId != null && String(body.orgId) !== String(fixedOrgId))
           throw new ForbiddenException('个人只能在自己的固定所属组织发起领用申请');
@@ -1595,7 +1601,7 @@ export class RequisitionService {
       where: { draw_output_id: BigInt(id), deleted_at: null },
     });
     if (!item) throw new NotFoundException('领用出库单不存在');
-    const [details, application, returned] = await Promise.all([
+    const [details, application, applicationDetails, confirmedUsage, returned] = await Promise.all([
       this.prisma.hspsi_draw_approve_output_detail.findMany({
         where: { draw_output_id: item.draw_output_id },
         orderBy: { output_detail_id: 'asc' },
@@ -1603,11 +1609,23 @@ export class RequisitionService {
       this.prisma.hspsi_draw_approve.findFirst({
         where: { draw_id: item.draw_id, deleted_at: null },
       }),
+      this.prisma.hspsi_draw_approve_detail.findMany({
+        where: { draw_id: item.draw_id },
+        orderBy: { draw_detail_id: 'asc' },
+      }),
+      this.confirmedOutputUsage(this.prisma, item.draw_id, item.draw_output_id),
       this.confirmedReturnUsage(this.prisma, item.draw_output_id),
     ]);
     if (!application) throw new BadRequestException('来源领用申请不存在或已删除');
     const mappedDetails = details.map((detail) => {
-      const historicalQty = returned.get(String(detail.output_detail_id)) ?? 0;
+      const source = applicationDetails.find(
+        (applicationDetail) => applicationDetail.draw_detail_id === detail.draw_detail_id,
+      );
+      const applicationQty = Number(source?.draw_qty ?? detail.draw_qty);
+      const historicalQty =
+        (confirmedUsage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
+        (confirmedUsage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
+      const returnedQty = returned.get(String(detail.output_detail_id)) ?? 0;
       const returnable = detail.is_returnable === 1;
       return {
         id: detail.output_detail_id,
@@ -1616,11 +1634,15 @@ export class RequisitionService {
         skuId: detail.sku_id,
         batchNo: detail.batch_no,
         unitType: detail.unit_type,
-        applicationQty: detail.draw_qty,
+        applicationQty,
         quantity: detail.fact_draw_qty,
         returnable,
         historicalQty,
-        remainingQty: returnable ? Math.max(0, Number(detail.fact_draw_qty) - historicalQty) : 0,
+        remainingQty: Math.max(0, applicationQty - historicalQty),
+        returnedQty,
+        returnableRemainingQty: returnable
+          ? Math.max(0, Number(detail.fact_draw_qty) - returnedQty)
+          : 0,
         remark: detail.remark,
       };
     });
@@ -1644,7 +1666,7 @@ export class RequisitionService {
         confirmBy: item.comfirm_by,
         confirmDate: item.comfirm_date,
         hasReturnableItems: mappedDetails.some(
-          (detail) => detail.returnable && detail.remainingQty > 0,
+          (detail) => detail.returnable && detail.returnableRemainingQty > 0,
         ),
         details: enrichedDetails,
       },
