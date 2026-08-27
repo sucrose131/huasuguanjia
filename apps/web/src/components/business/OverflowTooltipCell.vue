@@ -11,6 +11,10 @@
     v-model:visible="visible"
     :virtual-ref="contentRef"
     virtual-triggering
+    strategy="fixed"
+    :popper-options="{
+      modifiers: [{ name: 'computeStyles', options: { adaptive: false } }],
+    }"
     :content="tooltipContent"
     placement="top"
   />
