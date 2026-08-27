@@ -755,6 +755,7 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
     const tx = {
       $queryRawUnsafe: vi.fn(),
       hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_sys_user: { findFirst: vi.fn().mockResolvedValue({ id: 3n }) },
       hspsi_draw_approve: {
         findFirst: vi.fn().mockResolvedValue({
           draw_id: 7n,

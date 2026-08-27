@@ -352,17 +352,34 @@ export class DashboardService {
     return values.reduce((sum, value) => sum + value, 0);
   }
 
-  /** 持久化待办（hspsi_sys_todo）的跳转路由映射，按 source_type/business_type 匹配 */
+  /** 持久化待办的跳转路由映射（source_type/business_type → 前端路由；前端约定：
+   *  采购订单用 viewId，其余单据用 documentId + view=1 打开详情） */
   private todoRoute(item: Record<string, any>) {
     const businessId = String(item.business_id || item.source_id || '');
     const type = item.source_type || item.business_type || '';
     if (!businessId) return '';
     if (type === 'purchase_order' || type === 'purchase_receipt')
       return `/purchase/orders?viewId=${businessId}`;
-    if (type === 'purchase_application') return `/purchase/applications?viewId=${businessId}`;
-    if (type === 'draw_approve') return `/requisitions/applications?viewId=${businessId}`;
-    if (type === 'draw_approve_output') return `/requisitions/outputs?viewId=${businessId}`;
+    if (type === 'purchase_application')
+      return `/purchase/applications?documentId=${businessId}&view=1`;
+    if (type === 'draw_approve') return `/requisitions/applications?documentId=${businessId}&view=1`;
+    if (type === 'draw_approve_output')
+      return `/requisitions/outputs?documentId=${businessId}&view=1`;
     return '';
+  }
+
+  /** 持久化待办的中文单据类型/模块标签（business_type/source_type 为英文表名风格） */
+  private todoLabels(item: Record<string, any>) {
+    const type = item.business_type || item.source_type || '';
+    const labelByType: Record<string, { docType: string; module: string }> = {
+      purchase_order: { docType: '采购订单', module: '采购管理' },
+      purchase_receipt: { docType: '采购收货', module: '采购管理' },
+      purchase_application: { docType: '采购申请', module: '采购管理' },
+      draw_approve: { docType: '领用申请', module: '领用管理' },
+      draw_approve_output: { docType: '领用出库', module: '领用管理' },
+    };
+    const labels = labelByType[type];
+    return labels ?? { docType: type || '待办事项', module: item.source_type || '工作台' };
   }
 
   async todos(user: AuthUser, query: Query) {
@@ -379,8 +396,8 @@ export class DashboardService {
       id: `todo-${item.id}`,
       sourceId: String(item.business_id || item.source_id || item.id),
       docNo: item.title,
-      docType: item.business_type || item.source_type || '待办事项',
-      businessModule: item.source_type || '工作台',
+      docType: this.todoLabels(item).docType,
+      businessModule: this.todoLabels(item).module,
       counterparty: item.content,
       date: this.day(item.created_at),
       amount: null,

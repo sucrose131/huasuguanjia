@@ -1101,11 +1101,19 @@ export class RequisitionService {
     actorUserId: string,
   ) {
     await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
-    const applicantId = Number(application.applicant_id);
-    if (applicantId > 0) {
+    // 领用人：applicant_id 为 basic_staff.id，需先映射到 hspsi_sys_user.id
+    const applicantUser =
+      application.applicant_id > 0n
+        ? await tx.hspsi_sys_user.findFirst({
+            where: { staff_id: application.applicant_id, status: 1, deleted_at: null },
+            select: { id: true },
+          })
+        : null;
+    const applicantUserId = applicantUser ? Number(applicantUser.id) : 0;
+    if (applicantUserId > 0) {
       await this.todoService.create(
         {
-          userId: applicantId,
+          userId: applicantUserId,
           organizationId: Number(application.org_id),
           title: application.draw_no,
           content: '领用申请已审批通过，可前往仓库办理领用',
@@ -1122,7 +1130,7 @@ export class RequisitionService {
       tx,
     );
     for (const executorId of executors) {
-      if (executorId === applicantId) continue;
+      if (executorId === applicantUserId) continue;
       await this.todoService.create(
         {
           userId: executorId,
