@@ -522,6 +522,7 @@ onMounted(async () => {
           v-model:page-size="query.pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
+          :teleported="false"
           layout="total, sizes, prev, pager, next"
           @current-change="load"
           @size-change="query.page = 1; load()"
