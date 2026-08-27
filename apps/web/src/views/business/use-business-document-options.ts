@@ -29,9 +29,7 @@ export function useBusinessDocumentOptions(
     return code ? (dicts[code] ?? []) : [];
   });
 
-  const organizationTree = computed(() => {
-    return buildOrganizationTree(options.orgs ?? []);
-  });
+  const organizationTree = computed(() => buildOrganizationTree(options.orgs ?? []));
 
   const fieldOptions = (field: QueryField) => {
     if (field.dependsOn) return dynamicOptions[field.key] ?? [];
