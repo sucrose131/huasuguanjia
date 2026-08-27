@@ -40,7 +40,11 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     uploadSignatureDataUrlForIntegration: vi.fn(),
     discardUncommittedObjectForIntegration: vi.fn(),
   };
-  const todoService = { create: vi.fn().mockResolvedValue({ created: true }) };
+  const todoService = {
+    create: vi.fn().mockResolvedValue({ created: true }),
+    completeByBusiness: vi.fn().mockResolvedValue(0),
+    resolveRecipients: vi.fn().mockResolvedValue([]),
+  };
   const oaApproval = { submit: vi.fn() };
   return {
     service: new RequisitionService(
@@ -745,5 +749,58 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
     expect(result).toMatchObject({ message: '申请已提交OA审批' });
     expect(oaApproval.submit).toHaveBeenCalledWith(78n, '3');
     expect(todoService.create).not.toHaveBeenCalled();
+  });
+
+  it('审批通过后关闭「待审批」待办，并给领用人+出库执行人下发待办', async () => {
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_sys_user: { findFirst: vi.fn().mockResolvedValue({ id: 3n }) },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_id: 7n,
+          draw_no: 'LY202608260001',
+          org_id: 9n,
+          applicant_id: 3n,
+          status: 1,
+          approve_status: 0,
+          draw_type: 1,
+          signature_content: 'data:image/png;base64,YWJj',
+          signature_attachment: null,
+          signed_by: 3n,
+          signed_at: new Date(),
+        }),
+        update: vi.fn(),
+      },
+    };
+    const { service, todoService } = serviceWithTransaction(tx);
+    vi.spyOn(service as any, 'ensureAutomaticOutput').mockResolvedValue({ draw_output_id: 100n });
+    (todoService.resolveRecipients as ReturnType<typeof vi.fn>).mockResolvedValue([8]);
+
+    await service.approve('7', true, '', '9');
+
+    // 关闭原「待审批」待办（写给审批人的）
+    expect(todoService.completeByBusiness).toHaveBeenCalledWith('draw_approve', 7, tx);
+    // 出库执行人按权限码配置化解析
+    expect(todoService.resolveRecipients).toHaveBeenCalledWith('requisitions:outputs:confirm', 9, tx);
+    // 领用人 + 出库执行人各一条，写入事务内
+    const createCalls = todoService.create.mock.calls as any[];
+    expect(createCalls).toHaveLength(2);
+    const byUser = Object.fromEntries(createCalls.map((call) => [call[0].userId, call[0]]));
+    expect(byUser[3]).toMatchObject({
+      organizationId: 9,
+      title: 'LY202608260001',
+      content: '领用申请已审批通过，可前往仓库办理领用',
+      businessType: 'draw_approve_output',
+      businessId: 7,
+    });
+    expect(byUser[8]).toMatchObject({
+      organizationId: 9,
+      title: 'LY202608260001',
+      content: '领用申请已审批通过，请办理领用出库',
+      businessType: 'draw_approve_output',
+      businessId: 7,
+    });
+    expect(createCalls.every((call) => call[1] === tx)).toBe(true);
   });
 });
