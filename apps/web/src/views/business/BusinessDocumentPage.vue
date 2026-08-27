@@ -287,7 +287,8 @@ watch(
     await loadOptionBags();
     // 深链/回显场景：依赖字段已有值时先加载下游选项
     for (const field of props.config.queryFields ?? []) {
-      if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+      if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+        await loadFieldOptions(field);
     }
     await load();
   },
@@ -298,7 +299,8 @@ onMounted(async () => {
   await loadOptionBags();
   // 深链/回显场景：依赖字段已有值时先加载下游选项
   for (const field of props.config.queryFields ?? []) {
-    if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+    if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+      await loadFieldOptions(field);
   }
   await load();
   if (String(route.query.create ?? '') === '1') {

@@ -69,16 +69,21 @@ export function useBusinessDocumentOptions(
   async function loadFieldOptions(field: QueryField) {
     if (!field.dependsOn) return;
     const depValue = query[field.dependsOn];
-    if (depValue === undefined || depValue === null || depValue === '') {
+    const empty = depValue === undefined || depValue === null || depValue === '';
+    if (empty && !field.loadOnEmptyDep) {
       dynamicOptions[field.key] = [];
       return;
     }
     try {
       if (field.loadOptions) {
-        dynamicOptions[field.key] = await field.loadOptions({ [field.dependsOn]: depValue });
+        dynamicOptions[field.key] = await field.loadOptions({ [field.dependsOn]: depValue ?? '' });
         return;
       }
       if (field.optionBag) {
+        if (empty) {
+          dynamicOptions[field.key] = [];
+          return;
+        }
         const data: any = await api.get(OPTION_BAG_ENDPOINTS[field.optionBag], {
           params: { [field.dependsOn]: depValue },
         });
