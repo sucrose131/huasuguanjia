@@ -133,7 +133,24 @@ onMounted(async () => {
     if (form.value.planId) await planChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/inputs/${form.value.id}`).catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    if (detail) {
+      Object.assign(form.value, detail, {
+        orgId: String(detail.orgId ?? ''),
+        warehouseId: String(detail.warehouseId ?? ''),
+        planId: detail.planId == null ? '' : String(detail.planId),
+        deliveredQty: detail.deliveredQty ?? detail.cumulativeQty ?? 0,
+      });
+      // 兼容历史详情未富化成品名称/计划数量的情况，显示字段以生产计划为准补齐。
+      if ((!form.value.goodsName || form.value.planQty == null) && form.value.planId) {
+        const plan: any = await api
+          .get(`/production/plans/${form.value.planId}`)
+          .catch(() => null);
+        if (plan) {
+          form.value.goodsName ||= plan.goodsName ?? '';
+          form.value.planQty ??= plan.planQty ?? 0;
+        }
+      }
+    }
     await loadOrgWarehouses(form.value.orgId);
   }
 });
@@ -222,7 +239,7 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="操作人">
-        <el-input :model-value="auth.user?.username" readonly />
+        <el-input :model-value="form.createdByName || auth.user?.username || '—'" readonly />
       </el-form-item>
     </div>
 

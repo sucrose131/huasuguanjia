@@ -254,7 +254,14 @@ onMounted(async () => {
     });
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/plans/${form.value.id}`).catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    if (detail)
+      Object.assign(form.value, detail, {
+        orgId: String(detail.orgId ?? ''),
+        warehouseId: String(detail.warehouseId ?? ''),
+        productWarehouseId: String(detail.productWarehouseId ?? ''),
+        sourceId: detail.sourceId == null ? '' : String(detail.sourceId),
+        maxPlanQty: detail.maxPlanQty ?? detail.planQty ?? 0,
+      });
     form.value.details = (form.value.details ?? []).map((x: any) => ({
       ...blankLine(),
       ...x,

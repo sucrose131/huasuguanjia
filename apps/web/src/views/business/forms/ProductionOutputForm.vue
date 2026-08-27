@@ -88,11 +88,11 @@ function refreshAllRowStocks() {
   rows.value.forEach(refreshRowStock);
 }
 
-async function reloadStocks() {
+async function reloadStocks(resetRows = true) {
   if (!form.value.warehouseId) {
     allStocks.value = [];
     options.goods = [];
-    rows.value = [blankRow()];
+    if (resetRows) rows.value = [blankRow()];
     return;
   }
   const [stocks, goods] = (await Promise.all([
@@ -105,7 +105,8 @@ async function reloadStocks() {
   ])) as any[];
   allStocks.value = stocks;
   options.goods = goods;
-  rows.value = [blankRow()];
+  if (resetRows) rows.value = [blankRow()];
+  else refreshAllRowStocks();
 }
 
 function onRowsChanged(newRows: B[]) {
@@ -289,10 +290,25 @@ onMounted(async () => {
       }
     } else if (form.value.id) {
       const detail: any = await api.get(`/production/outputs/${form.value.id}`).catch(() => null);
-      if (detail) Object.assign(form.value, detail);
+      const plan: any = detail?.planId
+        ? await api.get(`/production/plans/${detail.planId}`).catch(() => null)
+        : null;
+      if (detail)
+        Object.assign(form.value, detail, {
+          orgId: String(detail.orgId ?? ''),
+          warehouseId: String(detail.warehouseId ?? ''),
+          planId: detail.planId == null ? '' : String(detail.planId),
+          bomId: detail.bomId ?? plan?.bomId ?? '',
+          bomNo: detail.bomNo ?? plan?.bomNo ?? '',
+          goodsName: detail.goodsName ?? plan?.goodsName ?? '',
+        });
+      const planLineMap = new Map<string, B>(
+        (plan?.details ?? []).map((line: B) => [`${line.goodsId}:${line.skuId}`, line]),
+      );
       const grouped = new Map<string, B>();
       for (const line of form.value.details ?? []) {
         const key = `${line.goodsId ?? ''}:${line.skuId ?? ''}`;
+        const planLine = planLineMap.get(key);
         const existing = grouped.get(key);
         const batchRow = {
           batchNo: line.batchNo ?? '',
@@ -309,16 +325,18 @@ onMounted(async () => {
           goodsName: line.goodsName ?? '—',
           skuSpec: line.skuSpec ?? line.goodsSpec ?? '—',
           unitName: line.unitName ?? lineUnitName(options.units as UnitOption[], line),
-          bomUnitQty: line.bomUnitQty ?? '—',
-          totalDemand: line.standardQty ?? line.totalDemand ?? line.quantity ?? 0,
+          bomUnitQty: line.bomUnitQty ?? planLine?.bomUnitQty ?? '—',
+          totalDemand:
+            line.standardQty ?? planLine?.standardQty ?? line.totalDemand ?? line.quantity ?? 0,
           stockQty: line.currentStock ?? 0,
-          planQty: line.planOutQty ?? line.quantity ?? 0,
+          planQty: line.planOutQty ?? planLine?.planOutQty ?? line.quantity ?? 0,
           batchRows: [batchRow],
         });
       }
       rows.value = [...grouped.values()];
       await loadOrgWarehouses(form.value.orgId);
-      await reloadStocks();
+      // 已确认的查看详情必须保留单据发生时的出库数量，不能按当前库存反向截断历史值。
+      if (!isView.value) await reloadStocks(false);
     }
   } catch (e: any) {
     error.value = e?.response?.data?.message ?? '加载失败';
