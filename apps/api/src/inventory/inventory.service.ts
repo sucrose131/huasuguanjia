@@ -15,6 +15,7 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
+  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
@@ -3713,7 +3714,7 @@ export class InventoryService {
         orgId: s.org_id,
       })),
     );
-    const items = stocks.map((s) => {
+    const allItems = stocks.map((s) => {
       const c = configs.find(
         (i) =>
           i.warehouse_id === s.warehouse_id && i.goods_id === s.goods_id && i.sku_id === s.sku_id,
@@ -3739,6 +3740,7 @@ export class InventoryService {
         warning: fact < safe,
       };
     });
+    const items = filterQuantityAlertsByStatus(allItems, query.status);
     const warehouseCounts = Object.fromEntries(
       [...new Set(items.map((item) => String(item.warehouseId)))].map((warehouseId) => [
         warehouseId,

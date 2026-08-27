@@ -3,11 +3,32 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
+  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
 } from './inventory-helpers';
 import { InventoryService } from './inventory.service';
+
+describe('inventory quantity alert status filter', () => {
+  const items = [
+    { id: 1, warning: false },
+    { id: 2, warning: true },
+  ];
+
+  it('keeps normal inventory when status is 0', () => {
+    expect(filterQuantityAlertsByStatus(items, '0')).toEqual([{ id: 1, warning: false }]);
+  });
+
+  it('keeps shortage inventory when status is 1', () => {
+    expect(filterQuantityAlertsByStatus(items, 1)).toEqual([{ id: 2, warning: true }]);
+  });
+
+  it('keeps all inventory when status is empty and rejects invalid values', () => {
+    expect(filterQuantityAlertsByStatus(items, '')).toEqual(items);
+    expect(() => filterQuantityAlertsByStatus(items, 'unexpected')).toThrow('库存状态参数无效');
+  });
+});
 
 describe('inventory check quantity branches', () => {
   it('keeps shortage and damage as independent branches', () => {

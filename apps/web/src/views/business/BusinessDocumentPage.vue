@@ -28,6 +28,7 @@ const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const summary = reactive<Record<string, any>>({});
+const warehouseCounts = reactive<Record<string, number>>({});
 const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20 });
 
 // 表单对话框
@@ -131,6 +132,8 @@ async function load() {
     total.value = data.total ?? rows.value.length;
     Object.keys(summary).forEach((k) => delete summary[k]);
     Object.assign(summary, data.summary ?? {});
+    Object.keys(warehouseCounts).forEach((k) => delete warehouseCounts[k]);
+    Object.assign(warehouseCounts, data.warehouseCounts ?? {});
   } finally {
     loading.value = false;
   }
@@ -311,7 +314,13 @@ onMounted(async () => {
       />
       <SummaryStrip v-else-if="summaryItems.length" :items="summaryItems" />
 
-      <slot name="query-tools" :query="query" :load="load" :total="total" />
+      <slot
+        name="query-tools"
+        :query="query"
+        :load="load"
+        :total="total"
+        :warehouse-counts="warehouseCounts"
+      />
 
       <div class="query-bar">
         <el-input

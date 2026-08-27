@@ -13,12 +13,17 @@ function showLedger(row: any) {
 
 <template>
   <BusinessDocumentPage :config="inventoryQuantityAlertConfig">
-    <template #query-tools="{ query, load, total }">
-      <WarehouseTabs :query="query" :load="load" :total="total" />
+    <template #query-tools="{ query, load, total, warehouseCounts }">
+      <WarehouseTabs
+        :query="query"
+        :load="load"
+        :total="total"
+        :warehouse-counts="warehouseCounts"
+      />
     </template>
     <template #row-actions="{ row }">
       <el-button link type="primary" @click="showLedger(row)">查看</el-button>
     </template>
-    <InventoryLedgerDialog ref="ledgerRef" />
   </BusinessDocumentPage>
+  <InventoryLedgerDialog ref="ledgerRef" />
 </template>
