@@ -542,9 +542,16 @@ export class InventoryService {
   }
 
   async stockOptions(query: Body) {
-    const where: Prisma.hspsi_inventory_batch_totalWhereInput = { inventory_qty: { gt: 0 } };
-    if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.orgId) where.org_id = BigInt(query.orgId);
+    // 该接口只服务于已确定组织和仓库的业务表单，禁止无条件返回全系统库存。
+    if (!query.orgId || !query.warehouseId) return [];
+    const orgId = BigInt(query.orgId),
+      warehouseId = BigInt(query.warehouseId);
+    await this.masterData.assertWarehouse(orgId, warehouseId);
+    const where: Prisma.hspsi_inventory_batch_totalWhereInput = {
+      org_id: orgId,
+      warehouse_id: warehouseId,
+      inventory_qty: { gt: 0 },
+    };
     const rows = await this.prisma.hspsi_inventory_batch_total.findMany({
       where,
       orderBy: [{ goods_id: 'asc' }, { batch_no: 'asc' }],
@@ -1049,9 +1056,8 @@ export class InventoryService {
       skuId: d.sku_id,
       skuSpec: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.spec_models,
       warehouseId: d.warehouse_id,
-      warehouseName: refs.warehouses.find(
-        (warehouse) => warehouse.warehouse_id === d.warehouse_id,
-      )?.name,
+      warehouseName: refs.warehouses.find((warehouse) => warehouse.warehouse_id === d.warehouse_id)
+        ?.name,
       batchNo: d.batch_no,
       unitType: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0,
       unitName: units.find(

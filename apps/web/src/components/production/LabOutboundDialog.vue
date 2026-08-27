@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import BatchMaterialTable from './BatchMaterialTable.vue';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from '@/views/business/use-scoped-stock-options';
 
 type B = Record<string, any>;
 const auth = useAuthStore();
@@ -40,13 +41,9 @@ const warehouseOptions = computed(() =>
 function refreshRowStock(row: B) {
   const stocks = allStocks.value.filter(
     (stock: B) =>
-      String(stock.goodsId) === String(row.goodsId) &&
-      String(stock.skuId) === String(row.skuId),
+      String(stock.goodsId) === String(row.goodsId) && String(stock.skuId) === String(row.skuId),
   );
-  row.stockQty = stocks.reduce(
-    (sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0),
-    0,
-  );
+  row.stockQty = stocks.reduce((sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0), 0);
   for (const batchRow of row.batchRows ?? []) {
     const stock = stocks.find((item: B) => String(item.batchNo) === String(batchRow.batchNo));
     batchRow.avail = Number(stock?.inventoryQty ?? 0);
@@ -166,9 +163,7 @@ async function reloadStocks() {
     return;
   }
   const [stocks, goods] = (await Promise.all([
-    api.get('/inventory/stock-options', {
-      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-    }),
+    fetchScopedStockOptions(form.value.orgId, form.value.warehouseId),
     api.get('/production/product-options', {
       params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
     }),

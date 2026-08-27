@@ -10,6 +10,7 @@ import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { createRequestId } from '@/utils/random-id';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from './business/use-scoped-stock-options';
 
 type Row = Record<string, any>;
 type Option = { value: string | number; label: string; raw?: Row };
@@ -28,8 +29,8 @@ const saving = ref(false);
 const dialog = ref(false);
 const viewing = ref(false);
 const initialInputEnabled = ref(false);
-const canManageInitialInput = computed(
-  () => canPageAction(auth.user, '/inventory/general-inputs', 'configure-initial'),
+const canManageInitialInput = computed(() =>
+  canPageAction(auth.user, '/inventory/general-inputs', 'configure-initial'),
 );
 const organizations = ref<Option[]>([]);
 const organizationTree = computed(() =>
@@ -122,9 +123,7 @@ async function loadSelectableRows() {
   })) as Row[];
   stocks.value = isInput.value
     ? []
-    : ((await api.get('/inventory/stock-options', {
-        params: { orgId: form.orgId, warehouseId: form.warehouseId },
-      })) as Row[]);
+    : ((await fetchScopedStockOptions(form.orgId, form.warehouseId)) as Row[]);
 }
 
 async function organizationChanged() {
@@ -253,7 +252,9 @@ onMounted(async () => {
             @change="toggleInitialInput"
           />
         </template>
-        <el-button v-if="canAction('create')" type="primary" @click="openCreate">新增{{ title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="openCreate"
+          >新增{{ title }}</el-button
+        >
       </div>
     </header>
     <el-card shadow="never">
@@ -464,7 +465,11 @@ onMounted(async () => {
       />
       <template #footer
         ><el-button @click="dialog = false">关闭</el-button
-        ><el-button v-if="!viewing && canAction('create')" type="primary" :loading="saving" @click="save"
+        ><el-button
+          v-if="!viewing && canAction('create')"
+          type="primary"
+          :loading="saving"
+          @click="save"
           >保存并过账</el-button
         ></template
       >

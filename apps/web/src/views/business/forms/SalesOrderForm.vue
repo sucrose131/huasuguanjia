@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -22,6 +23,7 @@ const options = reactive<Record<string, any>>({
   goodsSkus: [],
   units: [],
   contextGoods: [],
+  stocks: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
@@ -58,7 +60,8 @@ const orderTotals = computed(() => {
     0,
   );
   const discount = (form.value.details ?? []).reduce(
-    (s: number, x: any) => s + Math.max(0, Number(x.quantity || 0) * Number(x.price || 0) - lineActual(x)),
+    (s: number, x: any) =>
+      s + Math.max(0, Number(x.quantity || 0) * Number(x.price || 0) - lineActual(x)),
     0,
   );
   const factAmount = (form.value.details ?? []).reduce((s: number, x: any) => s + lineActual(x), 0);
@@ -83,11 +86,14 @@ async function loadDicts() {
 async function customerChanged() {
   if (!form.value.customerId) return;
   const c: any = await api.get(`/base-data/customers/${form.value.customerId}`);
+  const nextOrgId = c.orgId ?? c.org_id ?? form.value.orgId;
+  const orgChanged = String(nextOrgId ?? '') !== String(form.value.orgId ?? '');
   Object.assign(form.value, {
     customerMobile: c.mobile ?? '',
     customerAddress: c.address ?? '',
-    orgId: c.orgId ?? c.org_id ?? form.value.orgId,
+    orgId: nextOrgId,
   });
+  if (orgChanged) await organizationChanged();
 }
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
@@ -105,12 +111,19 @@ async function organizationChanged() {
   form.value.warehouseId = '';
   form.value.details = [blankLine()];
   options.contextGoods = [];
+  options.stocks = [];
   await loadOrgWarehouses(form.value.orgId);
 }
 
-function warehouseChanged() {
+async function warehouseChanged() {
   form.value.details = [blankLine()];
-  loadContextGoods();
+  await Promise.all([loadContextGoods(), loadScopedStocks()]);
+}
+
+async function loadScopedStocks() {
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 /** 按单据组织+仓库加载匹配商品（后端按分类仓库类型过滤），未选组织/仓库时清空 */
@@ -167,7 +180,9 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
+  const kw = String(keyword ?? '')
+    .trim()
+    .toLowerCase();
   const list = options.contextGoods.filter((g: any) =>
     kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
   );
@@ -263,7 +278,7 @@ onMounted(async () => {
     }));
   }
   await loadOrgWarehouses(form.value.orgId);
-  await loadContextGoods();
+  await Promise.all([loadContextGoods(), loadScopedStocks()]);
 });
 </script>
 
@@ -271,8 +286,18 @@ onMounted(async () => {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="客户" required>
-        <el-select v-model="form.customerId" filterable :disabled="isView" @change="customerChanged">
-          <el-option v-for="x in options.customers" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select
+          v-model="form.customerId"
+          filterable
+          :disabled="isView"
+          @change="customerChanged"
+        >
+          <el-option
+            v-for="x in options.customers"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="所属组织" required>
@@ -301,7 +326,12 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="订单日期" required>
-        <el-date-picker v-model="form.orderDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.orderDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="订单来源">
         <el-select v-model="form.sourceType" :disabled="isView">
@@ -352,7 +382,9 @@ onMounted(async () => {
         <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
-        <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">{{
+          s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—'
+        }}</template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ lineUnitName(s.row) }}</template>
@@ -368,11 +400,17 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="金额" width="120">
-        <template #default="s">{{ moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0)) }}</template>
+        <template #default="s">{{
+          moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0))
+        }}</template>
       </el-table-column>
       <el-table-column label="可用库存" width="100">
         <template #default="s">
-          {{ s.row.availableStock == null ? '—' : Number(s.row.availableStock).toLocaleString('zh-CN') }}
+          {{
+            s.row.availableStock == null
+              ? '—'
+              : Number(s.row.availableStock).toLocaleString('zh-CN')
+          }}
         </template>
       </el-table-column>
       <!-- 供应方式/商品形态：后端详情接口未富化这两类字段，且已不再加载全量商品列表反查，缺失时显示 '—' -->
@@ -384,7 +422,14 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="数量" width="130">
         <template #default="s">
-          <el-input-number v-model="s.row.quantity" :min="1" :precision="0" :step="1" :disabled="isView" @change="stockChanged(s.row)" />
+          <el-input-number
+            v-model="s.row.quantity"
+            :min="1"
+            :precision="0"
+            :step="1"
+            :disabled="isView"
+            @change="stockChanged(s.row)"
+          />
         </template>
       </el-table-column>
       <el-table-column label="备注" min-width="140">
@@ -398,10 +443,18 @@ onMounted(async () => {
     </el-table>
 
     <div v-if="(form.details ?? []).length" class="order-totals">
-      <span>合计数量：<strong>{{ orderTotals.quantity.toLocaleString('zh-CN') }}</strong></span>
-      <span>订单金额：<strong>¥ {{ moneyText(orderTotals.orderAmount) }}</strong></span>
-      <span>旧物折价金额：<strong>¥ {{ moneyText(orderTotals.discount) }}</strong></span>
-      <span>实付金额：<strong>¥ {{ moneyText(orderTotals.factAmount) }}</strong></span>
+      <span
+        >合计数量：<strong>{{ orderTotals.quantity.toLocaleString('zh-CN') }}</strong></span
+      >
+      <span
+        >订单金额：<strong>¥ {{ moneyText(orderTotals.orderAmount) }}</strong></span
+      >
+      <span
+        >旧物折价金额：<strong>¥ {{ moneyText(orderTotals.discount) }}</strong></span
+      >
+      <span
+        >实付金额：<strong>¥ {{ moneyText(orderTotals.factAmount) }}</strong></span
+      >
     </div>
 
     <div class="form-grid" style="margin-top: 12px">

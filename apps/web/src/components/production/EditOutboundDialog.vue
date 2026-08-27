@@ -28,7 +28,14 @@ async function load() {
     const [planDetail, outDetail, stockData, goodsData] = (await Promise.all([
       r.planId ? api.get(`/production/plans/${r.planId}`) : Promise.resolve(null),
       api.get(`/production/outputs/${r.id}`),
-      api.get('/inventory/stocks', { params: { warehouseId: r.warehouseId, pageSize: 200 } }),
+      api.get('/inventory/stocks', {
+        params: {
+          orgId: r.orgId,
+          warehouseId: r.warehouseId,
+          inStockOnly: true,
+          pageSize: 200,
+        },
+      }),
       Number(r.outType) === 3
         ? api.get('/goods', { params: { pageSize: 100, status: 1 } })
         : Promise.resolve({ items: [] }),

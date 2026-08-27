@@ -69,7 +69,18 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       confirm: '按未分配/未计划数量生成生产计划缺口，是否继续？',
       handler: async (row) => {
         const result: any = await api.post(`/sales/orders/${row.id}/analyze`, {});
-        ElMessage.success(result?.message ?? '缺口分析完成');
+        const items = Array.isArray(result?.items) ? result.items : [];
+        const created = items.filter((item: any) => item?.created !== false);
+        const shortageCount = created.filter((item: any) => Boolean(item?.shortage)).length;
+        const purchaseCount = created.filter((item: any) => item?.purchaseApplicationId).length;
+        const baseMessage = result?.message ?? '缺口分析完成';
+        if (shortageCount) {
+          ElMessage.warning(
+            `${baseMessage}；其中 ${shortageCount} 张存在原料缺料，已生成 ${purchaseCount} 张采购申请`,
+          );
+        } else {
+          ElMessage.success(created.length ? `${baseMessage}；原料库存满足生产需求` : baseMessage);
+        }
       },
     },
     {
@@ -80,8 +91,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
         Number(row.orderType) !== 4 &&
         Number(row.deliveryQty ?? 0) + 0.000001 < Number(row.quantity ?? 0) &&
         Number(row.orderStatus ?? 0) !== 3,
-      handler: (row, ctx) =>
-        ctx.navigate('/sales/outputs', { orderId: String(row.id) }),
+      handler: (row, ctx) => ctx.navigate('/sales/outputs', { orderId: String(row.id) }),
     },
     {
       key: 'receive',
@@ -104,8 +114,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       permission: 'sales:refunds:create',
       kind: 'warning',
       primary: false,
-      show: (row) =>
-        Number(row.receivedAmount ?? 0) - Number(row.refundedAmount ?? 0) > 0.000001,
+      show: (row) => Number(row.receivedAmount ?? 0) - Number(row.refundedAmount ?? 0) > 0.000001,
       handler: (row, ctx) =>
         ctx.navigate('/sales/refunds', { create: '1', orderId: String(row.id) }),
     },

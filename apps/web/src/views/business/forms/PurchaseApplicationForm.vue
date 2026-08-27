@@ -21,10 +21,19 @@ const options = reactive<Record<string, any>>({
   depts: [],
   warehouses: [],
   units: [],
+  users: [],
   contextGoods: [],
 });
 const isView = computed(() => props.mode === 'view');
 const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+const applicantLabel = computed(() => {
+  if (form.value.applicantName) return form.value.applicantName;
+  const creatorId = form.value.createdBy ?? form.value.created_by;
+  const creator = options.users.find(
+    (item: any) => String(item.value ?? item.id) === String(creatorId ?? ''),
+  );
+  return creator?.raw?.nickname || creator?.label || form.value.createdByName || '系统自动生成';
+});
 
 function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
   quickCatalogRef.value?.open(line, mode);
@@ -259,12 +268,14 @@ async function save(submit = false) {
 }
 
 onMounted(async () => {
-  const [orgs, units] = await Promise.all([
+  const [orgs, units, users] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
+    api.get('/base-data/users/options').catch(() => []),
   ]);
   options.orgs = orgs as any[];
   options.units = units as any[];
+  options.users = users as any[];
 
   if (props.mode === 'create') {
     Object.assign(form.value, {
@@ -275,14 +286,27 @@ onMounted(async () => {
       remark: '',
       details: [blankLine()],
     });
-  } else if (form.value.id) {
-    // 编辑/查看的完整详情由 BusinessDocumentPage 统一加载，避免弹框挂载后重复请求。
-    if (Array.isArray(form.value.details)) {
-      await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
-    }
   }
   await loadOrgScopedOptions(form.value.orgId);
   await loadContextGoods();
+  // 详情接口本身已经返回商品名称、编码和规格；优先使用按单据组织加载的商品上下文补齐，
+  // 避免跨组织查看时再次访问当前登录人本组织的商品详情接口并产生误报。
+  for (const line of form.value.details ?? []) {
+    const matched = (options.contextGoods ?? []).find(
+      (g: any) => String(g.id) === String(line.goodsId),
+    );
+    if (matched) {
+      line.goodsCode ||= matched.queryCode ?? matched.goodsCode ?? '';
+      line.goodsName ||= matched.goodsName ?? '';
+    }
+  }
+  if (props.mode === 'edit' && Array.isArray(form.value.details)) {
+    await Promise.all(
+      form.value.details
+        .filter((line: any) => !line.goodsName || !line.goodsCode || !line.skuSpec)
+        .map((line: any) => enrichLine(line)),
+    );
+  }
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
   for (const line of form.value.details ?? []) {
     if (line.goodsId && !Number(line.goodsWarehouseType)) {
@@ -325,7 +349,7 @@ onMounted(async () => {
         </div>
       </el-form-item>
       <el-form-item label="申请人">
-        <el-input :model-value="form.applicantName || auth.user?.username || '—'" disabled />
+        <el-input :model-value="applicantLabel" disabled />
       </el-form-item>
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />

@@ -426,6 +426,22 @@ function vendorOfOrder(orderId: unknown) {
 
 async function enrichLine(line: any) {
   if (!line.goodsId || String(line.goodsId).startsWith('quick-')) return;
+  // 采购订单/入库详情已经带回商品、SKU 和单位时直接使用单据快照。
+  // 这既保留历史单据当时的名称规格，也避免跨组织办理入库时误用当前所属组织的商品详情权限。
+  if (line.goodsName && line.skuId && (line.skuSpec || line.skuLabel || line.skuName)) {
+    const label = line.skuLabel || line.skuSpec || line.skuName || `规格 ${line.skuId}`;
+    line.skuLabel = label;
+    line.skuOptions = [
+      {
+        label,
+        value: line.skuId,
+        unitType: line.unitType,
+        costPrice: Number(line.unitPrice ?? 0),
+      },
+    ];
+    mergeGoodsOptions([line]);
+    return;
+  }
   const product = (await api.get(`/goods/${line.goodsId}`)) as any;
   mergeGoodsOptions([product]);
   line.categoryWarehouseType = Number(product.categoryWarehouseType ?? 0);
@@ -748,7 +764,8 @@ onMounted(async () => {
         ...line,
         batchNo: String(line.batchNo ?? '').trim() || generateBatchNo(),
       }));
-      await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
+      if (!isView.value)
+        await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
       if (form.value.orgId) await loadOrganizationOptions(form.value.orgId);
     }
   }
