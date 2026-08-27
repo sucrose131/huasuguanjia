@@ -15,6 +15,10 @@ describe('ScheduledTaskHandlers', () => {
   const huasuOrders = { syncOrders: vi.fn() };
   const huasuConference = { syncConferenceOrders: vi.fn() };
   const huasuInstallment = { syncInstallmentOrders: vi.fn() };
+  const shifangUsers = { syncUsers: vi.fn() };
+  const shifangGoods = { syncGoods: vi.fn() };
+  const shifangOrders = { syncOrders: vi.fn() };
+  const shifangAgentOrders = { syncAgentOrders: vi.fn() };
   const oaOrg = { syncAll: vi.fn() };
   let handlers: ScheduledTaskHandlers;
 
@@ -26,6 +30,10 @@ describe('ScheduledTaskHandlers', () => {
       huasuOrders as never,
       huasuConference as never,
       huasuInstallment as never,
+      shifangUsers as never,
+      shifangGoods as never,
+      shifangOrders as never,
+      shifangAgentOrders as never,
       oaOrg as never,
     );
   });
@@ -51,6 +59,56 @@ describe('ScheduledTaskHandlers', () => {
     await expect(handlers.execute(SCHEDULED_TASK_CODE.HUASU_ORDERS)).resolves.toContain('销售1/1/0');
   });
 
+  it('路由十方清源用户同步', async () => {
+    shifangUsers.syncUsers.mockResolvedValue({ fetched: 4, created: 1, updated: 2, failed: 1 });
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_USERS)).resolves.toContain('拉取4');
+  });
+
+  it('路由十方清源商品同步', async () => {
+    shifangGoods.syncGoods.mockResolvedValue({
+      goods: { created: 2, updated: 3, mappingOnly: 1, skipped: 0 },
+      skus: { created: 4, updated: 5 },
+      mappings: { upserted: 6, disabled: 0 },
+      conversionRules: { upserted: 2 },
+      warnings: [],
+    });
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_GOODS)).resolves.toContain('商品2/3');
+  });
+
+  it('路由十方清源订单同步', async () => {
+    shifangOrders.syncOrders.mockResolvedValue({
+      fetched: 8,
+      created: 3,
+      updated: 4,
+      skipped: 1,
+      failed: 0,
+      payments: 7,
+      outputs: 2,
+      exits: 1,
+      events: 3,
+      warnings: [],
+      failures: [],
+    });
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_ORDERS)).resolves.toContain('拉取8');
+  });
+
+  it('路由十方清源自提订单同步', async () => {
+    shifangAgentOrders.syncAgentOrders.mockResolvedValue({
+      fetched: 5,
+      created: 2,
+      updated: 1,
+      skipped: 1,
+      failed: 0,
+      outputs: 2,
+      exits: 1,
+      warnings: [],
+      failures: [],
+    });
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_AGENT_ORDERS)).resolves.toContain(
+      '拉取5',
+    );
+  });
+
   it('路由 OA 组织同步', async () => {
     oaOrg.syncAll.mockResolvedValue('组织3 职位2 人员10');
     await expect(handlers.execute(SCHEDULED_TASK_CODE.OA_ORG)).resolves.toBe('组织3 职位2 人员10');
@@ -70,6 +128,22 @@ describe('ScheduledTaskHandlers', () => {
   it('商品同步忙碌文案转换为 ScheduledTaskBusyError', async () => {
     huasuProducts.syncProducts.mockRejectedValue(new BadRequestException('华溯商品同步仍在进行，请稍后再试'));
     await expect(handlers.execute(SCHEDULED_TASK_CODE.HUASU_PRODUCTS)).rejects.toBeInstanceOf(
+      ScheduledTaskBusyError,
+    );
+  });
+
+  it('十方清源用户同步忙碌转换为 ScheduledTaskBusyError', async () => {
+    shifangUsers.syncUsers.mockResolvedValue(null);
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_USERS)).rejects.toBeInstanceOf(
+      ScheduledTaskBusyError,
+    );
+  });
+
+  it('十方清源商品同步忙碌文案转换为 ScheduledTaskBusyError', async () => {
+    shifangGoods.syncGoods.mockRejectedValue(
+      new BadRequestException('十方清源商品同步仍在进行，请稍后再试'),
+    );
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_GOODS)).rejects.toBeInstanceOf(
       ScheduledTaskBusyError,
     );
   });

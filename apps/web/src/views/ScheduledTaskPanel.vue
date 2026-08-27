@@ -305,7 +305,7 @@ onMounted(load);
           </template>
         </el-input>
         <el-button :icon="Refresh" aria-label="刷新列表" title="刷新列表" @click="load" />
-        <el-button v-if="can('system:create')" type="primary" :icon="Plus" @click="createTask">
+        <el-button v-if="can('system:tasks:create')" type="primary" :icon="Plus" @click="createTask">
           新增任务
         </el-button>
       </div>
@@ -332,7 +332,7 @@ onMounted(load);
           <template #default="{ row }">
             <el-switch
               :model-value="row.status === 1"
-              :disabled="!can('system:update')"
+              :disabled="!can('system:tasks:update')"
               @change="(value: string | number | boolean) => toggleStatus(row, Boolean(value))"
             />
           </template>
@@ -357,18 +357,25 @@ onMounted(load);
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right" align="center">
           <template #default="{ row }">
-            <TableRowActions :show-more="can('system:delete') || can('system:update')">
+            <TableRowActions
+              :show-more="can('system:tasks:delete') || can('system:tasks:run')"
+            >
               <el-button link type="primary" @click="open('view', row)">查看</el-button>
               <el-button link type="primary" @click="openRuns(row)">执行记录</el-button>
-              <el-button v-if="can('system:update')" link type="primary" @click="open('edit', row)">
+              <el-button
+                v-if="can('system:tasks:update')"
+                link
+                type="primary"
+                @click="open('edit', row)"
+              >
                 编辑
               </el-button>
               <template #more>
-                <el-dropdown-item v-if="can('system:update')" @click="runNow(row)">
+                <el-dropdown-item v-if="can('system:tasks:run')" @click="runNow(row)">
                   立即执行
                 </el-dropdown-item>
                 <el-dropdown-item
-                  v-if="can('system:delete')"
+                  v-if="can('system:tasks:delete')"
                   class="table-action-danger"
                   @click="removeTask(row)"
                 >

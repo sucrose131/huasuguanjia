@@ -2,11 +2,12 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { OaDocumentSubmissionService } from '../integrations/xinfutong-oa/approval/document-submission.service';
 import { OaStarterContextService } from '../integrations/xinfutong-oa/approval/starter-context.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
-const names = <T extends keyof typeof OA_FORM_MAPPINGS>(type: T) =>
+const names = (form: OaFormMapping) =>
   Object.fromEntries(
-    Object.entries(OA_FORM_MAPPINGS[type].fields).map(([key, value]) => [key, value.uniqueName]),
+    Object.entries(form.fields).map(([key, value]) => [key, value.uniqueName]),
   ) as Record<string, string>;
 
 @Injectable()
@@ -15,6 +16,7 @@ export class InventoryOaApprovalService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OaStarterContextService) private readonly starters: OaStarterContextService,
     @Inject(OaDocumentSubmissionService) private readonly submissions: OaDocumentSubmissionService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
   ) {}
 
   async submitTransfer(id: bigint, userId: string) {
@@ -45,8 +47,8 @@ export class InventoryOaApprovalService {
       ]);
     if (!sourceOrg || !targetOrg || !sourceWarehouse || !targetWarehouse)
       throw new BadRequestException('调拨组织或仓库不存在');
-    const form = OA_FORM_MAPPINGS.inventory_transfer;
-    const f = names('inventory_transfer');
+    const form = await this.mappingService.getMapping('inventory_transfer', starter.accountSetId);
+    const f = names(form);
     return this.submissions.submit({
       businessType: 'inventory_transfer',
       businessId: id,
@@ -91,8 +93,8 @@ export class InventoryOaApprovalService {
     const starter = await this.starters.resolve(userId, first.org_id);
     const refs = await this.references(details);
     const types = await this.dictionary('inventory_adjust_type');
-    const form = OA_FORM_MAPPINGS.inventory_adjust;
-    const f = names('inventory_adjust');
+    const form = await this.mappingService.getMapping('inventory_adjust', starter.accountSetId);
+    const f = names(form);
     return this.submissions.submit({
       businessType: 'inventory_adjust',
       businessId: id,
@@ -140,8 +142,8 @@ export class InventoryOaApprovalService {
       }),
       this.dictionary('inventory_check_type'),
     ]);
-    const form = OA_FORM_MAPPINGS.inventory_check,
-      f = names('inventory_check');
+    const form = await this.mappingService.getMapping('inventory_check', starter.accountSetId),
+      f = names(form);
     return this.submissions.submit({
       businessType: 'inventory_check',
       businessId: id,
@@ -258,8 +260,8 @@ export class InventoryOaApprovalService {
       ),
       this.dictionary('inventory_loss_disposal'),
     ]);
-    const form = (OA_FORM_MAPPINGS as any)[config.form],
-      f = names(config.form as any);
+    const form = await this.mappingService.getMapping(config.form, starter.accountSetId),
+      f = names(form);
     const prefix = type === 'overflow' ? 'overflow' : 'loss';
     return this.submissions.submit({
       businessType: config.business,

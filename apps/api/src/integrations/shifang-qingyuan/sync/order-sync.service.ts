@@ -6,6 +6,10 @@ import { PrismaService } from '../../../database/prisma.service';
 import { INVENTORY_BUSINESS_MODE } from '../../../inventory/inventory-dictionary';
 import { ExternalInventoryPostingService } from '../../common/external-inventory-posting.service';
 import {
+  ensureSyncedSaleOrderServiceDetail,
+  hasIncompleteAfterSalesService,
+} from '../../common/sync-sale-order-service-detail';
+import {
   SHIFANG_QINGYUAN_DATA_SOURCE_CODE,
   SHIFANG_QINGYUAN_DATA_SOURCE_NAME,
   SHIFANG_QINGYUAN_FEEDBACK,
@@ -23,7 +27,9 @@ import {
   SHIFANG_QINGYUAN_REFUND_TYPE,
   SHIFANG_QINGYUAN_RULE_STATUS,
   SHIFANG_QINGYUAN_RULE_TYPE,
+  SHIFANG_QINGYUAN_STOCK_FLOW,
 } from '../shifang-qingyuan.constants';
+import { SALES_ORDER_TYPE } from '../../../sales/sales-helpers';
 import { ShifangQingyuanService } from '../shifang-qingyuan.service';
 import type {
   ShifangQingyuanOrder,
@@ -70,6 +76,7 @@ const PAGE_LIMIT = 100;
 @Injectable()
 export class ShifangQingyuanOrderSyncService {
   private static readonly logger = new Logger(ShifangQingyuanOrderSyncService.name);
+  private running = false;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -83,6 +90,13 @@ export class ShifangQingyuanOrderSyncService {
   async syncOrders(
     userId = '0',
     options: ShifangQingyuanOrderSyncOptions = {},
+  ): Promise<ShifangQingyuanOrderSyncStats> {
+    return this.withSyncLock(() => this.syncOrdersUnlocked(userId, options));
+  }
+
+  private async syncOrdersUnlocked(
+    userId: string,
+    options: ShifangQingyuanOrderSyncOptions,
   ): Promise<ShifangQingyuanOrderSyncStats> {
     const stats = this.emptyStats();
     const sourceId = await this.ensureDataSource(userId);
@@ -125,6 +139,13 @@ export class ShifangQingyuanOrderSyncService {
 
   /** 单笔同步：按十方 order_no 拉列表（list 已含全量）后 applyOrder */
   async syncOrderByNo(orderNo: string, userId = '0'): Promise<ShifangQingyuanOrderSyncStats> {
+    return this.withSyncLock(() => this.syncOrderByNoUnlocked(orderNo, userId));
+  }
+
+  private async syncOrderByNoUnlocked(
+    orderNo: string,
+    userId: string,
+  ): Promise<ShifangQingyuanOrderSyncStats> {
     const stats = this.emptyStats();
     const sourceId = await this.ensureDataSource(userId);
     const data = await this.shifangQingyuan.getOrderList({
@@ -138,6 +159,18 @@ export class ShifangQingyuanOrderSyncService {
     stats.fetched = 1;
     await this.applyOrderSafe(item, sourceId, userId, stats);
     return stats;
+  }
+
+  private async withSyncLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running) {
+      throw new BadRequestException('十方清源订单同步仍在进行，请稍后再试');
+    }
+    this.running = true;
+    try {
+      return await fn();
+    } finally {
+      this.running = false;
+    }
   }
 
   private async applyOrderSafe(
@@ -210,7 +243,8 @@ export class ShifangQingyuanOrderSyncService {
       sourceUpdatedAt &&
       existing.source_updated_at &&
       existing.source_updated_at.getTime() === sourceUpdatedAt.getTime() &&
-      existing.source_status === orderStatus
+      existing.source_status === orderStatus &&
+      !(await hasIncompleteAfterSalesService(this.prisma, existing.so_id))
     ) {
       stats.skipped += 1;
       return;
@@ -304,24 +338,11 @@ export class ShifangQingyuanOrderSyncService {
           delta.payments += 1;
         }
 
-        if (
-          await this.ensureStatusEvent(tx, {
-            soId,
-            sourceId,
-            orderType,
-            order,
-            customerId,
-            operatorId,
-            now,
-          })
-        ) {
-          delta.events += 1;
-        }
-
         const shouldShip =
-          SHIFANG_QINGYUAN_ORDER_SHIPPED_STATUSES.has(orderStatus) ||
-          (snapshot.express?.length ?? 0) > 0 ||
-          Number(order.shipping_status) === 1;
+          !this.isCloudStockInbound(snapshot) &&
+          (SHIFANG_QINGYUAN_ORDER_SHIPPED_STATUSES.has(orderStatus) ||
+            (snapshot.express?.length ?? 0) > 0 ||
+            Number(order.shipping_status) === 1);
         if (shouldShip) {
           const shipped = await this.ensureShipments(tx, {
             soId,
@@ -420,7 +441,7 @@ export class ShifangQingyuanOrderSyncService {
     const priceoff = this.dec(Math.max(soAmountNum - factAmountNum, 0));
     const address = this.formatAddress(order);
     const tracking = this.formatTrackingNos(snapshot);
-    const soType = this.resolveSoType(lines);
+    const soType = this.resolveSoType(snapshot, lines);
     const customer = await tx.hspsi_basic_customer.findFirstOrThrow({
       where: { customer_id: customerId },
     });
@@ -574,53 +595,6 @@ export class ShifangQingyuanOrderSyncService {
     return true;
   }
 
-  private async ensureStatusEvent(
-    tx: Tx,
-    input: {
-      soId: bigint;
-      sourceId: bigint;
-      orderType: string;
-      order: ShifangQingyuanOrder;
-      customerId: bigint;
-      operatorId: bigint;
-      now: Date;
-    },
-  ): Promise<boolean> {
-    const key = this.eventKey(
-      input.sourceId,
-      input.orderType,
-      input.order.id,
-      Number(input.order.order_status),
-    );
-    const old = await tx.hspsi_sale_order_service.findFirst({
-      where: { so_id: input.soId, remark: key, deleted_at: null },
-    });
-    if (old) return false;
-
-    const eventType = this.eventTypeForStatus(Number(input.order.order_status));
-    const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
-      data: {
-        service_no: serviceNo,
-        so_id: input.soId,
-        customer_id: Number(input.customerId),
-        goods_id: 0,
-        sku_id: 0,
-        event_type: eventType,
-        event_content: this.clip(input.order.remark ?? '', 255),
-        event_status: 2,
-        handler_id: input.operatorId,
-        event_date: input.now,
-        remark: key,
-        created_by: input.operatorId,
-        updated_by: input.operatorId,
-        created_at: input.now,
-        updated_at: input.now,
-      },
-    });
-    return true;
-  }
-
   private async ensureShipments(
     tx: Tx,
     input: {
@@ -711,7 +685,8 @@ export class ShifangQingyuanOrderSyncService {
           sourceType: 'sales_output',
           sourceNo: outputNo,
           operationBy: input.userId,
-          idempotencyKey: `shifang-qingyuan-output:${item.key}:v1`,
+          // 过账键绑定本平台出库单 ID。外部订单/快递单 ID 或 ALL 会让不同订单出同一商品撞键。
+          idempotencyKey: `shifang-qingyuan-output:${output.so_output_id}:v1`,
           remark: '',
           lines: shipLines.map((line) => ({
             goodsId: line.goodsId,
@@ -871,6 +846,7 @@ export class ShifangQingyuanOrderSyncService {
       }
 
       if (type === SHIFANG_QINGYUAN_REFUND_TYPE.RETURN_REFUND) {
+        if (this.isCloudStockInbound(input.snapshot)) continue;
         const exitKey = this.exitKey(input.sourceId, input.orderType, order.id, refund.id);
         const existed = await tx.hspsi_sale_order_exit.findFirst({
           where: { so_id: input.soId, remark: exitKey, deleted_at: null },
@@ -1000,7 +976,6 @@ export class ShifangQingyuanOrderSyncService {
     const old = await tx.hspsi_sale_order_service.findFirst({
       where: { so_id: input.soId, remark: key, deleted_at: null },
     });
-    if (old) return false;
 
     const type = Number(input.refund.type);
     const eventType = type === SHIFANG_QINGYUAN_REFUND_TYPE.EXCHANGE ? 5 : 4;
@@ -1011,9 +986,23 @@ export class ShifangQingyuanOrderSyncService {
 
     const goodsLine = this.resolveRefundGoodsLine(input.refund, input.lines);
     const occurredAt = this.resolveRefundOccurredAt(input.refund, input.now);
+    const quantity = this.resolveRefundServiceQty(input.refund, goodsLine);
+
+    if (old) {
+      await ensureSyncedSaleOrderServiceDetail(tx, {
+        serviceId: old.service_id,
+        soId: input.soId,
+        goodsId: goodsLine?.goodsId,
+        skuId: goodsLine?.skuId,
+        unitType: goodsLine?.unitType,
+        quantity,
+        remark: content,
+      });
+      return false;
+    }
 
     const serviceNo = await this.businessNumber.generate(BUSINESS_PREFIX.SALES_SERVICE);
-    await tx.hspsi_sale_order_service.create({
+    const created = await tx.hspsi_sale_order_service.create({
       data: {
         service_no: serviceNo,
         so_id: input.soId,
@@ -1032,7 +1021,25 @@ export class ShifangQingyuanOrderSyncService {
         updated_at: input.now,
       },
     });
+    await ensureSyncedSaleOrderServiceDetail(tx, {
+      serviceId: created.service_id,
+      soId: input.soId,
+      goodsId: goodsLine?.goodsId,
+      skuId: goodsLine?.skuId,
+      unitType: goodsLine?.unitType,
+      quantity,
+      remark: content,
+    });
     return true;
+  }
+
+  private resolveRefundServiceQty(
+    refund: ShifangQingyuanOrderRefund,
+    goodsLine: ResolvedOrderLine | null,
+  ): number {
+    const refundQty = Number(refund.num || 0);
+    if (refundQty > 0) return refundQty;
+    return Number(goodsLine?.quantity || 0);
   }
 
   /** refund.order_detail_id → 已解析的平台下单行 */
@@ -1373,6 +1380,10 @@ export class ShifangQingyuanOrderSyncService {
         serviceStatus = 3;
     }
 
+    if (this.isCloudStockInbound(snapshot)) {
+      deliveryStatus = 1;
+    }
+
     const refunds = snapshot.refunds ?? [];
     const hasProcessingRefund = refunds.some(
       (refund) => this.resolveRefundPhase(refund) === 'PROCESSING',
@@ -1442,33 +1453,23 @@ export class ShifangQingyuanOrderSyncService {
     return next;
   }
 
-  private resolveSoType(lines: ResolvedOrderLine[]): number {
+  private resolveSoType(
+    snapshot: ShifangQingyuanOrderDetailData,
+    lines: ResolvedOrderLine[],
+  ): number {
+    if (this.isCloudStockInbound(snapshot)) return SALES_ORDER_TYPE.NO_OUTPUT;
     const types = new Set(lines.map((line) => (line.goodsType === 2 ? 2 : 1)));
-    if (types.size > 1) return 3;
-    return types.has(2) ? 2 : 1;
+    if (types.size > 1) return SALES_ORDER_TYPE.MIXED;
+    return types.has(2) ? SALES_ORDER_TYPE.VIRTUAL : SALES_ORDER_TYPE.PHYSICAL;
   }
 
   private resolvePayMode(method: number): number {
     return SHIFANG_QINGYUAN_PAY_MODE_MAP[Number(method)] ?? 2;
   }
 
-  private eventTypeForStatus(status: number): number {
-    if (
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_SHIP ||
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.PENDING_PICKUP
-    ) {
-      return 2;
-    }
-    if (
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.SHIPPED ||
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.RECEIVED ||
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.PICKUP_DONE ||
-      status === SHIFANG_QINGYUAN_ORDER_STATUS.COMPLETED
-    ) {
-      return 3;
-    }
-    if (status === SHIFANG_QINGYUAN_ORDER_STATUS.CLOSED) return 11;
-    return 11;
+  /** order_type=1：向云库存纯入库，无实体发货，平台不写出库/回库。 */
+  private isCloudStockInbound(snapshot: ShifangQingyuanOrderDetailData): boolean {
+    return Number(snapshot.order_type) === SHIFANG_QINGYUAN_STOCK_FLOW.CLOUD_IN;
   }
 
   private formatAddress(order: ShifangQingyuanOrder): string {
@@ -1528,14 +1529,6 @@ export class ShifangQingyuanOrderSyncService {
     token: number | string,
   ) {
     return `SFQY-EXIT-${sourceId}-${orderType}-${orderId}-${token}`;
-  }
-  private eventKey(
-    sourceId: bigint,
-    orderType: string,
-    orderId: number | string,
-    status: number,
-  ) {
-    return `SFQY-EVT-${sourceId}-${orderType}-${orderId}-STATUS-${status}`;
   }
 
   private async markMappingFailed(

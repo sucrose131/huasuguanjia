@@ -1,5 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 
+export function filterQuantityAlertsByStatus<T extends { warning: boolean }>(
+  items: T[],
+  status: unknown,
+): T[] {
+  const value = status == null ? '' : String(status).trim();
+  if (value === '') return items;
+  if (value === '0') return items.filter((item) => !item.warning);
+  if (value === '1') return items.filter((item) => item.warning);
+  throw new BadRequestException('库存状态参数无效');
+}
+
 export type InventoryCheckQuantityResult = {
   inventory: number;
   actual: number;

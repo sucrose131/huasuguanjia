@@ -1,4 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BusinessReferenceService } from '../database/business-reference.service';
 import { PrismaService } from '../database/prisma.service';
@@ -14,6 +20,7 @@ import { RequisitionOaApprovalService } from './requisition-oa-approval.service'
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { Attachment, AttachmentsService } from '../attachments/attachments.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
+import { TodoService } from '../database/todo.service';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -38,6 +45,7 @@ export class RequisitionService {
     @Inject(AttachmentsService)
     private readonly attachmentsService: AttachmentsService,
     @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
+    @Inject(TodoService) private readonly todoService: TodoService,
   ) {}
 
   private attachmentItems(value: unknown): Attachment[] {
@@ -108,6 +116,7 @@ export class RequisitionService {
       applicantId: bigint;
       drawType: number;
     },
+    allowEmptyApplicant = false,
   ) {
     const [organization, department, warehouse, applicant, drawTypeCategory] = await Promise.all([
       tx.hspsi_basic_organization.findFirst({
@@ -138,10 +147,13 @@ export class RequisitionService {
       }),
     ]);
     if (!organization) throw new BadRequestException('所属组织不存在或未正常运营');
-    if (!department) throw new BadRequestException('领用部门不属于所选组织或已停用');
+    // 草稿且找不到OA员工身份时（allowEmptyApplicant），领用人/部门允许为空，仅保存草稿
+    if (values.deptId > 0n && !department)
+      throw new BadRequestException('领用部门不属于所选组织或已停用');
     if (!warehouse)
       throw new BadRequestException('领用仓库仅限所选组织下已启用的行政类、健服类仓库');
-    if (!applicant) throw new BadRequestException('领用人必须选择已启用的基础员工');
+    if (values.applicantId > 0n && !applicant)
+      throw new BadRequestException('领用人必须选择已启用的基础员工');
 
     const [membership, drawType] = await Promise.all([
       tx.hspsi_basic_staff_organizations.findFirst({
@@ -166,7 +178,8 @@ export class RequisitionService {
           })
         : null,
     ]);
-    if (!membership) throw new BadRequestException('领用人不属于所选组织或领用部门');
+    if (values.applicantId > 0n && !membership)
+      throw new BadRequestException('领用人不属于所选组织或领用部门');
     if (!drawType) throw new BadRequestException('领用类型未在数据字典中配置');
   }
 
@@ -286,6 +299,12 @@ export class RequisitionService {
       BigInt(String(orgIdValue)),
       BigInt(String(warehouseIdValue)),
     );
+  }
+
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
 
   private aggregatePostingLines(
@@ -527,6 +546,24 @@ export class RequisitionService {
         orderBy: { id: 'desc' },
       }),
     ]);
+    const mappedDetails = details.map((detail) => {
+      const historicalQty =
+        (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
+        (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
+      return {
+        id: detail.draw_detail_id,
+        goodsId: detail.goods_id,
+        skuId: detail.sku_id,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        quantity: detail.draw_qty,
+        returnable: detail.is_returnable === 1,
+        historicalQty,
+        remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
+        remark: detail.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     const [enriched] = await this.enrichRequisitionStaff([
       {
         ...item,
@@ -558,29 +595,102 @@ export class RequisitionService {
         oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
         oaProcessId: oa?.proc_inst_id ?? '',
         oaBusKey: oa?.bus_key ?? '',
-        details: details.map((detail) => {
-          const historicalQty =
-            (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
-            (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
-          return {
-            id: detail.draw_detail_id,
-            goodsId: detail.goods_id,
-            skuId: detail.sku_id,
-            batchNo: detail.batch_no,
-            unitType: detail.unit_type,
-            quantity: detail.draw_qty,
-            returnable: detail.is_returnable === 1,
-            historicalQty,
-            remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
-            remark: detail.remark,
-          };
-        }),
+        details: enrichedDetails,
       },
     ]);
     return enriched!;
   }
 
-  async saveApplication(id: string | null, body: Body, userId: string, submit: boolean) {
+  /**
+   * 按单据组织（账套）解析登录用户的 OA 员工身份。
+   * 账套由组织决定；(user_id, account_set_id) 经身份表唯一确定员工。
+   * 找不到（用户不属于该组织账套）返回 null。
+   */
+  private async resolveApplicantIdentity(db: Db, userId: string, orgId: bigint) {
+    const organization = await db.hspsi_basic_organization.findFirst({
+      where: { org_id: orgId, operation_status: 1, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!organization?.account_set_id) return null;
+    const identity = await db.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) return null;
+    const staff = await db.hspsi_basic_staff.findFirst({
+      where: {
+        id: identity.staff_id,
+        account_set_id: organization.account_set_id,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, name: true, outer_ref_id: true, out_staff_id: true },
+    });
+    if (!staff) return null;
+    const primary = await db.hspsi_basic_staff_organizations.findFirst({
+      where: {
+        staff_id: staff.id,
+        account_set_id: organization.account_set_id,
+        type: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
+      select: { org_id: true, org_type: true },
+    });
+    return { ...staff, accountSetId: organization.account_set_id, primary };
+  }
+
+  /**
+   * 前端选组织后解析当前登录用户的 OA 员工身份（含主部门），用于自动填充领用人/部门。
+   */
+  async currentApplicant(userId: string, orgIdValue?: string) {
+    if (!orgIdValue) return { found: false };
+    const orgId = this.bigint(orgIdValue, '所属组织');
+    const applicant = await this.resolveApplicantIdentity(this.prisma, userId, orgId);
+    if (!applicant) return { found: false };
+    let deptId = '';
+    let deptName = '';
+    let deptOuterRefId = '';
+    if (applicant.primary?.org_type === 2) {
+      const dept = await this.prisma.hspsi_basic_dept.findFirst({
+        where: { dept_id: applicant.primary.org_id, deleted_at: null },
+        select: { dept_id: true, name: true, outer_ref_id: true },
+      });
+      if (dept) {
+        deptId = String(dept.dept_id);
+        deptName = dept.name;
+        deptOuterRefId = dept.outer_ref_id;
+      }
+    } else if (applicant.primary) {
+      const organization = await this.prisma.hspsi_basic_organization.findFirst({
+        where: { org_id: applicant.primary.org_id, deleted_at: null },
+        select: { name: true, outer_ref_id: true },
+      });
+      if (organization) {
+        deptName = organization.name;
+        deptOuterRefId = organization.outer_ref_id;
+      }
+    }
+    return {
+      found: true,
+      staffId: String(applicant.id),
+      name: applicant.name,
+      accountSetId: String(applicant.accountSetId),
+      outerRefId: applicant.outer_ref_id,
+      outStaffId: applicant.out_staff_id,
+      deptId,
+      deptName,
+      deptOuterRefId,
+    };
+  }
+
+  async saveApplication(
+    id: string | null,
+    body: Body,
+    userId: string,
+    submit: boolean,
+    fixedOrgId?: string | null,
+  ) {
     const lines = this.detailLines(body.details).map((line) => ({
       goodsId: this.bigint(line.goodsId, '商品'),
       skuId: this.bigint(line.skuId, 'SKU'),
@@ -615,6 +725,8 @@ export class RequisitionService {
             : null;
         if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
         if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+        if (current && current.created_by !== BigInt(userId))
+          throw new ForbiddenException('个人无权修改他人发起的领用申请');
         if (requestedId !== null) {
           const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
             where: {
@@ -650,7 +762,19 @@ export class RequisitionService {
           }
         }
 
-        const applicantId = this.bigint(body.applicantId ?? current?.applicant_id, '领用人');
+        // 后端兜底：账套由单据组织决定，提交人按(登录用户, 组织账套)解析身份，
+        // 不信任前端/主身份 staff_id（多账套用户可能跨账套错配）。
+        if (!fixedOrgId) throw new ForbiddenException('当前账号未关联固定所属组织，不能发起领用申请');
+        const orgId = this.bigint(fixedOrgId, '所属组织');
+        if (body.orgId != null && String(body.orgId) !== String(fixedOrgId))
+          throw new ForbiddenException('个人只能在自己的固定所属组织发起领用申请');
+        if (current && current.org_id !== orgId)
+          throw new ForbiddenException('领用申请的所属组织与已保存单据不一致，不允许变更组织');
+        const applicant = await this.resolveApplicantIdentity(tx, userId, orgId);
+        if (submit && !applicant) {
+          throw new BadRequestException('当前账号未关联该组织的OA员工，无法提交审批');
+        }
+        const applicantId = applicant?.id ?? 0n;
         const currentAttachments = this.attachmentItems(current?.attachments);
         const signatureWasExplicitlyCleared =
           body.signatureContent !== undefined &&
@@ -694,9 +818,9 @@ export class RequisitionService {
         if (signedAt && Number.isNaN(signedAt.getTime()))
           throw new BadRequestException('签署时间无效');
 
-        const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
         const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
-        const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
+        const deptIdRaw = body.deptId ?? current?.dept_id;
+        const deptId = deptIdRaw ? this.bigint(deptIdRaw, '领用部门') : 0n;
         const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
         const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
         if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
@@ -706,13 +830,17 @@ export class RequisitionService {
         if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
           throw new BadRequestException('借用的明细必须选择“可归还”');
         }
-        await this.validateApplicationReferences(tx, {
-          orgId,
-          warehouseId,
-          deptId,
-          applicantId,
-          drawType,
-        });
+        await this.validateApplicationReferences(
+          tx,
+          {
+            orgId,
+            warehouseId,
+            deptId,
+            applicantId,
+            drawType,
+          },
+          !submit && !applicant,
+        );
         await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
 
         const total = lines.reduce((sum, line) => sum + line.quantity, 0);
@@ -780,6 +908,27 @@ export class RequisitionService {
       throw error;
     }
     if (!submit) return { id: drawId, message: '草稿已保存' };
+    // 非「借用」类型的领用申请不走 OA 审批：单据保留在系统内待审批，
+    // 并给所属组织下有领用审批权限的用户写入待办提醒。
+    const submitted = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+      select: { draw_type: true, draw_no: true, org_id: true },
+    });
+    if (submitted && Number(submitted.draw_type) !== 2) {
+      const approvers = await this.findRequisitionApprovers(this.prisma, submitted.org_id);
+      for (const approverId of approvers) {
+        await this.todoService.create({
+          userId: approverId,
+          organizationId: Number(submitted.org_id),
+          title: submitted.draw_no,
+          content: '有新的领用申请待审批',
+          businessType: 'draw_approve',
+          businessId: Number(drawId),
+          actorUserId: userId,
+        });
+      }
+      return { id: drawId, message: '申请已提交，等待系统内审批' };
+    }
     const oa = await this.oaApproval.submit(drawId, userId);
     return {
       id: drawId,
@@ -790,6 +939,62 @@ export class RequisitionService {
       oaStatus: oa.procStatus,
       oaProcessId: oa.procInstId,
     };
+  }
+
+  /**
+   * 查找所属组织下对领用申请有审批操作权限的用户（无论角色）：
+   * 授权组织覆盖该 org_id，且拥有领用申请审核权限（菜单 code
+   * requisitions:applications:approve，含 admin 超级权限）。
+   */
+  private async findRequisitionApprovers(db: Db, orgId: bigint): Promise<number[]> {
+    const authorized = await db.hspsi_sys_user_authorized_org.findMany({
+      where: { org_id: orgId },
+      select: { user_id: true },
+    });
+    const candidateIds = [...new Set(authorized.map((item) => Number(item.user_id)))];
+    if (!candidateIds.length) return [];
+    const userRoles = await db.hspsi_sys_user_role.findMany({
+      where: { user_id: { in: candidateIds } },
+    });
+    const roleIds = [...new Set(userRoles.map((item) => Number(item.role_id)))];
+    const roles = roleIds.length
+      ? await db.hspsi_sys_role.findMany({
+          where: { id: { in: roleIds.map((id) => BigInt(id)) }, status: 1, deleted_at: null },
+          select: { id: true, code: true },
+        })
+      : [];
+    const adminRoleIds = new Set(
+      roles.filter((role) => role.code === 'admin').map((role) => Number(role.id)),
+    );
+    const roleMenus = roleIds.length
+      ? await db.hspsi_sys_role_menu.findMany({
+          where: { role_id: { in: roleIds.map((id) => BigInt(id)) } },
+        })
+      : [];
+    const menuIds = [...new Set(roleMenus.map((item) => Number(item.menu_id)))];
+    const menus = menuIds.length
+      ? await db.hspsi_sys_menu.findMany({
+          where: { id: { in: menuIds }, deleted_at: null, status: 1 },
+          select: { id: true, code: true },
+        })
+      : [];
+    const approveMenuIds = new Set(
+      menus
+        .filter((menu) => menu.code === 'requisitions:applications:approve')
+        .map((menu) => menu.id),
+    );
+    const approvedRoleIds = new Set<number>();
+    adminRoleIds.forEach((id) => approvedRoleIds.add(id));
+    roleMenus.forEach((item) => {
+      if (approveMenuIds.has(Number(item.menu_id))) approvedRoleIds.add(Number(item.role_id));
+    });
+    return [
+      ...new Set(
+        userRoles
+          .filter((item) => approvedRoleIds.has(Number(item.role_id)))
+          .map((item) => Number(item.user_id)),
+      ),
+    ];
   }
 
   private async ensureAutomaticOutput(
@@ -887,7 +1092,6 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
-
       const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
         where: {
           business_type: 'requisition_application',
@@ -1206,6 +1410,8 @@ export class RequisitionService {
       }
       if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可删除');
       if (application.approve_status === 1) throw new BadRequestException('已审批申请不可删除');
+      if (application.created_by !== BigInt(userId))
+        throw new ForbiddenException('个人无权删除他人发起的领用申请');
       await tx.hspsi_draw_approve.update({
         where: { draw_id: drawId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
@@ -1349,6 +1555,7 @@ export class RequisitionService {
         remark: detail.remark,
       };
     });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     const [enriched] = await this.enrichRequisitionStaff([
       {
         ...item,
@@ -1370,7 +1577,7 @@ export class RequisitionService {
         hasReturnableItems: mappedDetails.some(
           (detail) => detail.returnable && detail.remainingQty > 0,
         ),
-        details: mappedDetails,
+        details: enrichedDetails,
       },
     ]);
     return enriched!;
@@ -1809,7 +2016,9 @@ export class RequisitionService {
       const usage = await this.confirmedOutputUsage(tx, output.draw_id);
       for (const detail of details) {
         if (!detail.batch_no.trim())
-          throw new BadRequestException('确认出库前必须填写全部物品批号');
+          throw new BadRequestException(
+            '确认出库前必须填写全部物品批号，请先编辑出库单并选择库存批次',
+          );
         const source = applicationDetails.find(
           (line) => line.draw_detail_id === detail.draw_detail_id,
         );

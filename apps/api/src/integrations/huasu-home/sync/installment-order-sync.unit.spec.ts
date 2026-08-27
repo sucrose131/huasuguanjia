@@ -2,7 +2,7 @@
  * 华溯之家分期订单同步单元测试（mock，不打真实外部接口）
  *
  * 覆盖：待审核/驳回跳过、按期收款出库、同一销售单多期追加、售后按 product_id+number 回库不退款、
- * 未出库售后不加库存、未付金额不记优惠、缺少 unpaid_amount 不视为已付、失败水位、
+ * 未出库售后不加库存、订单金额取 package_amount/实际金额取 amount、未付金额不记优惠、缺少 unpaid_amount 不视为已付、失败水位、
  * 单品未映射挂起、水位按类型隔离
  *
  * 运行：
@@ -133,7 +133,7 @@ function createService() {
     service_status: 3,
     so_property_type: 1,
     shipper: '',
-    fact_amount: 15000,
+    fact_amount: 30000,
   };
 
   const tx = {
@@ -243,6 +243,11 @@ function createService() {
         service_id: serviceSeq++,
         ...data,
       })),
+      update: vi.fn(),
+    },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn(),
     },
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockImplementation(async ({ where }) => {
@@ -326,6 +331,13 @@ function createService() {
     $transaction: vi
       .fn()
       .mockImplementation(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
+    hspsi_sale_order_service: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   };
 
   const huasuHome = {
@@ -420,11 +432,13 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
     expect(stats.payments).toBe(1);
     expect(stats.outputs).toBe(1);
     expect(stats.exits).toBe(0);
+    expect(stats.events).toBe(0);
+    expect(ctx.tx.hspsi_sale_order_service.create).not.toHaveBeenCalled();
 
     const createArg = ctx.tx.hspsi_sale_order.create.mock.calls[0][0].data;
     expect(createArg.customer_address).toBe('');
     expect(createArg.so_no).toBeTruthy();
-    expect(Number(createArg.fact_amount)).toBe(15000);
+    expect(Number(createArg.fact_amount)).toBe(30000);
     expect(Number(createArg.so_amount)).toBe(30000);
     expect(Number(createArg.priceoff_amount)).toBe(0);
 
@@ -440,6 +454,24 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
     const shipKey = ctx.tx.hspsi_sale_order_output.create.mock.calls[0][0].data.remark;
     expect(shipKey).toContain('OIP2607300100000176913');
     expect(ctx.posting.post).toHaveBeenCalled();
+    expect(ctx.posting.post.mock.calls[0]![0].idempotencyKey).toBe('huasu-home-output:8001:v1');
+  });
+
+  it('套餐价高于成交额时订单金额取 package_amount，实际金额取 amount', async () => {
+    const ctx = createService();
+    ctx.huasuHome.getInstallmentOrderList.mockResolvedValue({
+      list: [baseOrder({ package_amount: 35000, amount: 30000, paid_amount: 15000 })],
+      total: 1,
+    });
+
+    const stats = await ctx.service.syncInstallmentOrders('1', {
+      updated_at: '2026-01-01 00:00:00',
+    });
+    expect(stats.failed).toBe(0);
+    const createArg = ctx.tx.hspsi_sale_order.create.mock.calls[0][0].data;
+    expect(Number(createArg.so_amount)).toBe(35000);
+    expect(Number(createArg.fact_amount)).toBe(30000);
+    expect(Number(createArg.priceoff_amount)).toBe(5000);
   });
 
   it('同一销售单第二期只追加收款和出库，不新建 so_no', async () => {
@@ -642,6 +674,22 @@ describe('HuasuHomeInstallmentOrderSyncService 单元测试', () => {
     expect(stats.exits).toBe(0);
     expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
     expect(ctx.posting.post).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_sale_order_service.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        goods_id: 301,
+        sku_id: 401,
+        event_type: 4,
+      }),
+    });
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 301n,
+          sku_id: 401n,
+          service_qty: 5,
+        }),
+      ],
+    });
   });
 
   it('存在失败映射时增量水位取失败单最早 source_updated_at', async () => {

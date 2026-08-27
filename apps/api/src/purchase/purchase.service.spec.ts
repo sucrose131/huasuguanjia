@@ -5,14 +5,24 @@ import { PurchaseService } from './purchase.service';
 function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
+  message: Record<string, any> = { sendPurchaseReceiptNotification: vi.fn() },
 ) {
-  return new PurchaseService(
+  const todoService = { create: vi.fn().mockResolvedValue({ created: true }) };
+  const service = new PurchaseService(
     prisma as never,
+    { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
+    { enrichGoods: vi.fn(async (rows: unknown[]) => rows) } as never,
     { post: vi.fn() } as never,
     { syncExpiryAlert: vi.fn() } as never,
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
+    message as never,
+    todoService as never,
   );
+  vi.spyOn(service as any, 'assertReceiverScope').mockResolvedValue(undefined);
+  vi.spyOn(service as any, 'syncPurchaseOrderTodo').mockResolvedValue(undefined);
+  vi.spyOn(service as any, 'recalcOrderStatus').mockResolvedValue({});
+  return Object.assign(service, { __todoService: todoService });
 }
 
 describe('PurchaseService quick catalog materialization', () => {
@@ -193,9 +203,83 @@ describe('PurchaseService quick catalog materialization', () => {
   });
 });
 
+describe('PurchaseService receiver assignment and todo', () => {
+  it('returns only active OA users whose primary department matches the selected organization', async () => {
+    const prisma = {
+      hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ dept_id: 2n }) },
+      hspsi_sys_user: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 9n, staff_id: 90n, username: 'receiver', nickname: '收货人甲' },
+          { id: 10n, staff_id: 100n, username: 'other', nickname: '其他人员' },
+        ]),
+      },
+      hspsi_basic_staff: { findMany: vi.fn().mockResolvedValue([{ id: 90n }, { id: 100n }]) },
+      hspsi_basic_staff_organizations: {
+        findMany: vi.fn().mockResolvedValue([{ staff_id: 90n }]),
+      },
+    };
+    const result = await serviceWith(prisma).receiverOptions('1', '2');
+    expect(result).toEqual([expect.objectContaining({ value: 9n, label: '收货人甲' })]);
+  });
+
+  it('rejects a receiver without a valid OA primary department relation', async () => {
+    const tx = {
+      hspsi_sys_user: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 9n,
+          staff_id: 90n,
+          username: 'receiver',
+          nickname: '收货人甲',
+        }),
+      },
+      hspsi_basic_staff: { findFirst: vi.fn().mockResolvedValue({ id: 90n }) },
+      hspsi_basic_staff_organizations: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const service = serviceWith({});
+    (service as any).assertReceiverScope.mockRestore();
+    await expect((service as any).assertReceiverScope(tx, 1n, 2n, 9n)).rejects.toThrow(
+      'OA主组织、部门关系无效',
+    );
+  });
+
+  it('creates a personal todo linked by the full bigint purchase-order id', async () => {
+    const todoCreate = vi.fn();
+    const tx = {
+      hspsi_sys_todo: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: todoCreate,
+        update: vi.fn(),
+      },
+    };
+    const service = serviceWith({});
+    (service as any).syncPurchaseOrderTodo.mockRestore();
+    await (service as any).syncPurchaseOrderTodo(
+      tx,
+      {
+        po_id: 1786090216033523n,
+        po_no: 'PO202608190008',
+        org_id: 4n,
+        receiver_id: 13n,
+        status: 1,
+        created_by: 7n,
+      },
+      '7',
+    );
+    expect(todoCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        user_id: 13,
+        source_id: 1786090216033523n,
+        business_id: 1786090216033523n,
+        status: 0,
+      }),
+    });
+  });
+});
+
 describe('PurchaseService receipt confirmation', () => {
-  it('posts inventory and marks a pending receipt as confirmed', async () => {
+  it('posts inventory, marks a pending receipt as confirmed and notifies the order creator', async () => {
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const message = { sendPurchaseReceiptNotification: vi.fn().mockResolvedValue(undefined) };
     const receiptUpdate = vi.fn();
     const tx = {
       $queryRaw: vi.fn(),
@@ -207,6 +291,7 @@ describe('PurchaseService receipt confirmation', () => {
           warehouse_id: 2n,
           comfirm_status: 0,
           posting_version: 0,
+          input_qty: 2,
         }),
         findMany: vi.fn().mockResolvedValue([]),
         update: receiptUpdate,
@@ -235,9 +320,24 @@ describe('PurchaseService receipt confirmation', () => {
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = serviceWith(prisma, trace);
+    const service = serviceWith(prisma, trace, message);
     const postReceipt = vi.spyOn(service as any, 'postReceipt').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'syncProductionShortageState').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lineProgress: new Map([
+        [
+          '101:202',
+          {
+            ordered: 2,
+            cancelled: 0,
+            confirmedNormal: 0,
+            pendingNormal: 2,
+            exchangeReturned: 0,
+            confirmedExchange: 0,
+          },
+        ],
+      ]),
+    });
 
     const result = await service.confirmReceipt('501', true, '办理采购入库', '9');
 
@@ -256,11 +356,83 @@ describe('PurchaseService receipt confirmation', () => {
       where: { po_input_id: 501n },
       data: expect.objectContaining({ comfirm_status: 1, posting_version: 1, updated_by: 9n }),
     });
+    const recalcOrderStatus = (service as any).recalcOrderStatus as ReturnType<typeof vi.fn>;
+    expect(recalcOrderStatus).toHaveBeenCalledWith(tx, 401n);
+    expect(receiptUpdate.mock.invocationCallOrder[0]!).toBeLessThan(
+      recalcOrderStatus.mock.invocationCallOrder[0]!,
+    );
+    expect(message.sendPurchaseReceiptNotification).toHaveBeenCalledWith({
+      poId: 401n,
+      receiptNo: 'GA501',
+      orderNo: 'PO401',
+      quantity: 2,
+    });
     expect(result.message).toBe('入库已确认，库存已增加');
+  });
+
+  it('does not notify again when the same receipt is confirmed twice', async () => {
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const message = { sendPurchaseReceiptNotification: vi.fn().mockResolvedValue(undefined) };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_input_id: 501n,
+          po_input_no: 'GA501',
+          po_id: 401n,
+          warehouse_id: 2n,
+          comfirm_status: 1,
+          posting_version: 1,
+          input_qty: 2,
+        }),
+        findMany: vi.fn().mockResolvedValue([]),
+        update: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace, message);
+
+    const result = await service.confirmReceipt('501', true, '再次确认', '9');
+
+    expect(result.message).toBe('入库已确认');
+    expect(message.sendPurchaseReceiptNotification).not.toHaveBeenCalled();
   });
 });
 
 describe('PurchaseService production-shortage guards', () => {
+  it('采购申请忽略客户端伪造组织并固定使用发起人OA所属组织', async () => {
+    const create = vi.fn().mockResolvedValue({ pur_id: 7n });
+    const tx = {
+      hspsi_purchase_approve: { create },
+      hspsi_purchase_approve_detail: { deleteMany: vi.fn(), createMany: vi.fn() },
+    };
+    const service = serviceWith({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    vi.spyOn(service as any, 'materializeQuickCatalog').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+
+    await service.saveApplication(
+      null,
+      {
+        orgId: 999,
+        deptId: 2,
+        warehouseId: 3,
+        details: [{ goodsId: 10, skuId: 11, quantity: 1, unitType: 1 }],
+      },
+      '9',
+      false,
+      '1',
+    );
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ org_id: 1n, created_by: 9n }),
+    });
+  });
+
   it('creates one pending purchase-refund task for an effective paid return', async () => {
     const refundCreate = vi.fn().mockResolvedValue({
       refund_id: 77n,
@@ -607,61 +779,64 @@ describe('PurchaseService production-shortage guards', () => {
     );
   });
 
-  it('rejects cancelling a shortage purchase order below its unresolved gap', async () => {
+  it('reopens a production shortage when the effective received quantity no longer covers it', async () => {
+    const shortageUpdate = vi.fn();
+    const planUpdate = vi.fn();
     const tx = {
-      $queryRaw: vi.fn(),
-      hspsi_purchase_order: {
-        findFirst: vi.fn().mockResolvedValue({ po_id: 20n, pur_id: 7n, status: 2 }),
-        findUniqueOrThrow: vi
-          .fn()
-          .mockResolvedValue({ po_id: 20n, pcs_qty: 10, arrival_qty: 0, is_all_arrival: 0 }),
-        findMany: vi.fn().mockResolvedValue([{ po_id: 20n }]),
-        update: vi.fn(),
-      },
+      hspsi_purchase_order: { findMany: vi.fn().mockResolvedValue([{ po_id: 20n }]) },
       hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          { goods_id: 10n, sku_id: 11n, actual_qty: 4 },
+        ]),
+      },
+      hspsi_purchase_approve_detail: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { source_shortage_id: 8n, goods_id: 10n, sku_id: 11n, qty: 10 },
+          ]),
+      },
+      hspsi_production_shortage: {
         findMany: vi
           .fn()
           .mockResolvedValueOnce([
             {
-              id: 1n,
-              po_id: 20n,
-              goods_id: 10n,
-              sku_id: 11n,
-              qty: 10,
-              actual_qty: 0,
-              cancel_qty: 0,
+              shortage_id: 8n,
+              plan_id: 6n,
+              status: 2,
+              suggest_purchase_qty: 10,
+              require_qty: 15,
             },
           ])
-          .mockResolvedValueOnce([{ goods_id: 10n, sku_id: 11n, qty: 10, cancel_qty: 2 }]),
-        update: vi.fn(),
+          .mockResolvedValueOnce([{ shortage_id: 8n, status: 1 }]),
+        update: shortageUpdate,
       },
-      hspsi_purchase_order_input: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_order_input_detail: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_approve_detail: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([{ source_shortage_id: 8n, goods_id: 10n, sku_id: 11n }]),
+      hspsi_production_plan: {
+        findFirst: vi.fn().mockResolvedValue({
+          plan_id: 6n,
+          plan_status: 4,
+          delivered_qty: 0,
+        }),
+        update: planUpdate,
       },
-      hspsi_production_shortage: {
-        findMany: vi.fn().mockResolvedValue([{ shortage_id: 8n, suggest_purchase_qty: 10 }]),
-      },
-      hspsi_purchase_order_input_exit: { findMany: vi.fn().mockResolvedValue([]) },
-      hspsi_purchase_order_input_exit_detail: { aggregate: vi.fn() },
-    };
-    const prisma = {
-      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      hspsi_production_material_out: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_production_plan_input: { count: vi.fn().mockResolvedValue(0) },
     };
 
-    await expect(
-      serviceWith(prisma).cancelOrderPending(
-        '20',
-        {
-          details: [{ goodsId: 10, skuId: 11, cancelQuantity: 2 }],
-        },
-        '3',
-      ),
-    ).rejects.toThrow('不能低于尚未解决的缺料数量');
-    expect(tx.hspsi_purchase_order.update).not.toHaveBeenCalled();
+    await (serviceWith({}) as any).syncProductionShortageState(tx, 7n, '3');
+
+    expect(shortageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 1, fact_qty: 9 }) }),
+    );
+    expect(planUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          plan_status: 7,
+          material_status: 3,
+          stock_check_status: 2,
+        }),
+      }),
+    );
   });
 
   it('blocks direct deletion of a production-shortage purchase order', async () => {
@@ -717,8 +892,12 @@ describe('PurchaseService production-shortage guards', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
 
+    const service = serviceWith(prisma);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lifecycle: { canCancelUnarrived: true },
+    });
     await expect(
-      serviceWith(prisma).cancelOrderPending(
+      service.cancelOrderPending(
         '20',
         {
           details: [{ goodsId: 10, skuId: 11, cancelQuantity: 8 }],
@@ -731,7 +910,6 @@ describe('PurchaseService production-shortage guards', () => {
 
   it('cancels a pending receipt without posting inventory and releases its quantity', async () => {
     const receiptUpdate = vi.fn();
-    const orderUpdate = vi.fn();
     const tx = {
       $queryRaw: vi.fn(),
       hspsi_purchase_order_input: {
@@ -746,7 +924,7 @@ describe('PurchaseService production-shortage guards', () => {
           is_all_arrival: 0,
           status: 2,
         }),
-        update: orderUpdate,
+        update: vi.fn(),
       },
       hspsi_purchase_order_detail: {
         findMany: vi.fn().mockResolvedValue([{ qty: 12, actual_qty: 0, cancel_qty: 0 }]),
@@ -758,12 +936,13 @@ describe('PurchaseService production-shortage guards', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
 
-    const result = await serviceWith(prisma).cancelReceipt('90', '客户取消到货', '3');
+    const service = serviceWith(prisma);
+    const result = await service.cancelReceipt('90', '客户取消到货', '3');
 
     expect(receiptUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ comfirm_status: 2 }) }),
     );
-    expect(orderUpdate).toHaveBeenCalled();
+    expect((service as any).recalcOrderStatus).toHaveBeenCalledWith(tx, 20n);
     expect(result.message).toContain('锁定数量已释放');
   });
 
@@ -879,6 +1058,7 @@ describe('PurchaseService production-shortage guards', () => {
       },
       hspsi_purchase_approve: { findFirst: vi.fn(), create: applicationCreate },
       hspsi_purchase_approve_detail: { createMany: applicationDetailCreate },
+      hspsi_sys_oper_log: { create: vi.fn() },
     };
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
@@ -1014,6 +1194,7 @@ describe('PurchaseService production-shortage guards', () => {
       {
         generationMode: 'partial',
         vendorId: '5',
+        receiverId: '9',
         details: [{ applicationDetailId: '12', totalAmount: 100 }],
       },
       '9',
@@ -1023,6 +1204,7 @@ describe('PurchaseService production-shortage guards', () => {
       data: expect.objectContaining({
         pur_id: 7n,
         vendor_id: 5n,
+        receiver_id: 9n,
         pcs_qty: 4,
         pay_amout: new Prisma.Decimal(100),
       }),
@@ -1038,6 +1220,15 @@ describe('PurchaseService production-shortage guards', () => {
       ],
     });
     expect(trace.link).toHaveBeenCalledOnce();
+    expect((service as any).syncPurchaseOrderTodo).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        po_id: 30n,
+        receiver_id: 9n,
+        status: 1,
+      }),
+      '9',
+    );
     expect(result).toEqual(
       expect.objectContaining({ id: 30n, totalAmount: new Prisma.Decimal(100) }),
     );
@@ -1305,7 +1496,11 @@ describe('PurchaseService production-shortage guards', () => {
           .fn()
           .mockResolvedValue([{ goods_catg_id: 30n, goods_name: '成品', warehouse_type: 1 }]),
       },
-      hspsi_purchase_order_input: { create: receiptCreate, update: vi.fn() },
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: receiptCreate,
+        update: vi.fn(),
+      },
       hspsi_purchase_order_input_detail: { deleteMany: vi.fn(), createMany: vi.fn() },
     };
     const prisma = {
@@ -1341,6 +1536,7 @@ describe('PurchaseService production-shortage guards', () => {
   it('generates a pending receipt immediately and falls back to the goods default warehouse when the order warehouse is incompatible', async () => {
     const receiptCreate = vi.fn().mockResolvedValue({ po_input_id: 91n });
     const tx = {
+      $queryRaw: vi.fn(),
       hspsi_goods_info: {
         findMany: vi
           .fn()
@@ -1360,28 +1556,61 @@ describe('PurchaseService production-shortage guards', () => {
           .mockResolvedValueOnce({ warehouse_id: 9n })
           .mockResolvedValueOnce({ name: '健服-医疗耗材仓', warehouse_type: 9 }),
       },
-      hspsi_purchase_order_input: { create: receiptCreate, update: vi.fn() },
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'PO20',
+          org_id: 1n,
+          warehouse_id: 15n,
+          dept_id: 2n,
+          receiver_id: 9n,
+          pcs_qty: 12,
+          status: 3,
+        }),
+      },
+      hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 1n,
+            goods_id: 10n,
+            sku_id: 11n,
+            qty: 12,
+            cancel_qty: 0,
+            unit_type: 1,
+            remark: '',
+          },
+        ]),
+      },
+      hspsi_purchase_order_input: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: receiptCreate,
+        update: vi.fn(),
+      },
       hspsi_purchase_order_input_detail: { createMany: vi.fn() },
     };
     const prisma = {
-      hspsi_purchase_order_input: { findFirst: vi.fn().mockResolvedValue(null) },
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const service = serviceWith(prisma, trace);
-    vi.spyOn(service, 'order').mockResolvedValue({
-      po_id: 20n,
-      orderNo: 'PO20',
-      org_id: 1n,
-      warehouse_id: 15n,
-      dept_id: 2n,
-      receiver_id: 9n,
-      pcs_qty: 12,
-      status: 3,
-      details: [
-        { goodsId: 10n, skuId: 11n, quantity: 12, remainingQuantity: 7, unitType: 1, remark: '' },
-      ],
-    } as never);
+    vi.spyOn(service as any, 'purchaseOrderLifecycle').mockResolvedValue({
+      lifecycle: { status: 3 },
+      lineProgress: new Map([
+        [
+          '10:11',
+          {
+            ordered: 12,
+            cancelled: 0,
+            confirmedNormal: 5,
+            pendingNormal: 0,
+            purchaseReturned: 0,
+            exchangeReturned: 0,
+            confirmedExchange: 0,
+            pendingExchange: 0,
+          },
+        ],
+      ]),
+    });
 
     const result = await service.generateReceipt('20', '9');
 
@@ -1391,5 +1620,148 @@ describe('PurchaseService production-shortage guards', () => {
       }),
     );
     expect(result).toEqual(expect.objectContaining({ id: 91n, created: true }));
+  });
+
+  it('resolveLineSkus fills default SKU for lines with sku_id=0', async () => {
+    const prisma = {
+      hspsi_goods_info: {
+        findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, unit_type: 3 }]),
+      },
+      hspsi_goods_info_sku: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ good_id: 101n, sku_id: 202n, unit_type: 5, is_default: 0 }]),
+      },
+    };
+    const service = serviceWith(prisma);
+    const lines = [{ goodsId: '101', skuId: 0, unitType: 0 }];
+    await (service as any).resolveLineSkus(lines);
+
+    expect(String(lines[0]!.skuId)).toBe('202');
+    expect(lines[0]!.unitType).toBe(5);
+  });
+});
+
+
+describe('PurchaseService paid order todo notification', () => {
+  function paymentTx(overrides: Record<string, any> = {}) {
+    const tx: Record<string, any> = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'CG202608260001',
+          org_id: 9n,
+          status: 2,
+          pay_status: 1,
+          receiver_id: 5n,
+          pay_amout: new Prisma.Decimal(21),
+        }),
+        update: vi.fn(),
+      },
+      hspsi_purchase_order_detail: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_order_input_exit: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_order_payment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ pay_id: 30n, pay_no: 'FK202608260001' }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { fact_pay_amount: new Prisma.Decimal(0) } }),
+      },
+      hspsi_purchase_refund: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_purchase_refund_flow: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { refund_amount: new Prisma.Decimal(0) } }),
+      },
+      hspsi_sys_dictionary_category: { findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1 }) },
+      hspsi_sys_dictionary: { findFirst: vi.fn().mockResolvedValue({ dict_id: 1 }) },
+      ...overrides,
+    };
+    return tx;
+  }
+
+  it('writes a todo to the receiver when payment completes on a purchasing (status=2) order', async () => {
+    const tx = paymentTx();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.savePayment(
+      null,
+      {
+        orderId: 20,
+        deptId: 2,
+        paymentAmount: 21,
+        paymentChannel: 2,
+        paymentDate: '2026-08-02',
+      },
+      '9',
+    );
+
+    expect(todoService.create).toHaveBeenCalledTimes(1);
+    expect(todoService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 5,
+        organizationId: 9,
+        title: 'CG202608260001',
+        content: '采购订单已完成付款，请关注到货/收货',
+        businessType: 'purchase_order',
+        businessId: 20,
+      }),
+      tx,
+    );
+  });
+
+  it('writes a todo after startOrder when payment was already completed before purchasing', async () => {
+    // 直接验证私有方法：订单已采购中(status=2)且付款完成(pay_status=1) → 写 todo
+    const tx = paymentTx();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.ensurePurchasePaidTodo(tx, 20n);
+
+    expect(todoService.create).toHaveBeenCalledTimes(1);
+    expect(todoService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 5, businessType: 'purchase_order', businessId: 20 }),
+      tx,
+    );
+  });
+
+  it('does not write a todo when the order is still pending (status=1) or unpaid', async () => {
+    const tx = paymentTx({
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 22n,
+          po_no: 'CG202608260003',
+          org_id: 9n,
+          status: 1,
+          pay_status: 0,
+          receiver_id: 7n,
+          pay_amout: new Prisma.Decimal(100),
+        }),
+        update: vi.fn(),
+      },
+    });
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma) as any;
+    const todoService = service.__todoService;
+
+    await service.savePayment(
+      null,
+      {
+        orderId: 22,
+        deptId: 2,
+        paymentAmount: 21,
+        paymentChannel: 2,
+        paymentDate: '2026-08-02',
+      },
+      '9',
+    );
+
+    expect(todoService.create).not.toHaveBeenCalled();
   });
 });

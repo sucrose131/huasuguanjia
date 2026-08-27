@@ -6,6 +6,7 @@ import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
+import { BusinessReferenceService } from '../database/business-reference.service';
 import { InventoryLine, InventoryPostingService } from './inventory-posting.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import {
@@ -14,6 +15,7 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
+  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
@@ -31,6 +33,7 @@ export class InventoryService {
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
     @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
+    @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
   ) {}
   private page(query: Body) {
     return {
@@ -124,9 +127,11 @@ export class InventoryService {
         select: { sku_id: true },
       }),
     ]);
+    // 纯数字关键字同时精确匹配 sku_id（SKU 编号即 sku_id 主键，不在 spec_models 文本中）
+    const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
     return {
       goodsIds: goods.map((item) => item.goods_id),
-      skuIds: skus.map((item) => item.sku_id),
+      skuIds: [...skus.map((item) => item.sku_id), ...(numericSkuId ? [numericSkuId] : [])],
     };
   }
 
@@ -216,9 +221,13 @@ export class InventoryService {
           select: { sku_id: true },
         }),
       ]);
+      const skuIds = skus.map((item) => item.sku_id);
+      // keyword 为数字时同时精确匹配 sku_id（如直接输入 SKU 编号）
+      const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
       where.OR = [
         { goods_id: { in: goods.map((item) => item.goods_id) } },
-        { sku_id: { in: skus.map((item) => item.sku_id) } },
+        { sku_id: { in: skuIds } },
+        ...(numericSkuId ? [{ sku_id: numericSkuId }] : []),
       ];
     }
     const [records, total, summaryRows] = await Promise.all([
@@ -468,7 +477,7 @@ export class InventoryService {
     if (query.goodsId) where.goods_id = BigInt(query.goodsId);
     if (query.skuId) where.sku_id = BigInt(query.skuId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.batchNo !== undefined) where.batch_no = String(query.batchNo);
+    if (query.batchNo) where.batch_no = String(query.batchNo);
     if (query.inventoryMode) where.inventory_mode = Number(query.inventoryMode);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_total_detail.findMany({
@@ -715,6 +724,41 @@ export class InventoryService {
         },
       }),
     ]);
+    const mappedDetails = details.map((line) => {
+      const goods = refs.goods.find((record) => record.goods_id === line.goods_id);
+      const sku = refs.skus.find((record) => record.sku_id === line.sku_id);
+      const stock = stocks.find(
+        (record) =>
+          record.goods_id === line.goods_id &&
+          record.sku_id === line.sku_id &&
+          record.batch_no === line.batch_no,
+      );
+      const posting = postings.find(
+        (record) =>
+          record.goods_id === line.goods_id &&
+          record.sku_id === line.sku_id &&
+          record.batch_no === line.batch_no,
+      );
+      return {
+        id: line.id,
+        goodsId: line.goods_id,
+        goodsCode: goods?.query_code,
+        goodsName: goods?.goods_name,
+        skuId: line.sku_id,
+        skuSpec: sku?.spec_models,
+        batchNo: line.batch_no,
+        unitType: line.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(line.unit_type))?.name,
+        warehouseId: item.warehouse_id,
+        warehouseName: refs.warehouses.find((record) => record.warehouse_id === item.warehouse_id)
+          ?.name,
+        inventoryQty: posting
+          ? Number(posting.after_qty) - Number(posting.operation_qty)
+          : Number(stock?.inventory_qty ?? 0),
+        quantity: line.transfer_qty,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.transfer_id,
@@ -728,40 +772,7 @@ export class InventoryService {
       receiveBy: item.receive_by,
       transferDate: item.transfer_date,
       approveStatus: item.approve_status,
-      details: details.map((line) => {
-        const goods = refs.goods.find((record) => record.goods_id === line.goods_id);
-        const sku = refs.skus.find((record) => record.sku_id === line.sku_id);
-        const stock = stocks.find(
-          (record) =>
-            record.goods_id === line.goods_id &&
-            record.sku_id === line.sku_id &&
-            record.batch_no === line.batch_no,
-        );
-        const posting = postings.find(
-          (record) =>
-            record.goods_id === line.goods_id &&
-            record.sku_id === line.sku_id &&
-            record.batch_no === line.batch_no,
-        );
-        return {
-          id: line.id,
-          goodsId: line.goods_id,
-          goodsCode: goods?.query_code,
-          goodsName: goods?.goods_name,
-          skuId: line.sku_id,
-          skuSpec: sku?.spec_models,
-          batchNo: line.batch_no,
-          unitType: line.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(line.unit_type))?.name,
-          warehouseId: item.warehouse_id,
-          warehouseName: refs.warehouses.find((record) => record.warehouse_id === item.warehouse_id)
-            ?.name,
-          inventoryQty: posting
-            ? Number(posting.after_qty) - Number(posting.operation_qty)
-            : Number(stock?.inventory_qty ?? 0),
-          quantity: line.transfer_qty,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async saveTransfer(id: string | null, body: Body, userId: string, submit: boolean) {
@@ -1030,6 +1041,33 @@ export class InventoryService {
       this.prisma.hspsi_basic_unit.findMany(),
       this.dictionary('inventory_adjust_type'),
     ]);
+    const mappedDetails = details.map((d) => ({
+      id: d.detail_id,
+      goodsId: d.goods_id,
+      goodsCode: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.query_code,
+      goodsName: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.goods_name,
+      skuId: d.sku_id,
+      skuSpec: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.spec_models,
+      warehouseId: d.warehouse_id,
+      warehouseName: refs.warehouses.find(
+        (warehouse) => warehouse.warehouse_id === d.warehouse_id,
+      )?.name,
+      batchNo: d.batch_no,
+      unitType: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0,
+      unitName: units.find(
+        (unit) =>
+          unit.id === BigInt(refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0),
+      )?.name,
+      adjustType: d.adjust_type,
+      adjustTypeName: types.get(String(d.adjust_type)),
+      beforeQty: d.before_qty,
+      quantity: d.adjust_qty,
+      afterQty:
+        Number(d.before_qty) +
+        (Number(d.adjust_type) === 1 ? Number(d.adjust_qty) : -Number(d.adjust_qty)),
+      remark: d.remark,
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.adjust_id,
@@ -1037,32 +1075,7 @@ export class InventoryService {
       reason: item.adjust_reason,
       applicantDate: item.applicant_date,
       approveStatus: item.approve_status,
-      details: details.map((d) => ({
-        id: d.detail_id,
-        goodsId: d.goods_id,
-        goodsCode: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.query_code,
-        goodsName: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.goods_name,
-        skuId: d.sku_id,
-        skuSpec: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.spec_models,
-        warehouseId: d.warehouse_id,
-        warehouseName: refs.warehouses.find(
-          (warehouse) => warehouse.warehouse_id === d.warehouse_id,
-        )?.name,
-        batchNo: d.batch_no,
-        unitType: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0,
-        unitName: units.find(
-          (unit) =>
-            unit.id === BigInt(refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0),
-        )?.name,
-        adjustType: d.adjust_type,
-        adjustTypeName: types.get(String(d.adjust_type)),
-        beforeQty: d.before_qty,
-        quantity: d.adjust_qty,
-        afterQty:
-          Number(d.before_qty) +
-          (Number(d.adjust_type) === 1 ? Number(d.adjust_qty) : -Number(d.adjust_qty)),
-        remark: d.remark,
-      })),
+      details: enrichedDetails,
     };
   }
   async saveAdjustment(id: string | null, body: Body, userId: string, submit: boolean) {
@@ -1432,6 +1445,7 @@ export class InventoryService {
   async checks(query: Body) {
     const { page, pageSize } = this.page(query);
     const where: Prisma.hspsi_inventory_checkWhereInput = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_check.findMany({
@@ -1661,6 +1675,38 @@ export class InventoryService {
         },
       }),
     ]);
+    const mappedDetails = details.map((detail) => {
+      const damaged = Number(detail.damaged_qty) > 0;
+      const difference = Number(detail.different_qty);
+      const quantityResult = difference < 0 ? -1 : difference > 0 ? 1 : 0;
+      const resultNames = [
+        difference < 0 ? '盘亏' : difference > 0 ? '盘盈' : '',
+        damaged ? '损坏' : '',
+      ].filter(Boolean);
+      return {
+        id: detail.check_detail_id,
+        goodsId: detail.goods_id,
+        goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
+        goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
+        skuId: detail.sku_id,
+        skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
+        inventoryQty: detail.inventory_qty,
+        checkQty: detail.check_qty,
+        damagedQty: detail.damaged_qty,
+        differentQty: detail.different_qty,
+        unitPrice: detail.unit_price,
+        differentAmount: detail.different_amount,
+        result: damaged ? 2 : quantityResult,
+        quantityResult,
+        damagedResult: damaged ? 1 : 0,
+        resultName: resultNames.join(' + ') || '正常',
+        remark: detail.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.check_id,
@@ -1694,37 +1740,7 @@ export class InventoryService {
           approveStatus: overflow.approve_status,
         })),
       ],
-      details: details.map((detail) => {
-        const damaged = Number(detail.damaged_qty) > 0;
-        const difference = Number(detail.different_qty);
-        const quantityResult = difference < 0 ? -1 : difference > 0 ? 1 : 0;
-        const resultNames = [
-          difference < 0 ? '盘亏' : difference > 0 ? '盘盈' : '',
-          damaged ? '损坏' : '',
-        ].filter(Boolean);
-        return {
-          id: detail.check_detail_id,
-          goodsId: detail.goods_id,
-          goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
-          goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
-          skuId: detail.sku_id,
-          skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
-          batchNo: detail.batch_no,
-          unitType: detail.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
-          inventoryQty: detail.inventory_qty,
-          checkQty: detail.check_qty,
-          damagedQty: detail.damaged_qty,
-          differentQty: detail.different_qty,
-          unitPrice: detail.unit_price,
-          differentAmount: detail.different_amount,
-          result: damaged ? 2 : quantityResult,
-          quantityResult,
-          damagedResult: damaged ? 1 : 0,
-          resultName: resultNames.join(' + ') || '正常',
-          remark: detail.remark,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async createCheck(body: Body, userId: string) {
@@ -2092,6 +2108,7 @@ export class InventoryService {
           : this.prisma.hspsi_inventory_overflow;
     const key = type === 'overflow' ? 'overflow_id' : 'loss_id';
     const where: Body = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (type === 'loss') where.business_kind = Number(query.businessKind ?? 2);
     if (type === 'overflow' && query.onlyInputs) Object.assign(where, { input_no: { not: null } });
@@ -2295,6 +2312,37 @@ export class InventoryService {
         : null,
     ]);
     const businessKind = type === 'loss' ? Number(item.business_kind) : 0;
+    const mappedDetails = details.map((detail: Body) => {
+      const stock = stocks.find(
+        (row) =>
+          row.goods_id === detail.goods_id &&
+          row.sku_id === detail.sku_id &&
+          row.batch_no === (detail.batch_no ?? ''),
+      );
+      const quantity = Number(type === 'overflow' ? detail.overflow_qty : detail.loss_qty);
+      const amount = Number(type === 'overflow' ? detail.overflow_amount : detail.loss_amount);
+      return {
+        id: detail.id ?? detail.loss_detail_id,
+        goodsId: detail.goods_id,
+        goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
+        goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
+        skuId: detail.sku_id,
+        skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
+        inventoryQty: stock?.inventory_qty ?? 0,
+        unitPrice: quantity
+          ? amount / quantity
+          : stock && Number(stock.inventory_qty)
+            ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
+            : 0,
+        quantity,
+        amount,
+        sourceReceiptDetailId: detail.source_receipt_detail_id ?? 0,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item[key],
@@ -2317,36 +2365,7 @@ export class InventoryService {
       inputStatus: item.input_status,
       inputBy: item.input_by,
       inputDate: item.input_date,
-      details: details.map((detail: Body) => {
-        const stock = stocks.find(
-          (row) =>
-            row.goods_id === detail.goods_id &&
-            row.sku_id === detail.sku_id &&
-            row.batch_no === (detail.batch_no ?? ''),
-        );
-        const quantity = Number(type === 'overflow' ? detail.overflow_qty : detail.loss_qty);
-        const amount = Number(type === 'overflow' ? detail.overflow_amount : detail.loss_amount);
-        return {
-          id: detail.id ?? detail.loss_detail_id,
-          goodsId: detail.goods_id,
-          goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
-          goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
-          skuId: detail.sku_id,
-          skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
-          batchNo: detail.batch_no,
-          unitType: detail.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
-          inventoryQty: stock?.inventory_qty ?? 0,
-          unitPrice: quantity
-            ? amount / quantity
-            : stock && Number(stock.inventory_qty)
-              ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
-              : 0,
-          quantity,
-          amount,
-          sourceReceiptDetailId: detail.source_receipt_detail_id ?? 0,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
 
@@ -3695,7 +3714,7 @@ export class InventoryService {
         orgId: s.org_id,
       })),
     );
-    const items = stocks.map((s) => {
+    const allItems = stocks.map((s) => {
       const c = configs.find(
         (i) =>
           i.warehouse_id === s.warehouse_id && i.goods_id === s.goods_id && i.sku_id === s.sku_id,
@@ -3721,6 +3740,7 @@ export class InventoryService {
         warning: fact < safe,
       };
     });
+    const items = filterQuantityAlertsByStatus(allItems, query.status);
     const warehouseCounts = Object.fromEntries(
       [...new Set(items.map((item) => String(item.warehouseId)))].map((warehouseId) => [
         warehouseId,

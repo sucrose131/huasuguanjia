@@ -34,13 +34,13 @@ export class ScheduledTaskController {
   }
 
   @Post('scheduled-tasks')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:tasks:create')
   create(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.create(body, user.id);
   }
 
   @Put('scheduled-tasks/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:tasks:update')
   update(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -50,13 +50,13 @@ export class ScheduledTaskController {
   }
 
   @Delete('scheduled-tasks/:id')
-  @RequirePermissions('system:delete')
+  @RequirePermissions('system:tasks:delete')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.remove(id, user.id);
   }
 
   @Post('scheduled-tasks/:id/run')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:tasks:run')
   run(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.runner.start(id, user.id);
   }

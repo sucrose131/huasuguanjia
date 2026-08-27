@@ -5,8 +5,11 @@ import { activeDataScope } from './data-scope.context';
 type ScopedModel = {
   table: string;
   orgField: string;
+  orgScalar: 'BigInt' | 'Int';
   primaryField?: string;
   uniqueColumns: Map<string, string>;
+  /** 复合唯一键列集（@@id / @@unique），where 中按键名（列名 join('_')）传入对象值 */
+  compoundKeys: string[][];
   hasCreatedBy: boolean;
   personalScope: boolean;
   includesSharedOrganization: boolean;
@@ -14,33 +17,7 @@ type ScopedModel = {
 
 const excludedPolymorphicModels = new Set([
   'hspsi_basic_staff_organizations',
-  'hspsi_sys_user_org_scope',
-]);
-const personalScopeModels = new Set([
-  'hspsi_purchase_approve',
-  'hspsi_purchase_order',
-  'hspsi_purchase_order_input',
-  'hspsi_purchase_order_payment',
-  'hspsi_purchase_refund',
-  'hspsi_sale_order',
-  'hspsi_sale_order_output',
-  'hspsi_sale_order_exit',
-  'hspsi_sales_order_payment',
-  'hspsi_draw_approve',
-  'hspsi_draw_approve_output',
-  'hspsi_draw_approve_output_exit',
-  'hspsi_inventory_transfer',
-  'hspsi_inventory_adjust',
-  'hspsi_inventory_check',
-  'hspsi_inventory_loss',
-  'hspsi_inventory_loss_output',
-  'hspsi_inventory_overflow',
-  'hspsi_inventory_general_order',
-  'hspsi_production_bom',
-  'hspsi_production_plan',
-  'hspsi_production_material_out',
-  'hspsi_production_material_return',
-  'hspsi_production_plan_input',
+  'hspsi_sys_user_authorized_org',
 ]);
 
 function scopedModels() {
@@ -53,17 +30,26 @@ function scopedModels() {
         ? 'organization_id'
         : '';
     if (!orgField) continue;
+    const orgScalar = model.fields.find((field) => field.name === orgField)?.type;
+    if (orgScalar !== 'BigInt' && orgScalar !== 'Int') continue;
     result.set(model.name, {
       table: model.dbName ?? model.name,
       orgField,
+      orgScalar,
       primaryField: model.fields.find((field) => field.isId)?.name,
       uniqueColumns: new Map(
         model.fields
           .filter((field) => field.isId || field.isUnique)
           .map((field) => [field.name, field.dbName ?? field.name]),
       ),
+      compoundKeys: [
+        ...(model.primaryKey?.fields?.length ? [[...model.primaryKey.fields]] : []),
+        ...(model.uniqueFields ?? [])
+          .filter((fields) => fields.length)
+          .map((fields) => [...fields]),
+      ],
       hasCreatedBy: model.fields.some((field) => field.name === 'created_by'),
-      personalScope: personalScopeModels.has(model.name),
+      personalScope: false,
       includesSharedOrganization: model.name === 'hspsi_goods_info',
     });
   }
@@ -71,6 +57,16 @@ function scopedModels() {
 }
 
 const SCOPED_MODELS = scopedModels();
+
+function organizationValue(meta: ScopedModel, value: string | number | bigint) {
+  return meta.orgScalar === 'BigInt' ? BigInt(value) : Number(value);
+}
+
+export function scopedOrganizationValue(modelName: string, value: string | number | bigint) {
+  const meta = SCOPED_MODELS.get(modelName);
+  if (!meta) throw new Error(`模型 ${modelName} 没有组织字段`);
+  return organizationValue(meta, value);
+}
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -80,15 +76,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       const scope = activeDataScope();
       const meta = params.model ? SCOPED_MODELS.get(params.model) : undefined;
       if (!scope || scope.isSuperAdmin || !meta) return next(params);
-      if (!scope.organizationIds.length) throw new ForbiddenException('当前账号没有可访问的组织');
+      if (!scope.authorizedOrgIds.length) throw new ForbiddenException('当前账号没有已授权组织');
 
-      const allowedIds = scope.organizationIds.map(BigInt);
+      const allowedIds = scope.authorizedOrgIds.map((orgId) => organizationValue(meta, orgId));
       const modelAllowedIds = meta.includesSharedOrganization
-        ? [...new Set([0n, ...allowedIds])]
+        ? [...new Set([organizationValue(meta, 0), ...allowedIds])]
         : allowedIds;
       const orgCondition: Record<string, unknown> = { [meta.orgField]: { in: modelAllowedIds } };
-      if (scope.scopeType === 5 && meta.hasCreatedBy && meta.personalScope)
-        Object.assign(orgCondition, { created_by: BigInt(scope.userId) });
 
       params.args ??= {};
       const scopedReads = new Set([
@@ -120,34 +114,51 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         const nestedOrgValue = findNestedValue(where, meta.orgField);
         if (nestedOrgValue !== undefined) {
           const value = nestedOrgValue;
-          const rawValue = typeof value === 'object' && value
-            ? (value as { equals?: unknown }).equals
-            : value;
-          if (rawValue === undefined || rawValue === null || !modelAllowedIds.includes(BigInt(rawValue as any)))
+          const rawValue =
+            typeof value === 'object' && value ? (value as { equals?: unknown }).equals : value;
+          if (
+            rawValue === undefined ||
+            rawValue === null ||
+            !modelAllowedIds.includes(organizationValue(meta, rawValue as any))
+          )
             throw new ForbiddenException(`不能${operation}其他组织的数据`);
           return;
         }
         const lookupField = [...meta.uniqueColumns.keys()].find(
           (field) => where[field] !== undefined && typeof where[field] !== 'object',
         );
-        if (!lookupField)
+        if (!lookupField) {
+          // 复合唯一键（where 值为对象且键内不含 org_id，如 hspsi_inventory_batch_total 的
+          // goods_id_sku_id_warehouse_id_batch_no）：按复合键列回查目标行组织，
+          // 命中且组织不符才拒绝；未命中行交由底层返回。
+          for (const columns of meta.compoundKeys) {
+            const compoundKey = columns.join('_');
+            const parts = where[compoundKey];
+            if (!parts || typeof parts !== 'object') continue;
+            const rows = await this.$queryRawUnsafe<Array<Record<string, unknown>>>(
+              `SELECT \`${meta.orgField}\` AS org_id FROM \`${meta.table}\` WHERE ${columns
+                .map((column) => `\`${column}\` = ?`)
+                .join(' AND ')} LIMIT 1`,
+              ...columns.map((column) => (parts as Record<string, unknown>)[column] as string | number | bigint),
+            );
+            const record = rows[0];
+            if (
+              record &&
+              !modelAllowedIds.includes(organizationValue(meta, record.org_id as any))
+            )
+              throw new ForbiddenException(`不能${operation}其他组织的数据`);
+            return;
+          }
           throw new ForbiddenException('无法确认目标数据的组织归属');
+        }
         const lookupColumn = meta.uniqueColumns.get(lookupField)!;
         const rows = await this.$queryRawUnsafe<Array<Record<string, unknown>>>(
           `SELECT \`${meta.orgField}\` AS org_id${meta.hasCreatedBy ? ', `created_by`' : ''} FROM \`${meta.table}\` WHERE \`${lookupColumn}\` = ? LIMIT 1`,
           where[lookupField],
         );
         const record = rows[0];
-        if (record && !modelAllowedIds.includes(BigInt(record.org_id as any)))
+        if (record && !modelAllowedIds.includes(organizationValue(meta, record.org_id as any)))
           throw new ForbiddenException(`不能${operation}其他组织的数据`);
-        if (
-          record &&
-          scope.scopeType === 5 &&
-          meta.hasCreatedBy &&
-          meta.personalScope &&
-          BigInt(record.created_by as any) !== BigInt(scope.userId)
-        )
-          throw new ForbiddenException(`只能${operation}本人创建的数据`);
       };
 
       if (params.action === 'findUnique' || params.action === 'findUniqueOrThrow') {
@@ -166,7 +177,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         const value = data?.[meta.orgField];
         if (required && (value === undefined || value === null))
           throw new ForbiddenException('写入数据缺少组织归属');
-        if (value !== undefined && value !== null && !modelAllowedIds.includes(BigInt(value as any)))
+        if (
+          value !== undefined &&
+          value !== null &&
+          !modelAllowedIds.includes(organizationValue(meta, value as any))
+        )
           throw new ForbiddenException('不能向其他组织写入数据');
       };
       if (params.action === 'create') {

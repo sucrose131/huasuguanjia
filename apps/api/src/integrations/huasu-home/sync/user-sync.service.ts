@@ -158,7 +158,7 @@ export class HuasuHomeUserSyncService {
       ...new Set(
         users
           .map((user) => Number(user.organization_id ?? 0))
-          .filter((id) => Number.isFinite(id) && id > 0),
+          .filter((id) => Number.isFinite(id) && id >= 0),
       ),
     ];
     if (!orgIds.length) return new Map();
@@ -198,13 +198,10 @@ export class HuasuHomeUserSyncService {
       throw new UnprocessableEntityException('用户缺少 organization_id');
     }
     const sourceOrgId = Number(rawOrgId);
-    if (!Number.isFinite(sourceOrgId)) {
+    if (!Number.isFinite(sourceOrgId) || sourceOrgId < 0) {
       throw new UnprocessableEntityException(
         `用户 organization_id 非法: ${String(rawOrgId)}`,
       );
-    }
-    if (sourceOrgId < 1) {
-      throw new UnprocessableEntityException(`用户 organization_id 无效: ${sourceOrgId}`);
     }
     const orgId = input.orgMap.get(sourceOrgId);
     if (!orgId) {

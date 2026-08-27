@@ -4,7 +4,13 @@ export interface User {
   id: string;
   username: string;
   orgId: string | null;
+  orgName: string | null;
   deptId: string | null;
+  staffId: string | null;
+  currentOrgId: string;
+  currentOrgName: string;
+  roleName: string | null;
+  authorizedOrganizations: Array<{ id: string; name: string }>;
   permissions: string[];
 }
 export interface Menu {

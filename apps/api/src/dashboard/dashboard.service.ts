@@ -9,9 +9,100 @@ type Query = Record<string, string | undefined>;
 export class DashboardService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  private hasPermission(user: AuthUser, permission: string) {
+    return user.permissions.includes('*') || user.permissions.includes(permission);
+  }
+
+  private hasModulePermission(user: AuthUser, module: string) {
+    return (
+      user.permissions.includes('*') ||
+      user.permissions.some(
+        (permission) => permission === module || permission.startsWith(`${module}:`),
+      )
+    );
+  }
+
+  private modules(user: AuthUser) {
+    return {
+      sales: this.hasModulePermission(user, 'sales'),
+      purchase: this.hasModulePermission(user, 'purchase'),
+      inventory: this.hasModulePermission(user, 'inventory'),
+      production: this.hasModulePermission(user, 'production'),
+      todos: this.hasPermission(user, 'dashboard:2:view'),
+      messages: this.hasPermission(user, 'dashboard:3:view'),
+      shortcuts: this.hasPermission(user, 'dashboard:4:view'),
+    };
+  }
+
+  private widgets(user: AuthUser) {
+    const modules = this.modules(user);
+    const enabled = (key: string) => this.hasPermission(user, `dashboard:overview:widget:${key}`);
+    return {
+      salesAmount: enabled('sales-amount') && modules.sales,
+      purchaseAmount: enabled('purchase-amount') && modules.purchase,
+      inventoryValue: enabled('inventory-value') && modules.inventory,
+      pendingCount: enabled('pending-count') && modules.todos,
+      businessTrend: enabled('business-trend') && (modules.sales || modules.purchase),
+      inventoryHealth: enabled('inventory-health') && modules.inventory,
+      todoPreview: enabled('todo-preview') && modules.todos,
+      quickActions: enabled('quick-actions') && modules.shortcuts,
+      messageSummary: enabled('message-summary') && modules.messages,
+    };
+  }
+
+  private authorizedOrgIds(user: AuthUser) {
+    return [
+      ...new Set(
+        [
+          user.orgId,
+          ...(user.authorizedOrganizations ?? []).map((organization) => organization.id),
+        ].filter((value): value is string => Boolean(value && value !== '0')),
+      ),
+    ];
+  }
+
   private orgWhere(user: AuthUser) {
     if (user.permissions.includes('*')) return {};
-    return user.orgId && user.orgId !== '0' ? { org_id: BigInt(user.orgId) } : {};
+    const ids = this.authorizedOrgIds(user);
+    return { org_id: { in: ids.map((id) => BigInt(id)) } };
+  }
+
+  private async authorizedWarehouseIds(user: AuthUser) {
+    const warehouses = await this.prisma.hspsi_basic_warehouse.findMany({
+      where: { ...this.orgWhere(user), status: 1, deleted_at: null },
+      select: { warehouse_id: true },
+    });
+    return warehouses.map((warehouse) => warehouse.warehouse_id);
+  }
+
+  private routePermission(route: string) {
+    const [module, resource] = route.split('/').filter(Boolean);
+    return module && resource ? `${module}:${resource}` : '';
+  }
+
+  private canOpenRoute(user: AuthUser, route: string) {
+    const permission = this.routePermission(route);
+    return Boolean(permission && this.hasPermission(user, permission));
+  }
+
+  private async pendingAdjustments(user: AuthUser) {
+    if (user.permissions.includes('*'))
+      return this.prisma.hspsi_inventory_adjust.findMany({
+        where: { approve_status: 0, deleted_at: null },
+        orderBy: { created_at: 'desc' },
+      });
+    const warehouseIds = await this.authorizedWarehouseIds(user);
+    if (!warehouseIds.length) return [];
+    const details = await this.prisma.hspsi_inventory_adjust_detail.findMany({
+      where: { warehouse_id: { in: warehouseIds } },
+      select: { adjust_id: true },
+    });
+    const ids = [...new Set(details.map((detail) => detail.adjust_id))];
+    if (!ids.length) return [];
+    return this.prisma.hspsi_inventory_adjust.findMany({
+      where: { adjust_id: { in: ids }, approve_status: 0, deleted_at: null },
+      orderBy: { created_at: 'desc' },
+    });
   }
 
   private monthRange() {
@@ -38,52 +129,89 @@ export class DashboardService {
   }
 
   async overview(user: AuthUser) {
+    const access = this.access(user);
+    const [metrics, trend, inventoryHealth, todoResult, messageResult] = await Promise.all([
+      this.metrics(user),
+      this.trend(user),
+      this.inventoryHealth(user),
+      access.widgets.todoPreview
+        ? this.todos(user, { page: '1', pageSize: '5' })
+        : Promise.resolve({ items: [] }),
+      access.widgets.messageSummary
+        ? this.messages(user, { page: '1', pageSize: '2' })
+        : Promise.resolve({ items: [], unreadCount: 0 }),
+    ]);
+    return {
+      ...access,
+      ...metrics,
+      ...inventoryHealth,
+      trend,
+      todos: todoResult.items,
+      messages: messageResult.items,
+      unreadCount: messageResult.unreadCount,
+    };
+  }
+
+  access(user: AuthUser) {
+    return {
+      modules: this.modules(user),
+      widgets: this.widgets(user),
+    };
+  }
+
+  async metrics(user: AuthUser) {
+    const widgets = this.widgets(user);
     const { start, end } = this.monthRange();
+    const org = this.orgWhere(user);
+    const [sales, purchases, inventory, pendingCount] = await Promise.all([
+      widgets.salesAmount
+        ? this.prisma.hspsi_sale_order.aggregate({
+            where: { ...org, created_at: { gte: start, lt: end }, deleted_at: null },
+            _sum: { fact_amount: true },
+          })
+        : Promise.resolve({ _sum: { fact_amount: null } }),
+      widgets.purchaseAmount
+        ? this.prisma.hspsi_purchase_order.aggregate({
+            where: { ...org, created_at: { gte: start, lt: end }, deleted_at: null },
+            _sum: { pay_amout: true },
+          })
+        : Promise.resolve({ _sum: { pay_amout: null } }),
+      widgets.inventoryValue
+        ? this.prisma.hspsi_inventory_total.aggregate({
+            where: { ...org, deleted_at: null },
+            _sum: { inventory_amount: true },
+          })
+        : Promise.resolve({ _sum: { inventory_amount: null } }),
+      widgets.pendingCount ? this.pendingCounts(user) : Promise.resolve(0),
+    ]);
+    return {
+      salesAmount: widgets.salesAmount ? Number(sales._sum.fact_amount ?? 0) : null,
+      purchaseAmount: widgets.purchaseAmount ? Number(purchases._sum.pay_amout ?? 0) : null,
+      inventoryValue: widgets.inventoryValue ? Number(inventory._sum.inventory_amount ?? 0) : null,
+      pendingCount,
+    };
+  }
+
+  async trend(user: AuthUser) {
+    const modules = this.modules(user);
+    const widgets = this.widgets(user);
     const org = this.orgWhere(user);
     const trendStart = new Date(`${this.day(new Date())}T00:00:00+08:00`);
     trendStart.setDate(trendStart.getDate() - 13);
-    const [
-      sales,
-      purchases,
-      inventory,
-      lowStock,
-      inventoryRows,
-      salesTrendRows,
-      purchaseTrendRows,
-      pendingCounts,
-      todoResult,
-      messageResult,
-    ] = await Promise.all([
-      this.prisma.hspsi_sale_order.aggregate({
-        where: { ...org, created_at: { gte: start, lt: end }, deleted_at: null },
-        _sum: { fact_amount: true },
-      }),
-      this.prisma.hspsi_purchase_order.aggregate({
-        where: { ...org, created_at: { gte: start, lt: end }, deleted_at: null },
-        _sum: { pay_amout: true },
-      }),
-      this.prisma.hspsi_inventory_total.aggregate({
-        where: { ...org, deleted_at: null },
-        _sum: { inventory_amount: true },
-      }),
-      this.prisma.hspsi_inventory_alert_qty.count({ where: { safe_less_qty: { gt: 0 } } }),
-      this.prisma.hspsi_inventory_total.findMany({
-        where: { ...org, deleted_at: null },
-        select: { goods_id: true, sku_id: true, warehouse_id: true, inventory_qty: true },
-      }),
-      this.prisma.hspsi_sale_order.findMany({
-        where: { ...org, created_at: { gte: trendStart }, deleted_at: null },
-        select: { created_at: true, fact_amount: true },
-      }),
-      this.prisma.hspsi_purchase_order.findMany({
-        where: { ...org, created_at: { gte: trendStart }, deleted_at: null },
-        select: { created_at: true, pay_amout: true },
-      }),
-      this.pendingCounts(user),
-      this.todos(user, { page: '1', pageSize: '5' }),
-      this.messages(user, { page: '1', pageSize: '5' }),
+    const [salesTrendRows, purchaseTrendRows] = await Promise.all([
+      widgets.businessTrend && modules.sales
+        ? this.prisma.hspsi_sale_order.findMany({
+            where: { ...org, created_at: { gte: trendStart }, deleted_at: null },
+            select: { created_at: true, fact_amount: true },
+          })
+        : Promise.resolve([]),
+      widgets.businessTrend && modules.purchase
+        ? this.prisma.hspsi_purchase_order.findMany({
+            where: { ...org, created_at: { gte: trendStart }, deleted_at: null },
+            select: { created_at: true, pay_amout: true },
+          })
+        : Promise.resolve([]),
     ]);
-
     const trendMap = new Map<string, { date: string; sales: number; purchase: number }>();
     for (let index = 0; index < 14; index += 1) {
       const value = new Date(trendStart);
@@ -99,19 +227,44 @@ export class DashboardService {
       const date = this.day(row.created_at);
       if (date && trendMap.has(date)) trendMap.get(date)!.purchase += Number(row.pay_amout);
     });
+    return [...trendMap.values()].map((item) => ({
+      date: item.date,
+      sales: widgets.businessTrend && modules.sales ? item.sales : null,
+      purchase: widgets.businessTrend && modules.purchase ? item.purchase : null,
+    }));
+  }
 
-    const alertRows = lowStock
-      ? await this.prisma.hspsi_inventory_alert_qty.findMany({
-          where: { safe_less_qty: { gt: 0 } },
-          take: 1,
-          orderBy: { safe_less_qty: 'desc' },
-        })
-      : [];
+  async inventoryHealth(user: AuthUser) {
+    const widgets = this.widgets(user);
+    if (!widgets.inventoryHealth)
+      return {
+        lowStockCount: 0,
+        inventoryCount: 0,
+        healthScore: 0,
+        lowStockItem: null,
+      };
+    const org = this.orgWhere(user);
+    const warehouseIds = await this.authorizedWarehouseIds(user);
+    const [lowStockCount, inventoryCount, alertRows] = await Promise.all([
+      warehouseIds.length
+        ? this.prisma.hspsi_inventory_alert_qty.count({
+            where: { warehouse_id: { in: warehouseIds }, safe_less_qty: { gt: 0 } },
+          })
+        : 0,
+      this.prisma.hspsi_inventory_total.count({ where: { ...org, deleted_at: null } }),
+      warehouseIds.length
+        ? this.prisma.hspsi_inventory_alert_qty.findMany({
+            where: { warehouse_id: { in: warehouseIds }, safe_less_qty: { gt: 0 } },
+            take: 1,
+            orderBy: { safe_less_qty: 'desc' },
+          })
+        : [],
+    ]);
     let lowStockItem: Record<string, unknown> | null = null;
     if (alertRows[0]) {
       const [goods, warehouse] = await Promise.all([
-        this.prisma.hspsi_goods_info.findUnique({ where: { goods_id: alertRows[0].goods_id } }),
-        this.prisma.hspsi_basic_warehouse.findUnique({
+        this.prisma.hspsi_goods_info.findFirst({ where: { goods_id: alertRows[0].goods_id } }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
           where: { warehouse_id: Number(alertRows[0].warehouse_id) },
         }),
       ]);
@@ -125,66 +278,76 @@ export class DashboardService {
         suggestedPurchaseQty: Number(alertRows[0].purchase_qty),
       };
     }
-
-    const totalInventoryRows = inventoryRows.length;
     return {
-      salesAmount: Number(sales._sum.fact_amount ?? 0),
-      purchaseAmount: Number(purchases._sum.pay_amout ?? 0),
-      inventoryValue: Number(inventory._sum.inventory_amount ?? 0),
-      pendingCount: pendingCounts,
-      lowStockCount: lowStock,
-      inventoryCount: totalInventoryRows,
-      healthScore: totalInventoryRows
+      lowStockCount,
+      inventoryCount,
+      healthScore: inventoryCount
         ? Math.max(
             0,
-            Math.round((1 - Math.min(lowStock, totalInventoryRows) / totalInventoryRows) * 100),
+            Math.round((1 - Math.min(lowStockCount, inventoryCount) / inventoryCount) * 100),
           )
         : 0,
-      trend: [...trendMap.values()],
       lowStockItem,
-      todos: todoResult.items,
-      messages: messageResult.items.slice(0, 2),
-      unreadCount: messageResult.unreadCount,
     };
   }
 
   private async pendingCounts(user: AuthUser) {
     const org = this.orgWhere(user);
     const values = await Promise.all([
-      this.prisma.hspsi_purchase_approve.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_sale_order.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_draw_approve.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_production_plan.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_inventory_transfer.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_inventory_check.count({
-        where: { ...org, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_inventory_loss.count({
-        where: { ...org, business_kind: 2, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_inventory_loss_output.count({
-        where: {
-          ...org,
-          source_check_id: { gt: 0 },
-          status: 0,
-          approve_status: 0,
-          deleted_at: null,
-        },
-      }),
-      this.prisma.hspsi_inventory_overflow.count({
-        where: { ...org, source_check_id: { gt: 0 }, approve_status: 0, deleted_at: null },
-      }),
-      this.prisma.hspsi_inventory_adjust.count({ where: { approve_status: 0, deleted_at: null } }),
+      this.canOpenRoute(user, '/purchase/applications')
+        ? this.prisma.hspsi_purchase_approve.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/sales/orders')
+        ? this.prisma.hspsi_sale_order.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/requisitions/applications')
+        ? this.prisma.hspsi_draw_approve.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/production/plans')
+        ? this.prisma.hspsi_production_plan.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/transfers')
+        ? this.prisma.hspsi_inventory_transfer.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/checks')
+        ? this.prisma.hspsi_inventory_check.count({
+            where: { ...org, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/losses')
+        ? this.prisma.hspsi_inventory_loss.count({
+            where: { ...org, business_kind: 2, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/loss-outputs')
+        ? this.prisma.hspsi_inventory_loss_output.count({
+            where: {
+              ...org,
+              source_check_id: { gt: 0 },
+              status: 0,
+              approve_status: 0,
+              deleted_at: null,
+            },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/overflows')
+        ? this.prisma.hspsi_inventory_overflow.count({
+            where: { ...org, source_check_id: { gt: 0 }, approve_status: 0, deleted_at: null },
+          })
+        : 0,
+      this.canOpenRoute(user, '/inventory/adjustments')
+        ? this.pendingAdjustments(user).then((items) => items.length)
+        : 0,
     ]);
     return values.reduce((sum, value) => sum + value, 0);
   }
@@ -210,7 +373,10 @@ export class DashboardService {
       amount: null,
       creator: item.created_by ? String(item.created_by) : '',
       status: '待处理',
-      route: '',
+      route:
+        item.source_type === 'purchase_order' && (item.business_id || item.source_id)
+          ? `/purchase/orders?viewId=${String(item.business_id || item.source_id)}`
+          : '',
       createdAt: item.created_at,
     }));
 
@@ -226,52 +392,69 @@ export class DashboardService {
       overflows,
       adjustments,
     ] = await Promise.all([
-      this.prisma.hspsi_purchase_approve.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_sale_order.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_draw_approve.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_production_plan.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_transfer.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_check.findMany({
-        where: { ...org, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_loss.findMany({
-        where: { ...org, business_kind: 2, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_loss_output.findMany({
-        where: {
-          ...org,
-          source_check_id: { gt: 0 },
-          status: 0,
-          approve_status: 0,
-          deleted_at: null,
-        },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_overflow.findMany({
-        where: { ...org, source_check_id: { gt: 0 }, approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
-      this.prisma.hspsi_inventory_adjust.findMany({
-        where: { approve_status: 0, deleted_at: null },
-        orderBy: { created_at: 'desc' },
-      }),
+      this.canOpenRoute(user, '/purchase/applications')
+        ? this.prisma.hspsi_purchase_approve.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/sales/orders')
+        ? this.prisma.hspsi_sale_order.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/requisitions/applications')
+        ? this.prisma.hspsi_draw_approve.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/production/plans')
+        ? this.prisma.hspsi_production_plan.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/transfers')
+        ? this.prisma.hspsi_inventory_transfer.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/checks')
+        ? this.prisma.hspsi_inventory_check.findMany({
+            where: { ...org, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/losses')
+        ? this.prisma.hspsi_inventory_loss.findMany({
+            where: { ...org, business_kind: 2, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/loss-outputs')
+        ? this.prisma.hspsi_inventory_loss_output.findMany({
+            where: {
+              ...org,
+              source_check_id: { gt: 0 },
+              status: 0,
+              approve_status: 0,
+              deleted_at: null,
+            },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/overflows')
+        ? this.prisma.hspsi_inventory_overflow.findMany({
+            where: { ...org, source_check_id: { gt: 0 }, approve_status: 0, deleted_at: null },
+            orderBy: { created_at: 'desc' },
+          })
+        : Promise.resolve([]),
+      this.canOpenRoute(user, '/inventory/adjustments')
+        ? this.pendingAdjustments(user)
+        : Promise.resolve([]),
     ]);
     const row = (
       values: Partial<Record<string, unknown>> & {
@@ -418,7 +601,8 @@ export class DashboardService {
         }),
       ),
     ];
-    let result = [...storedRows, ...generated].sort((left, right) =>
+    const permittedGenerated = generated.filter((item) => this.canOpenRoute(user, item.route));
+    let result = [...storedRows, ...permittedGenerated].sort((left, right) =>
       String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
     );
     if (keyword)
@@ -473,25 +657,37 @@ export class DashboardService {
       };
     });
     const org = this.orgWhere(user);
+    const modules = this.modules(user);
+    const warehouseIds = await this.authorizedWarehouseIds(user);
     const [todoResult, stockAlert, latestSale, latestPurchase, latestProduction] =
       await Promise.all([
-        this.todos(user, { page: '1', pageSize: '3' }),
-        this.prisma.hspsi_inventory_alert_qty.findFirst({
-          where: { safe_less_qty: { gt: 0 } },
-          orderBy: { safe_less_qty: 'desc' },
-        }),
-        this.prisma.hspsi_sale_order.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
-        this.prisma.hspsi_purchase_order.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
-        this.prisma.hspsi_production_plan.findFirst({
-          where: { ...org, deleted_at: null },
-          orderBy: { created_at: 'desc' },
-        }),
+        modules.todos
+          ? this.todos(user, { page: '1', pageSize: '3' })
+          : Promise.resolve({ items: [] }),
+        modules.inventory
+          ? this.prisma.hspsi_inventory_alert_qty.findFirst({
+              where: { warehouse_id: { in: warehouseIds }, safe_less_qty: { gt: 0 } },
+              orderBy: { safe_less_qty: 'desc' },
+            })
+          : Promise.resolve(null),
+        modules.sales
+          ? this.prisma.hspsi_sale_order.findFirst({
+              where: { ...org, deleted_at: null },
+              orderBy: { created_at: 'desc' },
+            })
+          : Promise.resolve(null),
+        modules.purchase
+          ? this.prisma.hspsi_purchase_order.findFirst({
+              where: { ...org, deleted_at: null },
+              orderBy: { created_at: 'desc' },
+            })
+          : Promise.resolve(null),
+        modules.production
+          ? this.prisma.hspsi_production_plan.findFirst({
+              where: { ...org, deleted_at: null },
+              orderBy: { created_at: 'desc' },
+            })
+          : Promise.resolve(null),
       ]);
     const generated: Array<Record<string, any>> = todoResult.items.map((item) => ({
       id: `generated-approval-${item.id}`,
@@ -504,8 +700,8 @@ export class DashboardService {
     }));
     if (stockAlert) {
       const [goods, warehouse] = await Promise.all([
-        this.prisma.hspsi_goods_info.findUnique({ where: { goods_id: stockAlert.goods_id } }),
-        this.prisma.hspsi_basic_warehouse.findUnique({
+        this.prisma.hspsi_goods_info.findFirst({ where: { goods_id: stockAlert.goods_id } }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
           where: { warehouse_id: Number(stockAlert.warehouse_id) },
         }),
       ]);
@@ -554,14 +750,22 @@ export class DashboardService {
     rows = [...rows, ...generated].sort((left, right) =>
       String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
     );
+    // 各类消息总数（基于全量未过滤数据，供前端侧栏徽标使用，不受当前分类/分页影响）
+    const categoryCounts = {
+      审批消息: rows.filter((item) => item.category === '审批消息').length,
+      预警消息: rows.filter((item) => item.category === '预警消息').length,
+      业务消息: rows.filter((item) => item.category === '业务消息').length,
+    };
+    let result = rows;
     if (category && category !== '全部消息')
-      rows = rows.filter((item) => item.category === category);
+      result = result.filter((item) => item.category === category);
     return {
-      items: rows.slice((page - 1) * pageSize, page * pageSize),
-      total: rows.length,
+      items: result.slice((page - 1) * pageSize, page * pageSize),
+      total: result.length,
       page,
       pageSize,
       unreadCount: all.filter((item) => item.is_read === 0).length,
+      categoryCounts,
     };
   }
 

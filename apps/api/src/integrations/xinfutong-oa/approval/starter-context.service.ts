@@ -9,7 +9,7 @@ export class OaStarterContextService {
     const [user, organization] = await Promise.all([
       this.prisma.hspsi_sys_user.findFirst({
         where: { id: BigInt(userId), status: 1, deleted_at: null },
-        select: { username: true },
+        select: { staff_id: true },
       }),
       this.prisma.hspsi_basic_organization.findFirst({
         where: { org_id: organizationId, deleted_at: null },
@@ -18,9 +18,15 @@ export class OaStarterContextService {
     ]);
     if (!user) throw new BadRequestException('提交人账号不存在或已停用');
     if (!organization?.account_set_id) throw new BadRequestException('单据所属组织未关联OA账套');
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      select: { staff_id: true },
+    });
+    const staffId = identity?.staff_id ?? user.staff_id;
+    if (!staffId) throw new BadRequestException('提交人账号尚未关联OA员工');
     const staff = await this.prisma.hspsi_basic_staff.findFirst({
       where: {
-        mobile: user.username,
+        id: staffId,
         account_set_id: organization.account_set_id,
         status: 1,
         deleted_at: null,
@@ -60,11 +66,17 @@ export class OaStarterContextService {
   async resolvePerson(userId: bigint, accountSetId: bigint) {
     const user = await this.prisma.hspsi_sys_user.findFirst({
       where: { id: userId, status: 1, deleted_at: null },
-      select: { username: true },
+      select: { staff_id: true },
     });
     if (!user) throw new BadRequestException('人员账号不存在或已停用');
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: userId, account_set_id: accountSetId },
+      select: { staff_id: true },
+    });
+    const staffId = identity?.staff_id ?? user.staff_id;
+    if (!staffId) throw new BadRequestException('人员账号尚未关联OA员工');
     const staff = await this.prisma.hspsi_basic_staff.findFirst({
-      where: { mobile: user.username, account_set_id: accountSetId, status: 1, deleted_at: null },
+      where: { id: staffId, account_set_id: accountSetId, status: 1, deleted_at: null },
       select: { id: true, name: true, outer_ref_id: true, out_staff_id: true },
     });
     if (!staff?.outer_ref_id || !staff.out_staff_id) {

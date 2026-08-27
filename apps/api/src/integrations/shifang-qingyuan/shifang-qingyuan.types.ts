@@ -441,6 +441,11 @@ export interface ShifangQingyuanOrderExpress {
 /** 列表/详情共用完整订单快照（list 自 2026-08-12 起与 detail 同构） */
 export interface ShifangQingyuanOrderDetailData {
   order: ShifangQingyuanOrder;
+  /**
+   * 订单出库类型（v8，与 order 同级）：
+   * 0 无云库存数据 / 1 向云库存纯入库 / 2 从云库存出库 / 3 从系统仓库出库 / 4 混合出库
+   */
+  order_type?: number;
   details: ShifangQingyuanOrderDetail[];
   refunds?: ShifangQingyuanOrderRefund[];
   actions?: unknown[];
@@ -576,6 +581,75 @@ export interface ShifangQingyuanUserListQuery {
   keyword?: string;
   level?: number;
   status?: number;
+  start_time?: string;
+  end_time?: string;
+}
+
+/* ==================== 云库存自提单列表 ==================== */
+
+/** 自提单商品明细（qimall_addons_cloud_stock_agent_order_details） */
+export interface ShifangQingyuanAgentOrderDetail {
+  id: number;
+  user_id?: number;
+  mall_id?: number;
+  goods_id: number;
+  order_id?: number;
+  num: number;
+  status?: number;
+  created_at?: number;
+  updated_at?: number;
+  goods?: {
+    id?: number;
+    goods_name?: string;
+    cover_pic?: string;
+  } | null;
+}
+
+/** 自提单列表/详情共用快照（同步以 list 为唯一数据源） */
+export interface ShifangQingyuanAgentOrderListItem {
+  id: number;
+  order_no?: string;
+  /** 1=云仓自提 2=价差礼包自提 */
+  order_type?: number;
+  order_type_text?: string;
+  /** 0待发货 1已发货 2已完成 3未支付运费 4已取消 */
+  send_status: number;
+  send_status_text?: string;
+  user?: ShifangQingyuanUser | null;
+  details?: ShifangQingyuanAgentOrderDetail[];
+  num?: number;
+  name?: string;
+  mobile?: string;
+  address?: string;
+  express_code?: string;
+  express_name?: string;
+  express_no?: string;
+  refunds?: unknown[];
+  created_at?: number;
+  created_at_text?: string;
+  updated_at?: number;
+  updated_at_text?: string;
+}
+
+export interface ShifangQingyuanAgentOrderListData {
+  list: ShifangQingyuanAgentOrderListItem[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+  };
+}
+
+export interface ShifangQingyuanAgentOrderListQuery {
+  page?: number;
+  limit?: number;
+  keyword?: string;
+  order_no?: string;
+  order_id?: number;
+  order_type?: number;
+  status?: number;
+  express_no?: string;
+  receiving_info?: string;
   start_time?: string;
   end_time?: string;
 }

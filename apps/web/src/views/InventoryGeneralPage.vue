@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { createRequestId } from '@/utils/random-id';
@@ -17,6 +18,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const resource = computed(() => String(route.params.resource));
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const isInput = computed(() => resource.value === 'general-inputs');
 const title = computed(() => (isInput.value ? '通用入库单' : '通用出库单'));
 const rows = ref<Row[]>([]);
@@ -27,7 +29,7 @@ const dialog = ref(false);
 const viewing = ref(false);
 const initialInputEnabled = ref(false);
 const canManageInitialInput = computed(
-  () => auth.user?.permissions.includes('*') || auth.user?.permissions.includes('system:update'),
+  () => canPageAction(auth.user, '/inventory/general-inputs', 'configure-initial'),
 );
 const organizations = ref<Option[]>([]);
 const organizationTree = computed(() =>
@@ -255,7 +257,7 @@ onMounted(async () => {
             @change="toggleInitialInput"
           />
         </template>
-        <el-button type="primary" @click="openCreate">新增{{ title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="openCreate">新增{{ title }}</el-button>
       </div>
     </header>
     <el-card shadow="never">
@@ -466,7 +468,7 @@ onMounted(async () => {
       />
       <template #footer
         ><el-button @click="dialog = false">关闭</el-button
-        ><el-button v-if="!viewing" type="primary" :loading="saving" @click="save"
+        ><el-button v-if="!viewing && canAction('create')" type="primary" :loading="saving" @click="save"
           >保存并过账</el-button
         ></template
       >

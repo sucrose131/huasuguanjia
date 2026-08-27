@@ -44,7 +44,9 @@ export type LoginUserUpsertResult = 'inserted' | 'updated' | 'skipped';
 
 /** 去掉空白后的手机号，用作登录账号。 */
 export function normalizeMobile(value: unknown): string {
-  return String(value ?? '').replace(/\s+/g, '').trim();
+  return String(value ?? '')
+    .replace(/\s+/g, '')
+    .trim();
 }
 
 /** 初始密码取手机号中的数字后六位；不足六位则无法建号。 */
@@ -121,158 +123,158 @@ export class XinfutongOaSyncService {
     });
 
     const lookup = new Map<
-        string,
-        { type: string; localId: bigint; orgId: bigint; path: string; orgPath: string }
-      >();
+      string,
+      { type: string; localId: bigint; orgId: bigint; path: string; orgPath: string }
+    >();
 
-      for (const record of sorted) {
-        const outerRefId = record.id ?? '';
-        if (!outerRefId) continue;
+    for (const record of sorted) {
+      const outerRefId = record.id ?? '';
+      if (!outerRefId) continue;
 
-        const type = record.type ?? 'G';
-        const parentOuterRefId = record.parentId ?? '';
+      const type = record.type ?? 'G';
+      const parentOuterRefId = record.parentId ?? '';
 
-        // 解析父节点信息
-        let parentLocalId = 0n;
-        let parentOrgId = 0n;
-        let parentPath = '';
-        let parentOrgPath = '';
-        const parentInfo = parentOuterRefId ? lookup.get(parentOuterRefId) : undefined;
-        if (parentInfo) {
-          parentOrgId = parentInfo.orgId;
-          parentPath = parentInfo.path;
-          parentOrgPath = parentInfo.orgPath;
-          // 父节点为部门时，当前部门的 parent_id 指向父部门 dept_id
-          if (parentInfo.type === 'D') {
-            parentLocalId = parentInfo.localId;
-          }
-        }
-
-        if (type === 'D') {
-          // ===== 写入部门表 hspsi_basic_dept =====
-          const status = record.status ?? 'active';
-          const data = {
-            account_set_id: credential.id,
-            app_id: credential.appId,
-            org_id: parentOrgId,
-            parent_id: parentLocalId,
-            name: record.name ?? '',
-            dept_no: record.code ?? '',
-            sort: toSort(record.orderNumber),
-            status: status === 'active' ? 1 : 2,
-            outer_ref_id: outerRefId,
-          };
-
-          const existing = await this.prisma.hspsi_basic_dept.findFirst({
-            where: { outer_ref_id: outerRefId, account_set_id: credential.id },
-            select: { dept_id: true, status: true },
-          });
-
-          let deptId: bigint;
-          if (existing) {
-            // 本地已禁用的部门，保持禁用状态不被同步覆盖
-            const updateData = { ...data };
-            if (existing.status === 2) {
-              updateData.status = 2;
-            }
-            await this.prisma.hspsi_basic_dept.update({
-              where: { dept_id: existing.dept_id },
-              data: updateData,
-            });
-            deptId = existing.dept_id;
-            stats.dept_updated++;
-          } else {
-            const created = await this.prisma.hspsi_basic_dept.create({ data });
-            deptId = created.dept_id;
-            stats.dept_inserted++;
-          }
-
-          // 部门 path：父为部门则继承父部门 path，否则为根路径 '/'
-          const path = parentLocalId > 0n ? parentPath : '/';
-          await this.prisma.hspsi_basic_dept.update({
-            where: { dept_id: deptId },
-            data: { path },
-          });
-
-          // 子节点拼接路径用：当前节点的完整路径 = 父路径 + 自身 ID + '/'
-          const fullPath = `${path}${deptId}/`;
-          lookup.set(outerRefId, {
-            type: 'D',
-            localId: deptId,
-            orgId: parentOrgId,
-            path: fullPath,
-            orgPath: parentOrgPath,
-          });
-        } else {
-          // ===== 写入组织表 hspsi_basic_organization =====
-          // 组织的 parent_id 指向父组织的 org_id（若父为部门则取其所属 org_id）
-          let parentOrgIdForOrg = 0n;
-          if (parentOuterRefId) {
-            const p = lookup.get(parentOuterRefId);
-            if (p) parentOrgIdForOrg = p.orgId;
-          }
-
-          const status = record.status ?? 'active';
-          const leader = record.leaders?.[0] ?? {};
-          const effectiveDate = record.effectiveDate ?? '';
-          const data = {
-            parent_id: parentOrgIdForOrg,
-            org_no: record.code ?? '',
-            name: record.name ?? '',
-            org_level: this.mapOrgLevel(type),
-            short_name: record.name ?? '',
-            contact_name: leader.name ?? '',
-            sort: toSort(record.orderNumber),
-            operation_status: status === 'active' ? 1 : 2,
-            established_at: effectiveDate ? new Date(effectiveDate) : null,
-            outer_ref_id: outerRefId,
-            account_set_id: credential.id,
-            app_id: credential.appId,
-            remark: record.remark ?? '',
-          };
-
-          const existing = await this.prisma.hspsi_basic_organization.findFirst({
-            where: { outer_ref_id: outerRefId, account_set_id: credential.id },
-            select: { org_id: true, operation_status: true },
-          });
-
-          let orgId: bigint;
-          if (existing) {
-            // 本地已禁用的组织，保持禁用状态不被同步覆盖
-            const updateData = { ...data };
-            if (existing.operation_status === 2) {
-              updateData.operation_status = 2;
-            }
-            await this.prisma.hspsi_basic_organization.update({
-              where: { org_id: existing.org_id },
-              data: updateData,
-            });
-            orgId = existing.org_id;
-            stats.org_updated++;
-          } else {
-            const created = await this.prisma.hspsi_basic_organization.create({ data });
-            orgId = created.org_id;
-            stats.org_inserted++;
-          }
-
-          // 组织 path：父组织的完整路径（不含自身），根组织为 '/'
-          const path = parentOrgIdForOrg > 0n ? parentOrgPath : '/';
-          await this.prisma.hspsi_basic_organization.update({
-            where: { org_id: orgId },
-            data: { path },
-          });
-
-          // 子节点拼接路径用：当前节点的完整路径 = 父路径 + 自身 ID + '/'
-          const fullPath = `${path}${orgId}/`;
-          lookup.set(outerRefId, {
-            type,
-            localId: orgId,
-            orgId,
-            path: fullPath,
-            orgPath: fullPath,
-          });
+      // 解析父节点信息
+      let parentLocalId = 0n;
+      let parentOrgId = 0n;
+      let parentPath = '';
+      let parentOrgPath = '';
+      const parentInfo = parentOuterRefId ? lookup.get(parentOuterRefId) : undefined;
+      if (parentInfo) {
+        parentOrgId = parentInfo.orgId;
+        parentPath = parentInfo.path;
+        parentOrgPath = parentInfo.orgPath;
+        // 父节点为部门时，当前部门的 parent_id 指向父部门 dept_id
+        if (parentInfo.type === 'D') {
+          parentLocalId = parentInfo.localId;
         }
       }
+
+      if (type === 'D') {
+        // ===== 写入部门表 hspsi_basic_dept =====
+        const status = record.status ?? 'active';
+        const data = {
+          account_set_id: credential.id,
+          app_id: credential.appId,
+          org_id: parentOrgId,
+          parent_id: parentLocalId,
+          name: record.name ?? '',
+          dept_no: record.code ?? '',
+          sort: toSort(record.orderNumber),
+          status: status === 'active' ? 1 : 2,
+          outer_ref_id: outerRefId,
+        };
+
+        const existing = await this.prisma.hspsi_basic_dept.findFirst({
+          where: { outer_ref_id: outerRefId, account_set_id: credential.id },
+          select: { dept_id: true, status: true },
+        });
+
+        let deptId: bigint;
+        if (existing) {
+          // 本地已禁用的部门，保持禁用状态不被同步覆盖
+          const updateData = { ...data };
+          if (existing.status === 2) {
+            updateData.status = 2;
+          }
+          await this.prisma.hspsi_basic_dept.update({
+            where: { dept_id: existing.dept_id },
+            data: updateData,
+          });
+          deptId = existing.dept_id;
+          stats.dept_updated++;
+        } else {
+          const created = await this.prisma.hspsi_basic_dept.create({ data });
+          deptId = created.dept_id;
+          stats.dept_inserted++;
+        }
+
+        // 部门 path：父为部门则继承父部门 path，否则为根路径 '/'
+        const path = parentLocalId > 0n ? parentPath : '/';
+        await this.prisma.hspsi_basic_dept.update({
+          where: { dept_id: deptId },
+          data: { path },
+        });
+
+        // 子节点拼接路径用：当前节点的完整路径 = 父路径 + 自身 ID + '/'
+        const fullPath = `${path}${deptId}/`;
+        lookup.set(outerRefId, {
+          type: 'D',
+          localId: deptId,
+          orgId: parentOrgId,
+          path: fullPath,
+          orgPath: parentOrgPath,
+        });
+      } else {
+        // ===== 写入组织表 hspsi_basic_organization =====
+        // 组织的 parent_id 指向父组织的 org_id（若父为部门则取其所属 org_id）
+        let parentOrgIdForOrg = 0n;
+        if (parentOuterRefId) {
+          const p = lookup.get(parentOuterRefId);
+          if (p) parentOrgIdForOrg = p.orgId;
+        }
+
+        const status = record.status ?? 'active';
+        const leader = record.leaders?.[0] ?? {};
+        const effectiveDate = record.effectiveDate ?? '';
+        const data = {
+          parent_id: parentOrgIdForOrg,
+          org_no: record.code ?? '',
+          name: record.name ?? '',
+          org_level: this.mapOrgLevel(type),
+          short_name: record.name ?? '',
+          contact_name: leader.name ?? '',
+          sort: toSort(record.orderNumber),
+          operation_status: status === 'active' ? 1 : 2,
+          established_at: effectiveDate ? new Date(effectiveDate) : null,
+          outer_ref_id: outerRefId,
+          account_set_id: credential.id,
+          app_id: credential.appId,
+          remark: record.remark ?? '',
+        };
+
+        const existing = await this.prisma.hspsi_basic_organization.findFirst({
+          where: { outer_ref_id: outerRefId, account_set_id: credential.id },
+          select: { org_id: true, operation_status: true },
+        });
+
+        let orgId: bigint;
+        if (existing) {
+          // 本地已禁用的组织，保持禁用状态不被同步覆盖
+          const updateData = { ...data };
+          if (existing.operation_status === 2) {
+            updateData.operation_status = 2;
+          }
+          await this.prisma.hspsi_basic_organization.update({
+            where: { org_id: existing.org_id },
+            data: updateData,
+          });
+          orgId = existing.org_id;
+          stats.org_updated++;
+        } else {
+          const created = await this.prisma.hspsi_basic_organization.create({ data });
+          orgId = created.org_id;
+          stats.org_inserted++;
+        }
+
+        // 组织 path：父组织的完整路径（不含自身），根组织为 '/'
+        const path = parentOrgIdForOrg > 0n ? parentOrgPath : '/';
+        await this.prisma.hspsi_basic_organization.update({
+          where: { org_id: orgId },
+          data: { path },
+        });
+
+        // 子节点拼接路径用：当前节点的完整路径 = 父路径 + 自身 ID + '/'
+        const fullPath = `${path}${orgId}/`;
+        lookup.set(outerRefId, {
+          type,
+          localId: orgId,
+          orgId,
+          path: fullPath,
+          orgPath: fullPath,
+        });
+      }
+    }
 
     return stats;
   }
@@ -332,67 +334,67 @@ export class XinfutongOaSyncService {
     }
 
     for (const record of records) {
-        const outerRefId = record.sequenceNumber ?? '';
-        if (!outerRefId) continue;
+      const outerRefId = record.sequenceNumber ?? '';
+      if (!outerRefId) continue;
 
-        const data = {
-          name: record.positionName ?? '',
-          post_code: record.codeNumber ?? '',
-          outer_ref_id: outerRefId,
-          account_set_id: credential.id,
-          app_id: credential.appId,
-          remark: record.remark ?? '',
-          sort: toSort(record.orderNumber),
-        };
+      const data = {
+        name: record.positionName ?? '',
+        post_code: record.codeNumber ?? '',
+        outer_ref_id: outerRefId,
+        account_set_id: credential.id,
+        app_id: credential.appId,
+        remark: record.remark ?? '',
+        sort: toSort(record.orderNumber),
+      };
 
-        // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
-        const existing = await this.prisma.hspsi_basic_position.findFirst({
-          where: { outer_ref_id: outerRefId, account_set_id: credential.id },
-          select: { id: true },
+      // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
+      const existing = await this.prisma.hspsi_basic_position.findFirst({
+        where: { outer_ref_id: outerRefId, account_set_id: credential.id },
+        select: { id: true },
+      });
+
+      let positionId: bigint;
+      if (existing) {
+        await this.prisma.hspsi_basic_position.update({
+          where: { id: existing.id },
+          data,
         });
+        positionId = existing.id;
+        stats.position_updated++;
+      } else {
+        const created = await this.prisma.hspsi_basic_position.create({ data });
+        positionId = created.id;
+        stats.position_inserted++;
+      }
 
-        let positionId: bigint;
-        if (existing) {
-          await this.prisma.hspsi_basic_position.update({
-            where: { id: existing.id },
-            data,
-          });
-          positionId = existing.id;
-          stats.position_updated++;
-        } else {
-          const created = await this.prisma.hspsi_basic_position.create({ data });
-          positionId = created.id;
-          stats.position_inserted++;
-        }
+      // 同步所属组织关系：先删除当前岗位的旧关联，再重新写入
+      await this.prisma.hspsi_basic_position_belongs.deleteMany({
+        where: { position_id: positionId },
+      });
 
-        // 同步所属组织关系：先删除当前岗位的旧关联，再重新写入
-        await this.prisma.hspsi_basic_position_belongs.deleteMany({
-          where: { position_id: positionId },
+      const organizations = record.organizations ?? [];
+      for (const org of organizations) {
+        const orgOuterRefId = org.organizationId ?? '';
+        if (!orgOuterRefId) continue;
+
+        // 判断组织类型：在组织表中存在为组织（1），否则为部门（2）
+        const orgExists = await this.prisma.hspsi_basic_organization.findFirst({
+          where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
+          select: { org_id: true },
         });
+        const orgType = orgExists ? 1 : 2;
 
-        const organizations = record.organizations ?? [];
-        for (const org of organizations) {
-          const orgOuterRefId = org.organizationId ?? '';
-          if (!orgOuterRefId) continue;
-
-          // 判断组织类型：在组织表中存在为组织（1），否则为部门（2）
-          const orgExists = await this.prisma.hspsi_basic_organization.findFirst({
-            where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
-            select: { org_id: true },
-          });
-          const orgType = orgExists ? 1 : 2;
-
-          await this.prisma.hspsi_basic_position_belongs.create({
-            data: {
-              position_id: positionId,
-              outer_ref_id: orgOuterRefId,
-              account_set_id: credential.id,
-              app_id: credential.appId,
-              org_type: orgType,
-            },
-          });
-          stats.belongs_inserted++;
-        }
+        await this.prisma.hspsi_basic_position_belongs.create({
+          data: {
+            position_id: positionId,
+            outer_ref_id: orgOuterRefId,
+            account_set_id: credential.id,
+            app_id: credential.appId,
+            org_type: orgType,
+          },
+        });
+        stats.belongs_inserted++;
+      }
     }
 
     return stats;
@@ -414,7 +416,8 @@ export class XinfutongOaSyncService {
    * - 每次同步前清除当前员工的组织关联，再重新写入
    * - 组织关联的 org_type：先查组织表(1)，否则查部门表(2)，都查不到则跳过
    * - 组织关联的 type 映射：PRIMARY→1（主部门），其他→2（兼任部门）
-   * - 同步后按手机号幂等写入 hspsi_sys_user：同一手机号一条，初始密码后六位，不分配角色
+   * - 同步后按手机号幂等写入 hspsi_sys_user：同一手机号一条，初始密码后六位
+   * - 岗位角色和授权组织由数据字典规则生成；金额白名单永远不参与 OA 同步
    * - OA 人员全部失效或删除时禁用对应登录账号；admin 永不禁用
    *
    * @param credential 账套凭证
@@ -441,154 +444,172 @@ export class XinfutongOaSyncService {
     const now = new Date();
 
     for (const record of records) {
-        const outerRefId = record.memberId ?? '';
-        if (!outerRefId) continue;
+      const outerRefId = record.memberId ?? '';
+      if (!outerRefId) continue;
 
-        // 通过 post.id 关联本地岗位表获取 post_id（限定 account_set_id）
-        const postOuterRefId = record.post?.id ?? '';
-        let postId = 0n;
-        if (postOuterRefId) {
-          const position = await this.prisma.hspsi_basic_position.findFirst({
-            where: { outer_ref_id: postOuterRefId, account_set_id: credential.id },
-            select: { id: true },
-          });
-          if (position) {
-            postId = position.id;
-          }
-        }
-
-        // 性别映射：M→1, F→2, 其他→0
-        const gender = record.gender === 'M' ? 1 : record.gender === 'F' ? 2 : 0;
-        // 状态映射：ENABLE→1, 其他→2
-        const status = record.status === 'ENABLE' ? 1 : 2;
-        // 删除标记：deleted=true 时记录删除时间，否则 null
-        const deletedAt = record.deleted ? now : null;
-
-        const data = {
-          post_id: postId,
-          name: record.name ?? '',
-          mobile: normalizeMobile(record.mobile),
-          staff_code: record.number ?? '',
-          out_staff_id: record.idRelation?.staffId ?? '',
-          gender,
-          status,
-          outer_ref_id: outerRefId,
-          account_set_id: credential.id,
-          app_id: credential.appId,
-          deleted_at: deletedAt,
-        };
-
-        // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
-        const existing = await this.prisma.hspsi_basic_staff.findFirst({
-          where: { outer_ref_id: outerRefId, account_set_id: credential.id },
+      // 通过 post.id 关联本地岗位表获取 post_id（限定 account_set_id）
+      const postOuterRefId = record.post?.id ?? '';
+      let postId = 0n;
+      if (postOuterRefId) {
+        const position = await this.prisma.hspsi_basic_position.findFirst({
+          where: { outer_ref_id: postOuterRefId, account_set_id: credential.id },
           select: { id: true },
         });
+        if (position) {
+          postId = position.id;
+        }
+      }
 
-        let staffId: bigint;
-        if (existing) {
-          // 更新时不覆盖 created_at
-          await this.prisma.hspsi_basic_staff.update({
-            where: { id: existing.id },
-            data: { ...data, updated_at: now },
-          });
-          staffId = existing.id;
-          stats.staff_updated++;
+      // 性别映射：M→1, F→2, 其他→0
+      const gender = record.gender === 'M' ? 1 : record.gender === 'F' ? 2 : 0;
+      // 状态映射：ENABLE→1, 其他→2
+      const status = record.status === 'ENABLE' ? 1 : 2;
+      // 删除标记：deleted=true 时记录删除时间，否则 null
+      const deletedAt = record.deleted ? now : null;
+
+      const data = {
+        post_id: postId,
+        name: record.name ?? '',
+        mobile: normalizeMobile(record.mobile),
+        staff_code: record.number ?? '',
+        out_staff_id: record.idRelation?.staffId ?? '',
+        gender,
+        status,
+        outer_ref_id: outerRefId,
+        account_set_id: credential.id,
+        app_id: credential.appId,
+        deleted_at: deletedAt,
+      };
+
+      // 查询是否已存在（幂等，以 outer_ref_id + account_set_id 联合判断）
+      const existing = await this.prisma.hspsi_basic_staff.findFirst({
+        where: { outer_ref_id: outerRefId, account_set_id: credential.id },
+        select: { id: true },
+      });
+
+      let staffId: bigint;
+      if (existing) {
+        // 更新时不覆盖 created_at
+        await this.prisma.hspsi_basic_staff.update({
+          where: { id: existing.id },
+          data: { ...data, updated_at: now },
+        });
+        staffId = existing.id;
+        stats.staff_updated++;
+      } else {
+        const created = await this.prisma.hspsi_basic_staff.create({
+          data: { ...data, created_at: now, updated_at: now },
+        });
+        staffId = created.id;
+        stats.staff_inserted++;
+      }
+
+      // 同步组织关联：先删除当前员工的旧关联，再重新写入
+      await this.prisma.hspsi_basic_staff_organizations.deleteMany({
+        where: { staff_id: staffId },
+      });
+
+      const organizations = record.organizations ?? [];
+      let primaryOrgId: bigint | null = null;
+      let primaryDeptId: bigint | null = null;
+      for (const org of organizations) {
+        const orgOuterRefId = org.organizationId ?? '';
+        if (!orgOuterRefId) continue;
+
+        // 先查组织表（限定 account_set_id），存在则为组织（org_type=1）
+        const orgRow = await this.prisma.hspsi_basic_organization.findFirst({
+          where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
+          select: { org_id: true },
+        });
+
+        let localOrgId: bigint;
+        let orgType: number;
+        let deptOrgId: bigint | null = null;
+        if (orgRow) {
+          localOrgId = orgRow.org_id;
+          orgType = 1;
         } else {
-          const created = await this.prisma.hspsi_basic_staff.create({
-            data: { ...data, created_at: now, updated_at: now },
-          });
-          staffId = created.id;
-          stats.staff_inserted++;
-        }
-
-        // 同步组织关联：先删除当前员工的旧关联，再重新写入
-        await this.prisma.hspsi_basic_staff_organizations.deleteMany({
-          where: { staff_id: staffId },
-        });
-
-        const organizations = record.organizations ?? [];
-        let primaryOrgId: bigint | null = null;
-        let primaryDeptId: bigint | null = null;
-        for (const org of organizations) {
-          const orgOuterRefId = org.organizationId ?? '';
-          if (!orgOuterRefId) continue;
-
-          // 先查组织表（限定 account_set_id），存在则为组织（org_type=1）
-          const orgRow = await this.prisma.hspsi_basic_organization.findFirst({
+          // 组织表中不存在，则查部门表（限定 account_set_id），存在则为部门（org_type=2）
+          const deptRow = await this.prisma.hspsi_basic_dept.findFirst({
             where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
-            select: { org_id: true },
+            select: { dept_id: true, org_id: true },
           });
-
-          let localOrgId: bigint;
-          let orgType: number;
-          let deptOrgId: bigint | null = null;
-          if (orgRow) {
-            localOrgId = orgRow.org_id;
-            orgType = 1;
-          } else {
-            // 组织表中不存在，则查部门表（限定 account_set_id），存在则为部门（org_type=2）
-            const deptRow = await this.prisma.hspsi_basic_dept.findFirst({
-              where: { outer_ref_id: orgOuterRefId, account_set_id: credential.id },
-              select: { dept_id: true, org_id: true },
-            });
-            if (!deptRow) {
-              // 本地组织和部门均未同步时跳过，避免产生脏数据
-              continue;
-            }
-            localOrgId = deptRow.dept_id;
-            deptOrgId = deptRow.org_id || null;
-            orgType = 2;
+          if (!deptRow) {
+            // 本地组织和部门均未同步时跳过，避免产生脏数据
+            continue;
           }
-
-          // 类型映射：PRIMARY→1（主部门），其他→2（兼任部门）
-          const type = org.type === 'PRIMARY' ? 1 : 2;
-          if (type === 1) {
-            if (orgType === 1) {
-              primaryOrgId = localOrgId;
-              primaryDeptId = null;
-            } else {
-              primaryDeptId = localOrgId;
-              primaryOrgId = deptOrgId;
-            }
-          }
-
-          await this.prisma.hspsi_basic_staff_organizations.create({
-            data: {
-              org_id: localOrgId,
-              staff_id: staffId,
-              account_set_id: credential.id,
-              app_id: credential.appId,
-              org_type: orgType,
-              type,
-              created_at: now,
-              updated_at: now,
-            },
-          });
-          stats.org_inserted++;
+          localOrgId = deptRow.dept_id;
+          deptOrgId = deptRow.org_id || null;
+          orgType = 2;
         }
 
-        // OA 同步负责创建/更新登录身份，并显式绑定人员；角色和金额白名单保持本地独立维护。
-        // 人员停用、删除、岗位或主组织不完整时，登录账号同步停用。
-        const identityUsable = status === 1 && !deletedAt && postId > 0n && primaryOrgId !== null;
-        const userResult = await this.upsertLoginUserByMobile({
-          mobile: data.mobile,
-          name: data.name,
-          orgId: primaryOrgId,
-          deptId: primaryDeptId,
-          staffId,
-          identityUsable,
+        // 类型映射：PRIMARY→1（主部门），其他→2（兼任部门）
+        const type = org.type === 'PRIMARY' ? 1 : 2;
+        if (type === 1) {
+          if (orgType === 1) {
+            primaryOrgId = localOrgId;
+            primaryDeptId = null;
+          } else {
+            primaryDeptId = localOrgId;
+            primaryOrgId = deptOrgId;
+          }
+        }
+
+        await this.prisma.hspsi_basic_staff_organizations.create({
+          data: {
+            org_id: localOrgId,
+            staff_id: staffId,
+            account_set_id: credential.id,
+            app_id: credential.appId,
+            org_type: orgType,
+            type,
+            created_at: now,
+            updated_at: now,
+          },
         });
-        if (userResult === 'inserted') stats.user_inserted += 1;
-        else if (userResult === 'updated') stats.user_updated += 1;
-        else stats.user_skipped += 1;
+        stats.org_inserted++;
+      }
+
+      // OA 同步负责登录身份、本地角色和授权组织；金额白名单保持本地独立维护。
+      // 岗位映射到唯一业务角色；未映射时回退基础申请人角色。
+      const identityUsable = status === 1 && !deletedAt && primaryOrgId !== null;
+      const userResult = await this.upsertLoginUserByMobile({
+        mobile: data.mobile,
+        name: data.name,
+        orgId: primaryOrgId,
+        deptId: primaryDeptId,
+        staffId,
+        accountSetId: credential.id,
+        // 先停用再刷新授权；只有授权事务成功后才重新启用，防止失败时沿用旧权限。
+        identityUsable: false,
+      });
+      if (userResult !== 'skipped') {
+        const loginUser = await this.prisma.hspsi_sys_user.findFirst({
+          where: { username: data.mobile },
+          select: { id: true },
+        });
+        if (loginUser) {
+          await this.linkUserOaStaffIdentity(loginUser.id, staffId, credential.id);
+          await this.refreshUserAuthorization({
+            userId: loginUser.id,
+            staffId,
+            postId,
+            accountSetId: credential.id,
+            identityUsable,
+          });
+        }
+      }
+      if (userResult === 'inserted') stats.user_inserted += 1;
+      else if (userResult === 'updated') stats.user_updated += 1;
+      else stats.user_skipped += 1;
     }
 
     return stats;
   }
 
   /**
-   * 按手机号幂等写入后台登录账号。同一手机号只保留一条，不分配角色。
-   * 已有账号不改密码和角色；OA 侧该手机号已无有效人员时禁用登录。
+   * 按手机号幂等写入后台登录账号。同一手机号只保留一条。
+   * 已有账号不改密码；OA 侧该手机号已无有效人员时禁用登录。
    */
   async upsertLoginUserByMobile(input: {
     mobile: string;
@@ -596,6 +617,7 @@ export class XinfutongOaSyncService {
     orgId?: bigint | null;
     deptId?: bigint | null;
     staffId?: bigint | null;
+    accountSetId?: bigint | null;
     identityUsable?: boolean;
   }): Promise<LoginUserUpsertResult> {
     const mobile = normalizeMobile(input.mobile);
@@ -644,20 +666,35 @@ export class XinfutongOaSyncService {
       return 'updated';
     }
 
+    let preservePrimaryIdentity = false;
     if (existing.staff_id && staffId && existing.staff_id !== staffId) {
-      XinfutongOaSyncService.logger.warn(
-        `手机号 ${mobile} 已关联其他 OA 人员，跳过自动改绑`,
-      );
-      return 'skipped';
+      const existingStaff = await this.prisma.hspsi_basic_staff.findUnique({
+        where: { id: existing.staff_id },
+        select: { account_set_id: true },
+      });
+      if (
+        !input.accountSetId ||
+        !existingStaff ||
+        existingStaff.account_set_id === input.accountSetId
+      ) {
+        XinfutongOaSyncService.logger.warn(
+          `手机号 ${mobile} 在同一 OA 账套关联了不同人员，跳过自动改绑`,
+        );
+        return 'skipped';
+      }
+      preservePrimaryIdentity = true;
     }
 
     await this.prisma.hspsi_sys_user.update({
       where: { id: existing.id },
       data: {
+        username: mobile,
         nickname,
         phone: mobile,
-        ...(staffId ? { staff_id: staffId } : {}),
-        ...(input.orgId ? { org_id: input.orgId, dept_id: input.deptId ?? null } : {}),
+        ...(!preservePrimaryIdentity && staffId ? { staff_id: staffId } : {}),
+        ...(!preservePrimaryIdentity && input.orgId
+          ? { org_id: input.orgId, dept_id: input.deptId ?? null }
+          : {}),
         status: enabled ? 1 : 2,
         deleted_at: null,
         updated_by: 0n,
@@ -665,5 +702,251 @@ export class XinfutongOaSyncService {
       },
     });
     return 'updated';
+  }
+
+  async linkUserOaStaffIdentity(userId: bigint, staffId: bigint, accountSetId: bigint) {
+    await this.prisma.hspsi_sys_user_oa_staff.upsert({
+      where: { user_id_staff_id: { user_id: userId, staff_id: staffId } },
+      create: {
+        user_id: userId,
+        staff_id: staffId,
+        account_set_id: accountSetId,
+        created_by: 0n,
+      },
+      update: { account_set_id: accountSetId },
+    });
+  }
+
+  /**
+   * 根据数据字典全量刷新 OA 人员的本地角色和授权组织。
+   * 安全规则：每个用户只有一个角色；岗位映射优先，无映射时使用基础角色。
+   * 本方法不访问金额白名单表。
+   */
+  async refreshUserAuthorization(input: {
+    userId: bigint;
+    staffId: bigint;
+    postId: bigint;
+    accountSetId: bigint;
+    identityUsable: boolean;
+  }) {
+    let roleId: number | null = null;
+    let authorizedOrgIds: bigint[] = [];
+
+    const identityLinks = await this.prisma.hspsi_sys_user_oa_staff.findMany({
+      where: { user_id: input.userId },
+      select: { staff_id: true },
+    });
+    const linkedStaff = identityLinks.length
+      ? await this.prisma.hspsi_basic_staff.findMany({
+          where: {
+            id: { in: identityLinks.map((item) => item.staff_id) },
+            status: 1,
+            deleted_at: null,
+          },
+          select: { id: true, post_id: true, account_set_id: true },
+        })
+      : [];
+    const identities = linkedStaff.length
+      ? linkedStaff.map((staff) => ({
+          staffId: staff.id,
+          postId: staff.post_id,
+          accountSetId: staff.account_set_id,
+        }))
+      : input.identityUsable
+        ? [input]
+        : [];
+
+    if (identities.length) {
+      const [defaultRoleCategory, positionRoleCategory, orgRuleCategory] = await Promise.all([
+        this.prisma.hspsi_sys_dictionary_category.findFirst({
+          where: { dict_catg_code: 'oa_default_staff_role', deleted_at: null },
+          select: { dict_catg_id: true },
+        }),
+        this.prisma.hspsi_sys_dictionary_category.findFirst({
+          where: { dict_catg_code: 'oa_position_role_mapping', deleted_at: null },
+          select: { dict_catg_id: true },
+        }),
+        this.prisma.hspsi_sys_dictionary_category.findFirst({
+          where: { dict_catg_code: 'oa_org_authorization_rule', deleted_at: null },
+          select: { dict_catg_id: true },
+        }),
+      ]);
+
+      let defaultRoleCode = '';
+      if (defaultRoleCategory) {
+        const defaults = await this.prisma.hspsi_sys_dictionary.findMany({
+          where: { dict_catg_id: defaultRoleCategory.dict_catg_id, deleted_at: null },
+          select: { dict_value: true },
+          orderBy: [{ sort: 'asc' }, { dict_id: 'asc' }],
+        });
+        defaultRoleCode = defaults.map((item) => item.dict_value?.trim()).find(Boolean) ?? '';
+      }
+      const positionRoleCodes = new Set<string>();
+      for (const identity of identities) {
+        if (identity.postId <= 0n || !positionRoleCategory) continue;
+        const position = await this.prisma.hspsi_basic_position.findFirst({
+          where: {
+            id: identity.postId,
+            account_set_id: identity.accountSetId,
+            status: 1,
+            deleted_at: null,
+          },
+          select: { outer_ref_id: true },
+        });
+        if (!position) continue;
+        const mappings = await this.prisma.hspsi_sys_dictionary.findMany({
+          where: {
+            dict_catg_id: positionRoleCategory.dict_catg_id,
+            dict_name: position.outer_ref_id,
+            deleted_at: null,
+          },
+          select: { dict_value: true },
+        });
+        mappings.forEach((item) => {
+          if (item.dict_value?.trim()) positionRoleCodes.add(item.dict_value.trim());
+        });
+      }
+      if (positionRoleCodes.size > 1) {
+        XinfutongOaSyncService.logger.warn(
+          `用户 ${input.userId} 的多个OA身份映射到不同角色，自动降级为基础角色，需由超级管理员确认唯一角色`,
+        );
+      }
+      const selectedRoleCode =
+        positionRoleCodes.size === 1 ? [...positionRoleCodes][0]! : defaultRoleCode;
+      if (selectedRoleCode) {
+        const role = await this.prisma.hspsi_sys_role.findFirst({
+          where: { code: selectedRoleCode, status: 1, deleted_at: null },
+          select: { id: true },
+        });
+        roleId = role ? Number(role.id) : null;
+      }
+
+      const enabledOrgRules = new Set<string>();
+      if (orgRuleCategory) {
+        const items = await this.prisma.hspsi_sys_dictionary.findMany({
+          where: { dict_catg_id: orgRuleCategory.dict_catg_id, deleted_at: null },
+          select: { dict_value: true },
+        });
+        items.forEach((item) => {
+          if (item.dict_value?.trim()) enabledOrgRules.add(item.dict_value.trim());
+        });
+      }
+
+      const candidateOrgIds = new Set<bigint>();
+      for (const identity of identities) {
+        if (enabledOrgRules.has('PRIMARY_ORG') || enabledOrgRules.has('SECONDARY_ORG')) {
+          const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
+            where: { staff_id: identity.staffId, deleted_at: null },
+            select: { org_id: true, org_type: true, type: true },
+          });
+          for (const membership of memberships) {
+            const enabled =
+              membership.type === 1
+                ? enabledOrgRules.has('PRIMARY_ORG')
+                : enabledOrgRules.has('SECONDARY_ORG');
+            if (!enabled) continue;
+            if (membership.org_type === 1) candidateOrgIds.add(membership.org_id);
+            if (membership.org_type === 2) {
+              const department = await this.prisma.hspsi_basic_dept.findFirst({
+                where: { dept_id: membership.org_id, status: 1, deleted_at: null },
+                select: { org_id: true },
+              });
+              if (department?.org_id) candidateOrgIds.add(department.org_id);
+            }
+          }
+        }
+
+        if (identity.postId > 0n && enabledOrgRules.has('POSITION_ORG')) {
+          const belongs = await this.prisma.hspsi_basic_position_belongs.findMany({
+            where: {
+              position_id: identity.postId,
+              account_set_id: identity.accountSetId,
+            },
+            select: { outer_ref_id: true, org_type: true },
+          });
+          for (const belong of belongs) {
+            if (belong.org_type === 1) {
+              const organization = await this.prisma.hspsi_basic_organization.findFirst({
+                where: {
+                  outer_ref_id: belong.outer_ref_id,
+                  account_set_id: identity.accountSetId,
+                  operation_status: 1,
+                  deleted_at: null,
+                },
+                select: { org_id: true },
+              });
+              if (organization) candidateOrgIds.add(organization.org_id);
+            }
+            if (belong.org_type === 2) {
+              const department = await this.prisma.hspsi_basic_dept.findFirst({
+                where: {
+                  outer_ref_id: belong.outer_ref_id,
+                  account_set_id: identity.accountSetId,
+                  status: 1,
+                  deleted_at: null,
+                },
+                select: { org_id: true },
+              });
+              if (department?.org_id) candidateOrgIds.add(department.org_id);
+            }
+          }
+        }
+      }
+
+      if (candidateOrgIds.size) {
+        const activeOrganizations = await this.prisma.hspsi_basic_organization.findMany({
+          where: {
+            org_id: { in: [...candidateOrgIds] },
+            operation_status: 1,
+            deleted_at: null,
+          },
+          select: { org_id: true },
+        });
+        authorizedOrgIds = activeOrganizations.map((item) => item.org_id);
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const manualRoleOverride = await tx.hspsi_sys_user_role_override.findUnique({
+        where: { user_id: input.userId },
+        select: { user_id: true },
+      });
+      let effectiveRoleCount = roleId ? 1 : 0;
+      if (!manualRoleOverride) {
+        await tx.hspsi_sys_user_role.deleteMany({ where: { user_id: Number(input.userId) } });
+        if (roleId) {
+          await tx.hspsi_sys_user_role.createMany({
+            data: [{ user_id: Number(input.userId), role_id: roleId }],
+            skipDuplicates: true,
+          });
+        }
+      } else {
+        effectiveRoleCount = await tx.hspsi_sys_user_role.count({
+          where: { user_id: Number(input.userId) },
+        });
+      }
+      // OA 只刷新 created_by=0 的自动组织范围；超级管理员人工增加的组织必须保留。
+      await tx.hspsi_sys_user_authorized_org.deleteMany({
+        where: { user_id: input.userId, created_by: 0n },
+      });
+      if (authorizedOrgIds.length) {
+        await tx.hspsi_sys_user_authorized_org.createMany({
+          data: authorizedOrgIds.map((orgId) => ({
+            user_id: input.userId,
+            org_id: orgId,
+            created_by: 0n,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      const authorizationUsable =
+        identities.length > 0 && effectiveRoleCount > 0 && authorizedOrgIds.length > 0;
+      await tx.hspsi_sys_user.update({
+        where: { id: input.userId },
+        data: { status: authorizationUsable ? 1 : 2, updated_by: 0n, updated_at: new Date() },
+      });
+    });
+
+    return { roleId, authorizedOrgIds };
   }
 }

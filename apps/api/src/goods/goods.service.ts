@@ -2,10 +2,21 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
+import { AmountAccessService } from '../amount-access/amount-access.service';
+
+const GOODS_AMOUNT_FIELDS = new Set(['costPrice', 'salePrice']);
 
 @Injectable()
 export class GoodsService {
-  constructor(@Inject(PrismaService) private prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(AmountAccessService) private amountAccess: AmountAccessService,
+  ) {}
+  private async maskAmounts<T>(user: AuthUser | undefined, value: T): Promise<T> {
+    if (!user || user.permissions.includes('*')) return value;
+    const access = await this.amountAccess.forUser(user.id);
+    return access.canViewAmount ? value : this.amountAccess.maskFields(value, GOODS_AMOUNT_FIELDS);
+  }
   private async visibleWarehouseTypes(user?: AuthUser) {
     if (!user || user.permissions.includes('*')) return null;
     if (!user.orgId) return [];
@@ -86,7 +97,7 @@ export class GoodsService {
     if (query.keyword) where.goods_name = { contains: query.keyword };
     if (query.parentId) where.parent_goods_catg_id = BigInt(query.parentId);
     if (query.warehouseType) where.warehouse_type = Number(query.warehouseType);
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_info_category.findMany({
         where,
@@ -241,7 +252,7 @@ export class GoodsService {
         { property_name: { contains: query.keyword } },
         { property_desc: { contains: query.keyword } },
       ];
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_goods_property.findMany({
         where,
@@ -316,7 +327,7 @@ export class GoodsService {
       where.goods_catg_id =
         visibleCategoryIds && !visibleCategoryIds.includes(categoryId) ? { in: [] } : categoryId;
     }
-    if (query.status !== undefined) where.status = Number(query.status);
+    if (query.status !== undefined && query.status !== '') where.status = Number(query.status);
     if (query.supplyType) where.supply_type = Number(query.supplyType);
     if (query.goodsType) where.goods_type = Number(query.goodsType);
     const [items, total] = await this.prisma.$transaction([
@@ -367,7 +378,7 @@ export class GoodsService {
           },
         }),
       ]);
-    return {
+    return this.maskAmounts(user, {
       items: items.map((item) => {
         const category = categories.find((c) => c.goods_catg_id === item.goods_catg_id);
         return this.goodsOutput(item, {
@@ -385,7 +396,7 @@ export class GoodsService {
       page,
       pageSize,
       summary: { total: allCount, active: activeCount, inactive: inactiveCount },
-    };
+    });
   }
   private goodsOutput(item: any, extra: Record<string, unknown> = {}) {
     return {
@@ -442,7 +453,7 @@ export class GoodsService {
         ? this.prisma.hspsi_basic_unit.findUnique({ where: { id: BigInt(item.unit_type) } })
         : null,
     ]);
-    return {
+    return this.maskAmounts(user, {
       ...this.goodsOutput(item, {
         categoryName: category?.goods_name,
         categoryWarehouseType: category?.warehouse_type ?? 0,
@@ -466,7 +477,7 @@ export class GoodsService {
         isAlertPeriod: sku.is_alert_period,
         alertQty: sku.alert_aty,
       })),
-    };
+    });
   }
   private prepareSkus(body: Record<string, any>) {
     const provided = Array.isArray(body.skus)

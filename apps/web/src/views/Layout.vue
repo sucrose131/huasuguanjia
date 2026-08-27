@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   ArrowDown,
@@ -20,6 +20,7 @@ import {
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/api';
+import { ElMessage } from 'element-plus';
 import huasuLogo from '@/assets/huasu-logo.png';
 
 const route = useRoute();
@@ -41,58 +42,7 @@ const iconMap: Record<string, any> = {
   Setting,
   Tickets,
 };
-const runtimeMenus = computed(() => {
-  const menus = auth.menus.map((menu) => ({ ...menu }));
-  const organizationDirectory = menus.find((menu) => menu.code === 'master-data:organizations');
-  if (organizationDirectory && !menus.some((menu) => menu.parent_id === organizationDirectory.id)) {
-    organizationDirectory.name = '组织';
-    organizationDirectory.route = null;
-    organizationDirectory.type = 1;
-    menus.push(
-      {
-        id: -9101,
-        parent_id: organizationDirectory.id,
-        name: '公司',
-        code: 'master-data:companies',
-        route: '/base/organizations',
-        icon: null,
-        sort: 1,
-        type: 2,
-      },
-      {
-        id: -9102,
-        parent_id: organizationDirectory.id,
-        name: '部门',
-        code: 'master-data:departments',
-        route: '/base/departments',
-        icon: null,
-        sort: 2,
-        type: 2,
-      },
-      {
-        id: -9103,
-        parent_id: organizationDirectory.id,
-        name: '职位',
-        code: 'master-data:positions',
-        route: '/base/positions',
-        icon: null,
-        sort: 3,
-        type: 2,
-      },
-      {
-        id: -9104,
-        parent_id: organizationDirectory.id,
-        name: '员工',
-        code: 'master-data:employees',
-        route: '/base/employees',
-        icon: null,
-        sort: 4,
-        type: 2,
-      },
-    );
-  }
-  return menus;
-});
+const runtimeMenus = computed(() => auth.menus.map((menu) => ({ ...menu })));
 const groups = computed(() =>
   runtimeMenus.value
     .filter((menu) => menu.parent_id === 0 && menu.type !== 3)
@@ -174,9 +124,52 @@ async function logout() {
   await auth.logout();
   router.push('/login');
 }
+
+// ── 修改密码 ──
+const passwordDialog = ref(false);
+const passwordSaving = ref(false);
+const passwordForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+});
+async function openPasswordDialog() {
+  passwordForm.oldPassword = '';
+  passwordForm.newPassword = '';
+  passwordForm.confirmPassword = '';
+  passwordDialog.value = true;
+}
+async function submitPassword() {
+  if (!passwordForm.oldPassword || !passwordForm.newPassword) {
+    ElMessage.warning('请填写旧密码和新密码');
+    return;
+  }
+  if (passwordForm.newPassword.length < 6) {
+    ElMessage.warning('新密码至少6个字符');
+    return;
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致');
+    return;
+  }
+  passwordSaving.value = true;
+  try {
+    const result: any = await api.post('/auth/change-password', {
+      oldPassword: passwordForm.oldPassword,
+      newPassword: passwordForm.newPassword,
+    });
+    ElMessage.success(result?.message ?? '密码修改成功');
+    passwordDialog.value = false;
+  } catch {
+    // axios 拦截器已提示
+  } finally {
+    passwordSaving.value = false;
+  }
+}
 function navigate(path?: string | null) {
   if (path) {
-    router.push(path);
+    // 显式清空 query，避免 create/viewId 等参数残留导致页面行为异常
+    router.push({ path, query: {} });
     mobileOpen.value = false;
   }
 }
@@ -282,6 +275,13 @@ function navigate(path?: string | null) {
           >
         </div>
         <div class="top-actions">
+          <div
+            class="organization-switcher desktop-only"
+            title="固定所属组织由 OA 同步，不随数据访问授权变化"
+          >
+            <span>所属组织</span>
+            <strong>{{ auth.user?.orgName || auth.user?.currentOrgName || '未配置' }}</strong>
+          </div>
           <button title="刷新数据" @click="router.go(0)">
             <el-icon><RefreshRight /></el-icon>
           </button>
@@ -293,8 +293,11 @@ function navigate(path?: string | null) {
           <span class="avatar">{{ (auth.user?.username || 'U').slice(0, 1).toUpperCase() }}</span>
           <div class="user-copy desktop-only">
             <strong>{{ auth.user?.username || '加载中' }}</strong
-            ><small>系统管理员</small>
+            ><small>{{ auth.user?.roleName || '未配置角色' }}</small>
           </div>
+          <button title="修改密码" @click="openPasswordDialog">
+            <el-icon><Setting /></el-icon>
+          </button>
           <button title="退出登录" @click="logout">
             <el-icon><SwitchButton /></el-icon>
           </button>
@@ -303,6 +306,24 @@ function navigate(path?: string | null) {
       <main class="content"><router-view :key="route.fullPath" /></main>
     </div>
   </div>
+
+  <el-dialog v-model="passwordDialog" title="修改密码" width="420px" :close-on-click-modal="false">
+    <el-form label-position="top">
+      <el-form-item label="旧密码">
+        <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入当前登录密码" />
+      </el-form-item>
+      <el-form-item label="新密码">
+        <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少6个字符" />
+      </el-form-item>
+      <el-form-item label="确认新密码">
+        <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="再次输入新密码" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="passwordDialog = false">取消</el-button>
+      <el-button type="primary" :loading="passwordSaving" @click="submitPassword">确定</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -550,6 +571,28 @@ function navigate(path?: string | null) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.organization-switcher {
+  width: 210px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+}
+.organization-switcher > span {
+  flex: none;
+  color: #8a94a4;
+  font-size: 10px;
+}
+.organization-switcher > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #3f4a5a;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .top-actions button,
 .mobile-menu {

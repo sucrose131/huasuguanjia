@@ -220,6 +220,11 @@ function createService() {
         service_id: serviceSeq++,
         ...data,
       })),
+      update: vi.fn(),
+    },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn(),
     },
     hspsi_sale_order_output: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -289,6 +294,13 @@ function createService() {
     $transaction: vi
       .fn()
       .mockImplementation(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
+    hspsi_sale_order_service: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    hspsi_sale_order_service_detail: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   };
 
   const huasuHome = {
@@ -348,8 +360,10 @@ describe('HuasuHomeConferenceOrderSyncService 单元测试', () => {
     expect(stats.created).toBe(1);
     expect(stats.payments).toBe(1);
     expect(stats.outputs).toBe(0);
+    expect(stats.events).toBe(0);
     expect(ctx.tx.hspsi_sale_order_output.create).not.toHaveBeenCalled();
     expect(ctx.posting.post).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_sale_order_service.create).not.toHaveBeenCalled();
 
     const createArg = ctx.tx.hspsi_sale_order.create.mock.calls[0][0].data;
     expect(createArg.customer_address).toBe('');
@@ -411,6 +425,9 @@ describe('HuasuHomeConferenceOrderSyncService 单元测试', () => {
 
     const outputRemark = ctx.tx.hspsi_sale_order_output.create.mock.calls[0][0].data.remark;
     expect(outputRemark).toContain('CONFERENCE_TICKET');
+    const postArg = ctx.posting.post.mock.calls[0]![0];
+    expect(postArg.idempotencyKey).toBe('huasu-home-output:8001:v1');
+    expect(postArg.idempotencyKey).not.toContain('34');
   });
 
   it('未核销退款：只记账不回库', async () => {
@@ -437,6 +454,24 @@ describe('HuasuHomeConferenceOrderSyncService 单元测试', () => {
     expect(stats.outputs).toBe(0);
     expect(stats.exits).toBe(0);
     expect(ctx.tx.hspsi_sale_order_exit.create).not.toHaveBeenCalled();
+    expect(ctx.tx.hspsi_sale_order_service.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        event_type: 4,
+        event_status: 2,
+        goods_id: 101,
+        sku_id: 201,
+      }),
+    });
+    expect(ctx.tx.hspsi_sale_order_service_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          goods_id: 101n,
+          sku_id: 201n,
+          service_qty: 1,
+          source_output_id: 0n,
+        }),
+      ],
+    });
 
     const refundPay = ctx.tx.hspsi_sales_order_payment.create.mock.calls.find(
       (call: Array<{ data: { so_pay_type: number } }>) => call[0].data.so_pay_type === 2,

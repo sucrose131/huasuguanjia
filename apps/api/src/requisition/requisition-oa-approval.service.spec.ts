@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
+import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 function createFixture(options: { existingStatus?: string; startError?: Error } = {}) {
@@ -67,7 +68,10 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
         .mockResolvedValue([{ draw_detail_id: 70n, draw_id: 7n, goods_id: 101n, draw_qty: 3 }]),
     },
     hspsi_basic_organization: {
-      findFirst: vi.fn().mockResolvedValue({ name: '华溯科技', outer_ref_id: 'ORG-2' }),
+      findFirst: vi.fn().mockResolvedValue({ name: '华溯科技', outer_ref_id: 'ORG-2', account_set_id: 1n }),
+    },
+    hspsi_sys_user_oa_staff: {
+      findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
     },
     hspsi_basic_dept: {
       findFirst: vi.fn().mockResolvedValue({ name: '研发部', outer_ref_id: 'DEPT-6' }),
@@ -131,6 +135,8 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
       credentialService as never,
       approvalService as never,
       attachmentsService as never,
+      { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.requisition_application) } as never,
+      { get: vi.fn().mockReturnValue('true') } as never,
     ),
     prisma,
     tx,
@@ -232,5 +238,27 @@ describe('RequisitionOaApprovalService', () => {
     ]);
     expect(attachmentsService.cacheOaUpload).toHaveBeenCalledTimes(2);
     await Promise.all(localPaths.map((path) => expect(readFile(path)).rejects.toThrow()));
+  });
+
+  it('returns intercepted result without touching prisma when OA approval is disabled', async () => {
+    const prisma = { hspsi_draw_approve: { findFirst: vi.fn() } };
+    const service = new RequisitionOaApprovalService(
+      prisma as never,
+      { getById: vi.fn() } as never,
+      { startFormProcess: vi.fn(), uploadFile: vi.fn() } as never,
+      {
+        listForIntegration: vi.fn(),
+        downloadToFileForIntegration: vi.fn(),
+        cacheOaUpload: vi.fn(),
+      } as never,
+      { getMapping: vi.fn() } as never,
+      { get: vi.fn().mockReturnValue('false') } as never,
+    );
+
+    const result = await service.submit(7n, '5');
+
+    expect(result.procStatus).toBe('PUSH_FAILED');
+    expect(result.errorMessage).toContain('OA审批已暂停');
+    expect(prisma.hspsi_draw_approve.findFirst).not.toHaveBeenCalled();
   });
 });

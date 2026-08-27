@@ -2,16 +2,14 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { OaDocumentSubmissionService } from '../integrations/xinfutong-oa/approval/document-submission.service';
 import { OaStarterContextService } from '../integrations/xinfutong-oa/approval/starter-context.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 import { SalesService } from './sales.service';
 
-type SalesField = keyof typeof OA_FORM_MAPPINGS.sales_order.fields;
-const fields = Object.fromEntries(
-  Object.entries(OA_FORM_MAPPINGS.sales_order.fields).map(([key, value]) => [
-    key,
-    value.uniqueName,
-  ]),
-) as Record<SalesField, string>;
+const oaFields = (form: OaFormMapping) =>
+  Object.fromEntries(
+    Object.entries(form.fields).map(([key, value]) => [key, value.uniqueName]),
+  ) as Record<string, string>;
 
 @Injectable()
 export class SalesOaApprovalService {
@@ -20,6 +18,7 @@ export class SalesOaApprovalService {
     @Inject(SalesService) private readonly sales: SalesService,
     @Inject(OaStarterContextService) private readonly starters: OaStarterContextService,
     @Inject(OaDocumentSubmissionService) private readonly submissions: OaDocumentSubmissionService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
   ) {}
 
   async submitDiscountOrder(id: bigint, userId: string) {
@@ -42,40 +41,42 @@ export class SalesOaApprovalService {
     ]);
     if (!organization || !warehouse) throw new BadRequestException('折价销售单组织或仓库不存在');
     const starter = await this.starters.resolve(userId, BigInt(order.orgId));
+    const form = await this.mappingService.getMapping('sales_order', starter.accountSetId);
+    const fields = oaFields(form);
     return this.submissions.submit({
       businessType: 'sales_order',
       businessId: id,
       userId,
       accountSetId: starter.accountSetId,
-      form: OA_FORM_MAPPINGS.sales_order,
-      attachmentField: fields.attachments,
+      form,
+      attachmentField: fields.attachments!,
       busKey: `sales_order:${id}`,
       starterId: starter.starterId,
       starterOrgId: starter.starterOrgId,
       formData: {
-        [fields.organization]: organization.name,
-        [fields.customerName]: order.customerName,
-        [fields.orderDate]: new Date(order.orderDate).toISOString().slice(0, 10),
-        [fields.salesperson]: order.salesName,
-        [fields.warehouse]: warehouse.name,
-        [fields.totalQuantity]: order.so_qty,
-        [fields.originalAmount]: Number(order.so_amount),
-        [fields.transactionAmount]: Number(order.fact_amount),
-        [fields.discountAmount]: Number(order.priceoff_amount),
-        [fields.source]: order.businessSourceNo,
-        [fields.remark]: order.remark,
-        [fields.details]: order.details.map((line: any) => {
+        [fields.organization!]: organization.name,
+        [fields.customerName!]: order.customerName,
+        [fields.orderDate!]: new Date(order.orderDate).toISOString().slice(0, 10),
+        [fields.salesperson!]: order.salesName,
+        [fields.warehouse!]: warehouse.name,
+        [fields.totalQuantity!]: order.so_qty,
+        [fields.originalAmount!]: Number(order.so_amount),
+        [fields.transactionAmount!]: Number(order.fact_amount),
+        [fields.discountAmount!]: Number(order.priceoff_amount),
+        [fields.source!]: order.businessSourceNo,
+        [fields.remark!]: order.remark,
+        [fields.details!]: order.details.map((line: any) => {
           const sku = skus.find((x) => x.sku_id === BigInt(line.skuId));
           return {
-            [fields.goodsName]:
+            [fields.goodsName!]:
               goods.find((x) => x.goods_id === BigInt(line.goodsId))?.goods_name ?? '',
-            [fields.skuName]: sku?.spec_models ?? '',
-            [fields.quantity]: line.quantity,
-            [fields.unit]: units.find((x) => x.id === BigInt(line.unitType ?? 0))?.name ?? '',
-            [fields.originalUnitPrice]: Number(line.price),
-            [fields.transactionUnitPrice]: Number(line.factAmount) / Number(line.quantity),
-            [fields.originalLineAmount]: Number(line.amount),
-            [fields.transactionLineAmount]: Number(line.factAmount),
+            [fields.skuName!]: sku?.spec_models ?? '',
+            [fields.quantity!]: line.quantity,
+            [fields.unit!]: units.find((x) => x.id === BigInt(line.unitType ?? 0))?.name ?? '',
+            [fields.originalUnitPrice!]: Number(line.price),
+            [fields.transactionUnitPrice!]: Number(line.factAmount) / Number(line.quantity),
+            [fields.originalLineAmount!]: Number(line.amount),
+            [fields.transactionLineAmount!]: Number(line.factAmount),
           };
         }),
       },

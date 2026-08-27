@@ -3,11 +3,32 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
+  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
 } from './inventory-helpers';
 import { InventoryService } from './inventory.service';
+
+describe('inventory quantity alert status filter', () => {
+  const items = [
+    { id: 1, warning: false },
+    { id: 2, warning: true },
+  ];
+
+  it('keeps normal inventory when status is 0', () => {
+    expect(filterQuantityAlertsByStatus(items, '0')).toEqual([{ id: 1, warning: false }]);
+  });
+
+  it('keeps shortage inventory when status is 1', () => {
+    expect(filterQuantityAlertsByStatus(items, 1)).toEqual([{ id: 2, warning: true }]);
+  });
+
+  it('keeps all inventory when status is empty and rejects invalid values', () => {
+    expect(filterQuantityAlertsByStatus(items, '')).toEqual(items);
+    expect(() => filterQuantityAlertsByStatus(items, 'unexpected')).toThrow('库存状态参数无效');
+  });
+});
 
 describe('inventory check quantity branches', () => {
   it('keeps shortage and damage as independent branches', () => {
@@ -180,6 +201,7 @@ describe('inventory draft document row locking', () => {
         documentTrace as never,
         { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
         { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
+        {} as never,
       ),
       prisma,
       posting,
@@ -751,6 +773,7 @@ describe('inventory requisition history query', () => {
       {} as never,
       {} as never,
       { assertGoodsLines: vi.fn(), assertWarehouse: vi.fn() } as never,
+      {} as never,
     );
     return { service, prisma };
   }
@@ -786,5 +809,66 @@ describe('inventory requisition history query', () => {
         where: expect.objectContaining({ org_id: 1n, dept_id: 4n, receiver_id: 5n }),
       }),
     );
+  });
+});
+
+describe('inventory stocks keyword search (BUG-NEW-01)', () => {
+  function stocksService() {
+    const prisma = {
+      hspsi_goods_info: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_goods_info_sku: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_inventory_batch_total: {
+        findMany: vi.fn().mockResolvedValue([]),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      hspsi_basic_unit: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_goods_info_category: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [],
+      skus: [],
+      warehouses: [],
+      orgs: [],
+    });
+    vi.spyOn(service as any, 'quantityAlertCount').mockResolvedValue(0);
+    return { service, prisma };
+  }
+
+  it('matches a pure numeric keyword against sku_id even when spec_models has no match', async () => {
+    const { service, prisma } = stocksService();
+    await service.stocks({ keyword: '1900701110', orgId: '9', page: '1', pageSize: '20' });
+    const where = prisma.hspsi_inventory_batch_total.findMany.mock.calls[0]![0].where;
+    expect(where.org_id).toBe(9n);
+    expect(where.OR).toContainEqual({ sku_id: 1900701110n });
+    expect(prisma.hspsi_goods_info_sku.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { deleted_at: null, spec_models: { contains: '1900701110' } },
+      }),
+    );
+  });
+
+  it('keeps the original goods/spec matching for non-numeric keywords', async () => {
+    const { service, prisma } = stocksService();
+    await service.stocks({ keyword: '墨水', page: '1', pageSize: '20' });
+    const where = prisma.hspsi_inventory_batch_total.findMany.mock.calls[0]![0].where;
+    expect(where.OR).toEqual([
+      { goods_id: { in: [] } },
+      { sku_id: { in: [] } },
+    ]);
+  });
+
+  it('skips keyword matching entirely when no keyword is given', async () => {
+    const { service, prisma } = stocksService();
+    await service.stocks({ orgId: '9', page: '1', pageSize: '20' });
+    const where = prisma.hspsi_inventory_batch_total.findMany.mock.calls[0]![0].where;
+    expect(where.OR).toBeUndefined();
   });
 });

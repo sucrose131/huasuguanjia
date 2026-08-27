@@ -24,6 +24,7 @@ import {
   assertDiscountOutputWithinSource,
   calculateDiscountSourceRemaining,
   discountGoodsKey,
+  salesOrderOutputBlockedMessage,
 } from './sales-helpers';
 
 export type { DiscountSourceLine };
@@ -555,33 +556,41 @@ export class SalesService {
       status: i.status,
       sourceLocked,
       sourceDisposalLines,
-      details: details.map((d) => ({
-        id: d.id,
-        goodsId: d.goods_id,
-        skuId: d.sku_id,
-        unitType: d.unit_type,
-        quantity: d.sale_qty,
-        price: d.sale_price,
-        amount: d.sale_amount,
-        factAmount: d.fact_sale_amount,
-        allocatedOutputQty: out
-          .filter((x) => x.goods_id === d.goods_id && x.sku_id === d.sku_id)
-          .reduce((s, x) => s + Number(x.output_qty), 0),
-        confirmedOutputQty: out
-          .filter(
-            (x) =>
-              outHeads.some(
-                (head) => head.so_output_id === x.so_output_id && head.comfirm_status === 1,
-              ) &&
-              x.goods_id === d.goods_id &&
-              x.sku_id === d.sku_id,
-          )
-          .reduce((s, x) => s + Number(x.output_qty), 0),
-        confirmedReturnQty: returns
-          .filter((x) => x.goods_id === d.goods_id && x.sku_id === d.sku_id)
-          .reduce((s, x) => s + Number(x.exit_qty), 0),
-      })),
+      details: await this.enrichDetailGoods(
+        details.map((d) => ({
+          id: d.id,
+          goodsId: d.goods_id,
+          skuId: d.sku_id,
+          unitType: d.unit_type,
+          quantity: d.sale_qty,
+          price: d.sale_price,
+          amount: d.sale_amount,
+          factAmount: d.fact_sale_amount,
+          allocatedOutputQty: out
+            .filter((x) => x.goods_id === d.goods_id && x.sku_id === d.sku_id)
+            .reduce((s, x) => s + Number(x.output_qty), 0),
+          confirmedOutputQty: out
+            .filter(
+              (x) =>
+                outHeads.some(
+                  (head) => head.so_output_id === x.so_output_id && head.comfirm_status === 1,
+                ) &&
+                x.goods_id === d.goods_id &&
+                x.sku_id === d.sku_id,
+            )
+            .reduce((s, x) => s + Number(x.output_qty), 0),
+          confirmedReturnQty: returns
+            .filter((x) => x.goods_id === d.goods_id && x.sku_id === d.sku_id)
+            .reduce((s, x) => s + Number(x.exit_qty), 0),
+        })),
+      ),
     };
+  }
+  /** 详情明细行富化商品展示字段（goodsName/goodsCode/skuSpec） */
+  private async enrichDetailGoods<T extends { goodsId?: unknown; skuId?: unknown }>(
+    rows: T[],
+  ): Promise<T[]> {
+    return this.refs.enrichGoods(rows as never) as Promise<T[]>;
   }
   async saveOrder(id: string | null, b: B, u: string, propertyType: 1 | 2 = 1) {
     const ls = this.lines(b.details),
@@ -1326,28 +1335,30 @@ export class SalesService {
       outDate: i.output_date,
       confirmStatus: i.comfirm_status,
       sourceLocked,
-      details: d.map((x) => {
-        const returnedQuantity = returned
-          .filter(
-            (line) =>
-              line.goods_id === x.goods_id &&
-              line.sku_id === x.sku_id &&
-              line.batch_no === x.batch_no,
-          )
-          .reduce((sum, line) => sum + Number(line.exit_qty), 0);
-        return {
-          id: x.id,
-          goodsId: x.goods_id,
-          skuId: x.sku_id,
-          batchNo: x.batch_no,
-          unitType: x.unit_type,
-          orderQty: x.sale_qty,
-          quantity: x.output_qty,
-          returnedQuantity,
-          remainingReturnQuantity: Math.max(0, Number(x.output_qty) - returnedQuantity),
-          sourceLocked,
-        };
-      }),
+      details: await this.enrichDetailGoods(
+        d.map((x) => {
+          const returnedQuantity = returned
+            .filter(
+              (line) =>
+                line.goods_id === x.goods_id &&
+                line.sku_id === x.sku_id &&
+                line.batch_no === x.batch_no,
+            )
+            .reduce((sum, line) => sum + Number(line.exit_qty), 0);
+          return {
+            id: x.id,
+            goodsId: x.goods_id,
+            skuId: x.sku_id,
+            batchNo: x.batch_no,
+            unitType: x.unit_type,
+            orderQty: x.sale_qty,
+            quantity: x.output_qty,
+            returnedQuantity,
+            remainingReturnQuantity: Math.max(0, Number(x.output_qty) - returnedQuantity),
+            sourceLocked,
+          };
+        }),
+      ),
     };
   }
   async removeDocument(type: 'output' | 'return', id: string, u: string) {
@@ -1417,7 +1428,8 @@ export class SalesService {
         where: { so_id: orderId, deleted_at: null },
       });
       if (!order) throw new NotFoundException('销售订单不存在');
-      if (order.so_type === 2) throw new BadRequestException('虚拟订单不能创建实物出库');
+      const outputBlocked = salesOrderOutputBlockedMessage(order.so_type);
+      if (outputBlocked) throw new BadRequestException(outputBlocked);
       if (order.approve_status !== 1)
         throw new BadRequestException('仅审批通过的销售订单可创建出库单');
       isDiscount = order.so_property_type === 2;

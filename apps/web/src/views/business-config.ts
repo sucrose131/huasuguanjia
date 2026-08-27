@@ -4,6 +4,16 @@ export type BusinessColumn = {
   width?: number;
   minWidth?: number;
   kind?: 'date' | 'datetime' | 'money' | 'number' | 'status' | 'progress' | 'text';
+  /** 列内容对齐（金额/数量列常右对齐） */
+  align?: 'left' | 'center' | 'right';
+  /** 状态列的字典 code（StatusTag 按字典 label 自动配色） */
+  statusDict?: string;
+  /** 是否启用悬停溢出提示（长文本列用；缺省 false，避免数字/日期列误弹 tooltip） */
+  tooltip?: boolean;
+  /** 自定义渲染（返回要显示的文本）；优先于 prop 直读 */
+  render?: (row: Record<string, any>, ctx: any) => string;
+  /** 该列渲染为「点击查看单据」的链接（如盘点单号） */
+  link?: boolean;
 };
 export type BusinessConfig = {
   title: string;

@@ -34,13 +34,26 @@ export class RequisitionController {
 
   @RequirePermissions('requisitions')
   @Get('application-form-options')
-  applicationFormOptions(@Query('orgId') orgId: string) {
-    return this.service.applicationFormOptions(orgId);
+  applicationFormOptions(@Query('orgId') orgId: string | undefined) {
+    return this.service.applicationFormOptions(orgId ?? '');
+  }
+  @RequirePermissions('requisitions')
+  @Get('current-applicant')
+  currentApplicant(@Query('orgId') orgId: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.service.currentApplicant(user.id, orgId);
   }
   @RequirePermissions('requisitions')
   @Get('product-options')
-  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+  productOptions(
+    @Query('orgId') orgId: string | undefined,
+    @Query('warehouseId') warehouseId: string | undefined,
+  ) {
     return this.service.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('requisitions')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId: string | undefined) {
+    return this.service.allGoodsOptions(orgId);
   }
 
   @RequirePermissions('requisitions')
@@ -52,13 +65,13 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Post('applications')
   createApplication(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(null, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(null, body, user.id, Boolean(body.submit), user.orgId);
   }
 
   @RequirePermissions('requisitions')
   @Patch('applications/:id')
   updateApplication(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(id, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(id, body, user.id, Boolean(body.submit), user.orgId);
   }
 
   @RequirePermissions('requisitions')

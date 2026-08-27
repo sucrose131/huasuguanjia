@@ -452,6 +452,8 @@ model hspsi_goods_info_sku {
   created_at           DateTime? @default(now()) @db.DateTime(0)
   updated_at           DateTime? @default(now()) @db.DateTime(0)
   deleted_at           DateTime? @db.DateTime(0)
+
+  @@index([good_id], map: "idx_good_id")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1766,16 +1768,15 @@ model hspsi_sys_oper_log {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sys_role {
-  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  name            String    @db.VarChar(50)
-  code            String    @unique(map: "uk_code") @db.VarChar(50)
-  status          Int?      @default(1) @db.TinyInt
-  data_scope_type Int       @default(1) @db.TinyInt
-  created_by      BigInt?   @default(0)
-  updated_by      BigInt?   @default(0)
-  created_at      DateTime? @default(now()) @db.DateTime(0)
-  updated_at      DateTime? @default(now()) @db.DateTime(0)
-  deleted_at      DateTime? @db.DateTime(0)
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @db.VarChar(50)
+  code       String    @unique(map: "uk_code") @db.VarChar(50)
+  status     Int?      @default(1) @db.TinyInt
+  created_by BigInt?   @default(0)
+  updated_by BigInt?   @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1794,9 +1795,9 @@ model hspsi_sys_todo {
   title           String    @default("") @db.VarChar(100)
   content         String    @default("") @db.VarChar(500)
   source_type     String?   @default("") @db.VarChar(32)
-  source_id       Int?      @default(0) @db.UnsignedInt
+  source_id       BigInt?   @default(0) @db.UnsignedBigInt
   business_type   String?   @default("") @db.VarChar(50)
-  business_id     Int?      @default(0) @db.UnsignedInt
+  business_id     BigInt?   @default(0) @db.UnsignedBigInt
   status          Int?      @default(0) @db.TinyInt
   completed_time  DateTime? @db.DateTime(0)
   created_by      Int?      @default(0) @db.UnsignedInt
@@ -1806,6 +1807,7 @@ model hspsi_sys_todo {
   deleted_at      DateTime? @db.DateTime(0)
 
   @@index([user_id, status], map: "idx_user_status")
+  @@index([source_type, business_id, status], map: "idx_todo_business_status")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1829,15 +1831,27 @@ model hspsi_sys_user {
   @@index([org_id], map: "idx_org_id")
 }
 
-/// 本地用户被明确授权的数据组织范围；用于“指定组织”数据范围，不参与 OA 同步。
-model hspsi_sys_user_org_scope {
+/// OA 同步后的用户授权组织结果；会话只能在此范围内切换当前组织。
+model hspsi_sys_user_authorized_org {
   user_id    BigInt   @db.UnsignedBigInt
   org_id     BigInt   @db.UnsignedBigInt
   created_by BigInt   @default(0)
   created_at DateTime @default(now()) @db.DateTime(0)
 
   @@id([user_id, org_id])
-  @@index([org_id], map: "idx_user_org_scope_org")
+  @@index([org_id], map: "idx_user_authorized_org_org")
+}
+
+/// 一个进销存登录账号在不同OA账套中的员工身份；提交OA时按单据账套选择身份。
+model hspsi_sys_user_oa_staff {
+  user_id        BigInt   @db.UnsignedBigInt
+  staff_id       BigInt   @unique(map: "uk_user_oa_staff_staff")
+  account_set_id BigInt   @db.UnsignedBigInt
+  created_by     BigInt   @default(0)
+  created_at     DateTime @default(now()) @db.DateTime(0)
+
+  @@id([user_id, staff_id])
+  @@index([user_id, account_set_id], map: "idx_user_oa_staff_account")
 }
 
 /// 本地系统用户金额白名单；无记录即无权限，不参与 OA 同步。
@@ -1858,6 +1872,17 @@ model hspsi_sys_user_role {
   role_id Int @db.UnsignedInt
 
   @@id([user_id, role_id])
+  @@unique([user_id], map: "uk_user_role_user_id")
+}
+
+/// OA 用户的本地角色人工覆盖标记；存在记录时，OA 同步不再覆盖该用户的角色集合。
+model hspsi_sys_user_role_override {
+  user_id    BigInt   @id @db.UnsignedBigInt
+  updated_by BigInt   @default(0)
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @db.DateTime(0)
+
+  @@index([updated_by], map: "idx_user_role_override_updated_by")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

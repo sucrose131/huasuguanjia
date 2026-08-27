@@ -17,7 +17,7 @@ function createService(
       prisma as never,
       posting as never,
       production as never,
-      { enrich: vi.fn(async (items: unknown) => items) } as never,
+      { enrich: vi.fn(async (items: unknown) => items), enrichGoods: vi.fn(async (items: unknown) => items) } as never,
       trace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn() } as never,
@@ -822,5 +822,50 @@ describe('SalesService after-sales batch guards', () => {
     expect(result[0]!.details).toEqual([
       expect.objectContaining({ batchNo: 'B001', sourceQuantity: 10, remainingQuantity: 5 }),
     ]);
+  });
+});
+
+describe('SalesService saveOutput no-output orders', () => {
+  function outputTx(soType: number) {
+    return {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      hspsi_sale_order_output: { findFirst: vi.fn() },
+      hspsi_sale_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          so_id: 8n,
+          so_type: soType,
+          approve_status: 1,
+          so_property_type: 1,
+        }),
+      },
+    };
+  }
+
+  it('rejects creating output for 无需出库 orders', async () => {
+    const tx = outputTx(4);
+    const { service } = createService({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    await expect(
+      service.saveOutput(
+        null,
+        { orderId: '8', details: [{ goodsId: '1', skuId: '2', quantity: 1 }] },
+        '9',
+      ),
+    ).rejects.toThrow('无需出库订单不能创建销售出库');
+  });
+
+  it('rejects creating output for virtual orders', async () => {
+    const tx = outputTx(2);
+    const { service } = createService({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    await expect(
+      service.saveOutput(
+        null,
+        { orderId: '8', details: [{ goodsId: '1', skuId: '2', quantity: 1 }] },
+        '9',
+      ),
+    ).rejects.toThrow('虚拟订单不能创建实物出库');
   });
 });

@@ -8,6 +8,8 @@ import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import { dateText, display } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 type InputType =
   | 'text'
   | 'textarea'
@@ -94,7 +96,7 @@ const configs: Record<
   },
   customers: {
     title: '客户',
-    subtitle: '维护客户归属、来源及关联关系',
+    subtitle: '维护客户归属及来源',
     summary: ['客户总数', '启用客户', '停用客户'],
     keyword: '客户名称或手机号',
     dicts: ['gender', 'customer_source', 'enabled_status'],
@@ -104,7 +106,6 @@ const configs: Record<
       { key: 'organization', label: '所属组织', min: 170, kind: 'org' },
       { key: 'sourceType', label: '客户来源', width: 110, kind: 'dict' },
       { key: 'levels', label: '身份', min: 180, kind: 'levels' },
-      { key: 'relatedCustomer', label: '关联客户', min: 150, kind: 'customer' },
       { key: 'status', label: '状态', width: 90, kind: 'status' },
       { key: 'operatorName', label: '操作人', width: 110 },
       { key: 'updatedAt', label: '操作时间', width: 168, kind: 'date' },
@@ -114,7 +115,6 @@ const configs: Record<
       { key: 'mobile', label: '手机号', required: true },
       { key: 'orgId', label: '所属组织', type: 'organization', required: true, immutable: true },
       { key: 'sourceType', label: '客户来源', type: 'dictionary', dict: 'customer_source' },
-      { key: 'relatedCustomerId', label: '关联客户', type: 'customer', immutable: true },
       { key: 'status', label: '状态', type: 'dictionary', dict: 'enabled_status' },
       { key: 'gender', label: '性别', type: 'dictionary', dict: 'gender' },
       { key: 'birthday', label: '生日', type: 'date' },
@@ -295,6 +295,8 @@ const configs: Record<
 const route = useRoute(),
   resource = computed(() => String(route.params.resource)),
   config = computed(() => configs[resource.value] ?? configs.vendors!);
+const auth = useAuthStore();
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const rows = ref<any[]>([]),
   total = ref(0),
   loading = ref(false),
@@ -535,7 +537,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle }}</p>
       </div>
       <div class="page-actions">
-        <el-button type="primary" @click="open('create')">新增{{ config.title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="open('create')">新增{{ config.title }}</el-button>
       </div>
     </header>
     <div class="panel">
@@ -616,7 +618,7 @@ onMounted(async () => {
         :empty="!rows.length"
         :loading="loading"
         :title="config.title"
-        can-create
+          :can-create="canAction('create')"
         @retry="load"
         @create="open('create')"
       />
@@ -651,14 +653,14 @@ onMounted(async () => {
               ><TableRowActions
                 ><el-button link type="primary" @click="open('view', scope.row)">查看</el-button
                 ><el-button
-                  v-if="!scope.row.derived"
+                  v-if="!scope.row.derived && canAction('update')"
                   link
                   type="primary"
                   @click="open('edit', scope.row)"
                   >编辑</el-button
                 ><template #more
                   ><el-dropdown-item
-                    v-if="resource !== 'vendors' && !scope.row.derived"
+                    v-if="resource !== 'vendors' && !scope.row.derived && canAction('status')"
                     :class="
                       (resource === 'organizations'
                         ? scope.row.operationStatus
@@ -677,7 +679,7 @@ onMounted(async () => {
                           : '启用'
                     }}</el-dropdown-item
                   ><el-dropdown-item
-                    v-if="resource === 'vendors'"
+                    v-if="resource === 'vendors' && canAction('delete')"
                     class="table-action-danger"
                     @click="remove(scope.row)"
                     >删除</el-dropdown-item
@@ -835,7 +837,7 @@ onMounted(async () => {
       ><template #footer
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><el-button
-          v-if="mode !== 'view'"
+          v-if="mode !== 'view' && canAction(mode === 'create' ? 'create' : 'update')"
           type="primary"
           :loading="saving"
           :disabled="saving"

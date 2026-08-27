@@ -19,7 +19,7 @@ import { PurchaseService } from './purchase.service';
 import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
 import { AmountAccessService } from '../amount-access/amount-access.service';
-import { PURCHASE_ORDER_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
+import { GLOBAL_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
 import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
@@ -36,7 +36,7 @@ export class PurchaseController {
     const access = await this.amountAccess.forUser(userId);
     const protectedValue = access.canViewAmount
       ? value
-      : this.amountAccess.maskFields(value, PURCHASE_ORDER_AMOUNT_FIELDS);
+      : this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
     if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
       return protectedValue;
     return {
@@ -56,6 +56,21 @@ export class PurchaseController {
     return this.service.applications(q);
   }
   @RequirePermissions('purchase')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.service.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('purchase')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId?: string) {
+    return this.service.allGoodsOptions(orgId);
+  }
+  @RequirePermissions('purchase')
+  @Get('receiver-options')
+  receiverOptions(@Query('orgId') orgId?: string, @Query('deptId') deptId?: string) {
+    return this.service.receiverOptions(orgId, deptId);
+  }
+  @RequirePermissions('purchase')
   @Get('applications/:id')
   async application(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.protectPurchaseAmounts(await this.service.application(id), u.id);
@@ -63,7 +78,7 @@ export class PurchaseController {
   @RequirePermissions('purchase')
   @Post('applications')
   createApplication(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
-    return this.service.saveApplication(null, b, u.id);
+    return this.service.saveApplication(null, b, u.id, false, u.orgId);
   }
   @RequirePermissions('purchase')
   @Patch('applications/:id')
@@ -72,7 +87,7 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.saveApplication(id, b, u.id);
+    return this.service.saveApplication(id, b, u.id, false, u.orgId);
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/submit')
@@ -151,7 +166,7 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.generateReceipt(id, u.id, b.warehouseId);
+    return this.service.generateReceipt(id, u.id, b.warehouseId, b.inputType);
   }
   @RequirePermissions('purchase')
   @Delete('orders/:id')
@@ -291,18 +306,19 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Get('refunds')
-  refunds(@Query() q: Record<string, string>) {
-    return this.service.refunds(q);
+  async refunds(@Query() q: Record<string, string>, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refunds(q), u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Delete('refunds/flows/:id')
   voidRefundFlow(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.service.voidRefundFlow(id, u.id);
   }
   @RequirePermissions('purchase')
   @Get('refunds/:id')
-  refund(@Param('id') id: string) {
-    return this.service.refund(id);
+  async refund(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refund(id), u.id);
   }
   @RequirePermissions('purchase')
   @RequireAmountEdit()

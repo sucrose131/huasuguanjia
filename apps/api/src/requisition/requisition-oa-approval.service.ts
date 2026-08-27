@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,25 +8,10 @@ import { Attachment, AttachmentsService } from '../attachments/attachments.servi
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalService } from '../integrations/xinfutong-oa/approval/approval.service';
 import { XinfutongOaCredentialService } from '../integrations/xinfutong-oa/core/credential.service';
-import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
+import { OaFormMappingService } from '../integrations/xinfutong-oa/form/form-mapping.service';
+import type { OaFormMapping } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 
 const BUSINESS_TYPE = 'requisition_application';
-const REQUISITION_FORM = OA_FORM_MAPPINGS.requisition_application;
-const FORM_KEY = REQUISITION_FORM.formKey;
-
-const OA_FIELDS = {
-  organization: REQUISITION_FORM.fields.organization.uniqueName,
-  department: REQUISITION_FORM.fields.department.uniqueName,
-  drawType: REQUISITION_FORM.fields.drawType.uniqueName,
-  warehouse: REQUISITION_FORM.fields.warehouse.uniqueName,
-  applicant: REQUISITION_FORM.fields.applicant.uniqueName,
-  applicationDate: REQUISITION_FORM.fields.applicationDate.uniqueName,
-  reason: REQUISITION_FORM.fields.reason.uniqueName,
-  details: REQUISITION_FORM.fields.details.uniqueName,
-  goodsName: REQUISITION_FORM.fields.goodsName.uniqueName,
-  quantity: REQUISITION_FORM.fields.quantity.uniqueName,
-  attachments: REQUISITION_FORM.fields.attachments.uniqueName,
-} as const;
 
 type OaSubmissionResult = {
   instanceId: bigint;
@@ -45,10 +31,51 @@ export class RequisitionOaApprovalService {
     private readonly approvalService: XinfutongOaApprovalService,
     @Inject(AttachmentsService)
     private readonly attachmentsService: AttachmentsService,
+    @Inject(OaFormMappingService) private readonly mappingService: OaFormMappingService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
+  /** OA 审批是否启用；关闭时拦截发起（单据保留系统内待审批，不写 OA 实例） */
+  private get oaApprovalEnabled() {
+    return this.config.get<string>('XINFUTONG_OA_APPROVAL_ENABLED', 'true') !== 'false';
+  }
+
   async submit(drawId: bigint, userId: string): Promise<OaSubmissionResult> {
-    const context = await this.buildSubmissionContext(drawId);
+    if (!this.oaApprovalEnabled) {
+      return {
+        instanceId: 0n,
+        procInstId: '',
+        procStatus: 'PUSH_FAILED',
+        busKey: `${BUSINESS_TYPE}:${drawId}`,
+        errorMessage: 'OA审批已暂停，单据保留在系统内审批',
+      };
+    }
+    // 后端兜底：账套以单据所属组织为准，提交人按 (登录用户, 单据组织账套) 解析，
+    // 不信任前端自动填入的主身份 staff_id（多账套用户可能跨账套错配）。
+    const appBrief = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+      select: { org_id: true, draw_type: true },
+    });
+    if (!appBrief) throw new BadRequestException('领用申请不存在');
+    // 非「借用」类型的领用申请走系统内审批，不推送 OA。
+    if (Number(appBrief.draw_type) !== 2) {
+      throw new BadRequestException('非借用领用申请走系统内审批，无需提交OA');
+    }
+    const orgBrief = await this.prisma.hspsi_basic_organization.findFirst({
+      where: { org_id: appBrief.org_id, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!orgBrief?.account_set_id) throw new BadRequestException('领用申请所属组织未关联OA账套');
+    const accountSetId = orgBrief.account_set_id;
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: accountSetId },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) {
+      throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
+    }
+    const form = await this.mappingService.getMapping(BUSINESS_TYPE, accountSetId);
+    const context = await this.buildSubmissionContext(drawId, form, accountSetId, identity.staff_id);
     const credential = await this.credentialService.getById(context.accountSetId);
     if (!credential) throw new BadRequestException('领用人所属OA账套未启用');
 
@@ -89,7 +116,7 @@ export class RequisitionOaApprovalService {
         data: {
           business_type: BUSINESS_TYPE,
           business_id: drawId,
-          form_key: FORM_KEY,
+          form_key: form.formKey,
           bus_key: context.busKey,
           proc_inst_id: '',
           proc_key: '',
@@ -117,9 +144,10 @@ export class RequisitionOaApprovalService {
         drawId,
         context.accountSetId,
         credential,
+        form.fields.attachments!.uniqueName,
       );
       const commonParams = {
-        formKey: FORM_KEY,
+        formKey: form.formKey,
         busKey: context.busKey,
         formData: JSON.stringify({ ...context.formData, ...attachmentFields }),
         starterId: context.starterId,
@@ -136,7 +164,7 @@ export class RequisitionOaApprovalService {
       const updated = await this.prisma.hspsi_oa_approval_instance.update({
         where: { id: instance.id },
         data: {
-          form_key: body.formKey || FORM_KEY,
+          form_key: body.formKey || form.formKey,
           bus_key: body.busKey || context.busKey,
           proc_inst_id: body.procInstId,
           proc_status: body.procStatus,
@@ -170,6 +198,7 @@ export class RequisitionOaApprovalService {
     drawId: bigint,
     accountSetId: bigint,
     credential: Parameters<XinfutongOaApprovalService['uploadFile']>[0],
+    attachmentUniqueName: string,
   ) {
     const attachments = await this.attachmentsService.listForIntegration(
       BUSINESS_TYPE,
@@ -205,7 +234,7 @@ export class RequisitionOaApprovalService {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-    return files.length ? { [OA_FIELDS.attachments]: files } : {};
+    return files.length ? { [attachmentUniqueName]: files } : {};
   }
 
   private async uploadAttachmentToOa(
@@ -239,11 +268,36 @@ export class RequisitionOaApprovalService {
     return { id: fileId, objectKey, name: attachment.fileName };
   }
 
-  private async buildSubmissionContext(drawId: bigint) {
+  private async buildSubmissionContext(
+    drawId: bigint,
+    form: OaFormMapping,
+    accountSetId: bigint,
+    applicantStaffId: bigint,
+  ) {
+    const un = (key: string) => form.fields[key]!.uniqueName;
+    const f = {
+      organization: un('organization'),
+      department: un('department'),
+      drawType: un('drawType'),
+      warehouse: un('warehouse'),
+      applicant: un('applicant'),
+      applicationDate: un('applicationDate'),
+      reason: un('reason'),
+      details: un('details'),
+      goodsName: un('goodsName'),
+      quantity: un('quantity'),
+    };
     const application = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
     });
     if (!application) throw new BadRequestException('领用申请不存在');
+    // 后端兜底：单据领用人必须是提交人在单据账套下的员工身份，
+    // 防止前端自动填入其他账套的主身份导致跨账套错配。
+    if (application.applicant_id !== applicantStaffId) {
+      throw new BadRequestException(
+        '领用人与提交人OA身份不一致，请刷新页面重新选择领用人后提交',
+      );
+    }
     const [details, organization, department, warehouse, applicant, drawTypeCategory] =
       await Promise.all([
         this.prisma.hspsi_draw_approve_detail.findMany({
@@ -263,7 +317,7 @@ export class RequisitionOaApprovalService {
           select: { name: true },
         }),
         this.prisma.hspsi_basic_staff.findFirst({
-          where: { id: application.applicant_id, status: 1, deleted_at: null },
+          where: { id: applicantStaffId, account_set_id: accountSetId, status: 1, deleted_at: null },
           select: {
             id: true,
             name: true,
@@ -286,6 +340,7 @@ export class RequisitionOaApprovalService {
       throw new BadRequestException('领用人尚未关联有效OA账号，请先同步OA组织人员');
     }
 
+    // 部门有条件跟随：优先单据所选部门（须属于该员工，主/兼任），否则回退主部门
     const primaryMembership = await this.prisma.hspsi_basic_staff_organizations.findFirst({
       where: {
         staff_id: applicant.id,
@@ -296,18 +351,41 @@ export class RequisitionOaApprovalService {
       orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
     });
     if (!primaryMembership) throw new BadRequestException('领用人没有有效的OA主部门');
-    const primaryOrg =
-      primaryMembership.org_type === 2
-        ? await this.prisma.hspsi_basic_dept.findFirst({
-            where: { dept_id: primaryMembership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          })
-        : await this.prisma.hspsi_basic_organization.findFirst({
-            where: { org_id: primaryMembership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          });
-    if (!primaryOrg?.outer_ref_id) {
-      throw new BadRequestException('领用人的OA主部门标识缺失，请先同步OA组织人员');
+    let orgSeq = '';
+    if (application.dept_id > 0n) {
+      const deptBelongs = await this.prisma.hspsi_basic_staff_organizations.findFirst({
+        where: {
+          staff_id: applicant.id,
+          account_set_id: applicant.account_set_id,
+          org_type: 2,
+          org_id: application.dept_id,
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (deptBelongs) {
+        const selectedDept = await this.prisma.hspsi_basic_dept.findFirst({
+          where: { dept_id: application.dept_id, deleted_at: null },
+          select: { outer_ref_id: true },
+        });
+        if (selectedDept?.outer_ref_id) orgSeq = selectedDept.outer_ref_id;
+      }
+    }
+    if (!orgSeq) {
+      const primaryOrg =
+        primaryMembership.org_type === 2
+          ? await this.prisma.hspsi_basic_dept.findFirst({
+              where: { dept_id: primaryMembership.org_id, deleted_at: null },
+              select: { outer_ref_id: true },
+            })
+          : await this.prisma.hspsi_basic_organization.findFirst({
+              where: { org_id: primaryMembership.org_id, deleted_at: null },
+              select: { outer_ref_id: true },
+            });
+      if (!primaryOrg?.outer_ref_id) {
+        throw new BadRequestException('领用人的OA主部门标识缺失，请先同步OA组织人员');
+      }
+      orgSeq = primaryOrg.outer_ref_id;
     }
 
     const drawType = drawTypeCategory
@@ -330,7 +408,7 @@ export class RequisitionOaApprovalService {
     const detailData = details.map((item) => {
       const goodsName = goodsNames.get(String(item.goods_id));
       if (!goodsName) throw new BadRequestException(`商品 ${item.goods_id} 不存在`);
-      return { [OA_FIELDS.goodsName]: goodsName, [OA_FIELDS.quantity]: item.draw_qty };
+      return { [f.goodsName]: goodsName, [f.quantity]: item.draw_qty };
     });
     const applicationDate = application.draw_date;
     if (!applicationDate) throw new BadRequestException('申请日期不能为空');
@@ -339,23 +417,23 @@ export class RequisitionOaApprovalService {
       accountSetId: applicant.account_set_id,
       busKey: `${BUSINESS_TYPE}:${drawId}`,
       starterId: applicant.outer_ref_id,
-      starterOrgId: primaryOrg.outer_ref_id,
+      starterOrgId: orgSeq,
       formData: {
-        [OA_FIELDS.organization]: organization.name,
-        [OA_FIELDS.department]: department.name,
-        [OA_FIELDS.drawType]: drawType.dict_name,
-        [OA_FIELDS.warehouse]: warehouse.name,
-        [OA_FIELDS.applicant]: [
+        [f.organization]: organization.name,
+        [f.department]: department.name,
+        [f.drawType]: drawType.dict_name,
+        [f.warehouse]: warehouse.name,
+        [f.applicant]: [
           {
             USRNAM: applicant.name,
             STFSEQ: applicant.out_staff_id,
             USRNBR: applicant.outer_ref_id,
-            ORGSEQ: primaryOrg.outer_ref_id,
+            ORGSEQ: orgSeq,
           },
         ],
-        [OA_FIELDS.applicationDate]: this.formatDate(applicationDate),
-        [OA_FIELDS.reason]: application.draw_reason.trim(),
-        [OA_FIELDS.details]: detailData,
+        [f.applicationDate]: this.formatDate(applicationDate),
+        [f.reason]: application.draw_reason.trim(),
+        [f.details]: detailData,
       },
     };
   }

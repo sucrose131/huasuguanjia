@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SALES_ORDER_TYPE,
   assertDiscountOrderMatchesSource,
   assertDiscountOutputWithinSource,
   calculateDiscountSourceRemaining,
+  salesOrderOutputBlockedMessage,
 } from './sales-helpers';
 
 describe('discount source matching', () => {
@@ -127,5 +129,18 @@ describe('discount source remaining', () => {
     expect(result).toHaveLength(2);
     expect(result.find((r) => r.batchNo === 'B001')!.remainingQuantity).toBe(0);
     expect(result.find((r) => r.batchNo === 'B002')!.remainingQuantity).toBe(5);
+  });
+});
+
+describe('salesOrderOutputBlockedMessage', () => {
+  it('blocks virtual and no-output orders with distinct messages', () => {
+    expect(salesOrderOutputBlockedMessage(SALES_ORDER_TYPE.VIRTUAL)).toBe(
+      '虚拟订单不能创建实物出库',
+    );
+    expect(salesOrderOutputBlockedMessage(SALES_ORDER_TYPE.NO_OUTPUT)).toBe(
+      '无需出库订单不能创建销售出库',
+    );
+    expect(salesOrderOutputBlockedMessage(SALES_ORDER_TYPE.PHYSICAL)).toBeNull();
+    expect(salesOrderOutputBlockedMessage(SALES_ORDER_TYPE.MIXED)).toBeNull();
   });
 });

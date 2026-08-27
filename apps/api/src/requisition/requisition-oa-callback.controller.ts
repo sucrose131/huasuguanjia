@@ -3,6 +3,7 @@ import {
   Controller,
   HttpCode,
   Inject,
+  Logger,
   Post,
   Req,
   type RawBodyRequest,
@@ -10,7 +11,12 @@ import {
 import type { Request } from 'express';
 import { PrismaService } from '../database/prisma.service';
 import { XinfutongOaApprovalCallbackService } from '../integrations/xinfutong-oa/approval/approval-callback.service';
-import { EVENT_CODE_OA_PROCESS_FINISH } from '../integrations/xinfutong-oa/approval/approval.types';
+import {
+  EVENT_CODE_OA_PROCESS_FINISH,
+  formKeyFromProcKey,
+  type ApprovalCallbackPayload,
+} from '../integrations/xinfutong-oa/approval/approval.types';
+import { MessageService } from '../message/message.service';
 import {
   EVENT_CODE_CONNECTIVITY_TEST,
   OaEventVerifyError,
@@ -27,6 +33,8 @@ import { SalesOaApprovalService } from '../sales/sales-oa-approval.service';
 
 @Controller('integrations/xinfutong-oa')
 export class RequisitionOaCallbackController {
+  private static readonly logger = new Logger(RequisitionOaCallbackController.name);
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(XinfutongOaApprovalCallbackService)
@@ -38,6 +46,7 @@ export class RequisitionOaCallbackController {
     @Inject(ProductionService) private readonly production: ProductionService,
     @Inject(SalesService) private readonly sales: SalesService,
     @Inject(SalesOaApprovalService) private readonly salesOa: SalesOaApprovalService,
+    @Inject(MessageService) private readonly message: MessageService,
   ) {}
 
   private text(value: unknown, maxLength: number) {
@@ -94,6 +103,32 @@ export class RequisitionOaCallbackController {
       }
 
       const payload = this.callback.handleProcessFinishEvent(verified.inner);
+      const formKey = formKeyFromProcKey(payload.procKey);
+      const template = await this.prisma.hspsi_oa_form_template.findFirst({
+        where: {
+          form_key: formKey,
+          account_set_id: verified.accountSetId,
+          status: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (!template) {
+        await this.prisma.hspsi_oa_approval_callback_log.update({
+          where: { id: log.id },
+          data: {
+            account_set_id: verified.accountSetId,
+            proc_status: payload.procStatus,
+            bus_key: payload.busKey,
+            proc_inst_id: payload.procInstId,
+            proc_key: payload.procKey,
+            processed: 1,
+            process_result: `非本系统表单，已忽略：${formKey}`.slice(0, 500),
+          },
+        });
+        return oaEventAck();
+      }
+
       const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
         where: {
           bus_key: payload.busKey,
@@ -101,21 +136,23 @@ export class RequisitionOaCallbackController {
           deleted_at: null,
         },
         orderBy: { id: 'desc' },
-        select: { business_type: true },
+        select: { business_type: true, business_id: true },
       });
+      let result: Record<string, any> | undefined;
       if (instance?.business_type === 'purchase_application') {
-        await this.purchase.handleApplicationOaApprovalResult(payload, body, log.id);
+        result = await this.purchase.handleApplicationOaApprovalResult(payload, body, log.id);
       } else if (instance?.business_type === 'purchase_return') {
-        await this.purchase.handleReturnOaApprovalResult(payload, body, log.id);
+        result = await this.purchase.handleReturnOaApprovalResult(payload, body, log.id);
       } else if (instance?.business_type === 'production_plan') {
-        await this.production.handleOaApprovalResult(payload, body, log.id);
+        result = await this.production.handleOaApprovalResult(payload, body, log.id);
       } else if (instance?.business_type === 'sales_order') {
-        await this.sales.handleOaApprovalResult(payload, body, log.id);
+        result = await this.sales.handleOaApprovalResult(payload, body, log.id);
       } else if ((instance?.business_type ?? '').startsWith('inventory_')) {
-        await this.handleInventory(payload, body, log.id, instance!.business_type);
+        result = await this.handleInventory(payload, body, log.id, instance!.business_type);
       } else {
-        await this.requisition.handleOaApprovalResult(payload, body, log.id);
+        result = await this.requisition.handleOaApprovalResult(payload, body, log.id);
       }
+      await this.notifyApprovalResult(instance, payload, result);
       return oaEventAck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -132,6 +169,32 @@ export class RequisitionOaCallbackController {
         return oaEventAck(error.rtnCod, message.slice(0, 200));
       }
       throw error;
+    }
+  }
+
+  /**
+   * OA 审批通过/驳回后，向业务单据创建人发送审批结果消息。
+   * 重复回调、非通过/驳回状态、缺少业务单据时不发送；发送失败仅记录应用日志，
+   * 不修改 callback_log（其只反映审批结果处理本身），也不影响回调确认。
+   */
+  private async notifyApprovalResult(
+    instance: { business_type: string; business_id?: bigint | null } | null | undefined,
+    payload: ApprovalCallbackPayload,
+    result: Record<string, any> | undefined,
+  ) {
+    if (!instance || result?.duplicate) return;
+    if (!['PASSED', 'REJECTED'].includes(payload.procStatus)) return;
+    if (!instance.business_id) return;
+    try {
+      await this.message.sendApprovalNotification({
+        businessType: instance.business_type,
+        businessId: instance.business_id,
+        procStatus: payload.procStatus,
+      });
+    } catch (error) {
+      RequisitionOaCallbackController.logger.error(
+        `OA审批消息通知发送失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

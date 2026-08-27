@@ -38,7 +38,7 @@ export class InventoryGeneralController {
   }
 
   @Patch('general-orders/config/initial-input')
-  @RequirePermissions('system:update')
+  @RequirePermissions('inventory:general-inputs:configure-initial')
   setInitialInput(@Body() body: any, @CurrentUser() user: AuthUser) {
     return this.service.setInitialInputEnabled(Boolean(body.enabled), user.id);
   }
