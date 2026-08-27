@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api } from '@/api';
+import { api, primeDetailHandoff } from '@/api';
 import { moneyText } from '@/utils/format';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
@@ -162,7 +162,19 @@ const protectedMoney = (value: unknown) => {
   return text === '****' ? text : `¥ ${text}`;
 };
 
+let openingFromRoute = false;
+
+function handoffResolvedDetail(row: Record<string, any>) {
+  if (row.id == null) return;
+  const endpoint = props.config.detailEndpoint ?? props.config.endpoint;
+  primeDetailHandoff(`${endpoint}/${row.id}`, row);
+}
+
 async function runAction(action: RowAction, row: Record<string, any>) {
+  // 打开弹框或跨页跳转属于只读/界面操作，不应在操作完成后刷新当前列表。
+  // 使用递增序号记录 handler 是否触发了这类交互；真正修改业务数据的 action
+  // 沿用成功后刷新，避免 100+ 份业务配置各自重复声明刷新规则。
+  const interactionVersionBefore = interactionVersion;
   try {
     if (action.verify) {
       const problem = await action.verify(row);
@@ -185,7 +197,9 @@ async function runAction(action: RowAction, row: Record<string, any>) {
       });
     }
     await action.handler(row, ctx);
-    await load();
+    if (action.refreshAfter !== false && interactionVersion === interactionVersionBefore) {
+      await load();
+    }
   } catch (error) {
     const action =
       typeof error === 'object' && error && 'action' in error
@@ -209,7 +223,10 @@ const moreActions = (row: Record<string, any>) =>
 const hasMoreActions = (row: Record<string, any>) =>
   moreActions(row).length > 0 || Boolean(slots['more-actions']) || Boolean(props.config.documentType);
 
+let interactionVersion = 0;
+
 function openCreate(initial: Record<string, any> = {}) {
+  interactionVersion += 1;
   formMode.value = 'create';
   form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
   formDialog.value = true;
@@ -226,11 +243,17 @@ async function resolveDetail(row: Record<string, any>) {
   }
 }
 async function openEdit(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'edit';
   form.value = await resolveDetail(row);
   formDialog.value = true;
 }
 async function openView(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'view';
   form.value = await resolveDetail(row);
   formDialog.value = true;
@@ -245,6 +268,7 @@ const ctx: BusinessDocumentContext = {
   openEdit,
   openView,
   navigate: async (path, query) => {
+    interactionVersion += 1;
     await router.push({ path, query });
   },
 };
@@ -281,7 +305,12 @@ onMounted(async () => {
     delete initial.create;
     openCreate(initial);
   } else if (props.config.openFromRoute && Object.keys(route.query).length) {
-    await props.config.openFromRoute(route.query, ctx);
+    openingFromRoute = true;
+    try {
+      await props.config.openFromRoute(route.query, ctx);
+    } finally {
+      openingFromRoute = false;
+    }
   }
 });
 </script>

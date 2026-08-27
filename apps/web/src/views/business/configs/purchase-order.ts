@@ -157,11 +157,11 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
     }
     const id = String(query.documentId ?? query.viewId ?? '');
     if (id) {
-      const detail: any = await api.get(`/purchase/orders/${id}`);
       const viewOnly =
         String(query.view ?? '') === '1' || Boolean(query.viewId) || !canEditAmount();
-      if (viewOnly) ctx.openView(detail);
-      else ctx.openEdit(detail);
+      const row = { id };
+      if (viewOnly) ctx.openView(row);
+      else ctx.openEdit(row);
     }
   },
   rowActions: [

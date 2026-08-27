@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Bell, CircleCheck, DataAnalysis, Warning } from '@element-plus/icons-vue';
 import { api } from '@/api';
@@ -243,7 +243,6 @@ async function readMessage(item: DashboardMessageItem) {
 function quick(path: string, create?: boolean) {
   router.push({ path, query: create ? { create: '1' } : {} });
 }
-watch(resource, load);
 onMounted(load);
 </script>
 

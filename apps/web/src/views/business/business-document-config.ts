@@ -78,6 +78,11 @@ export type RowAction = {
   permission?: string;
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
+  /**
+   * handler 完成后是否刷新列表。默认 true；调用 ctx.openCreate/openEdit/openView/navigate
+   * 时共享引擎会自动跳过刷新。仅供不经过 ctx 打开的只读自定义弹框显式设为 false。
+   */
+  refreshAfter?: boolean;
 };
 
 /** 引擎上下文（传给表单组件 / 行操作） */
@@ -136,6 +141,8 @@ export type BusinessDocumentConfig = {
   viewCloseInForm?: boolean;
   /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
   loadDetail?: (id: string | number) => Promise<Record<string, any>>;
+  /** 表单实际读取详情的接口前缀；缺省与 endpoint 相同。 */
+  detailEndpoint?: string;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */
   openFromRoute?: (
     query: Record<string, any>,

@@ -108,9 +108,9 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
   loadDetail: async (id) => (await api.get(`/purchase/applications/${id}`)) as Record<string, any>,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
-      const detail: any = await api.get(`/purchase/applications/${String(query.documentId)}`);
-      if (String(query.view ?? '') === '1') ctx.openView(detail);
-      else ctx.openEdit(detail);
+      const row = { id: String(query.documentId) };
+      if (String(query.view ?? '') === '1') ctx.openView(row);
+      else ctx.openEdit(row);
     }
   },
   rowActions: [

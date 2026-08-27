@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { api } from '@/api';
@@ -520,10 +520,6 @@ function cell(row: any, col: Column) {
   }
   return display(row[col.key]);
 }
-watch(resource, async () => {
-  reset();
-  await loadOptions();
-});
 onMounted(async () => {
   await loadOptions();
   await load();

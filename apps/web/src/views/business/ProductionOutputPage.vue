@@ -51,24 +51,21 @@ function openDialog(flag: 'execute' | 'temp-suppl' | 'bom-return', row: B) {
 }
 
 async function onDialogDone(flag: 'execute' | 'temp-suppl' | 'bom-return') {
-  let handledByRowAction = false;
   if (flag === 'execute') {
     executeOutVisible.value = false;
-    handledByRowAction = Boolean(resolveExecute);
     resolveExecute?.();
     resolveExecute = null;
   } else if (flag === 'temp-suppl') {
     tempSupplVisible.value = false;
-    handledByRowAction = Boolean(resolveTempSuppl);
     resolveTempSuppl?.();
     resolveTempSuppl = null;
   } else {
     bomReturnVisible.value = false;
-    handledByRowAction = Boolean(resolveBomReturn);
     resolveBomReturn?.();
     resolveBomReturn = null;
   }
-  if (!handledByRowAction) await pageRef.value?.load();
+  // 仅弹框真正完成业务操作时刷新；直接关闭由 watch 结束等待，不刷新列表。
+  await pageRef.value?.load();
   if (supplementHistoryVisible.value) await supplementHistoryRef.value?.load();
 }
 
@@ -110,6 +107,7 @@ const shellActions: RowAction[] = [
     show: (row) =>
       Number(row.outType) === 1 && Number(row.confirmStatus ?? row.status) === 0,
     handler: (row) => openDialog('execute', row),
+    refreshAfter: false,
     permission: 'confirm',
   },
   {
@@ -117,6 +115,7 @@ const shellActions: RowAction[] = [
     label: '临时补料',
     show: (row) => Number(row.outType) === 1 && Number(row.confirmStatus) === 1,
     handler: (row) => openDialog('temp-suppl', row),
+    refreshAfter: false,
     permission: 'create-material-return',
   },
   {
@@ -125,6 +124,7 @@ const shellActions: RowAction[] = [
     show: (row) =>
       Number(row.outType) === 1 && Number(row.confirmStatus) === 1,
     handler: (row) => openDialog('bom-return', row),
+    refreshAfter: false,
     permission: 'create-material-return',
   },
   {
@@ -137,6 +137,7 @@ const shellActions: RowAction[] = [
       selectedOutRow.value = row;
       supplementHistoryVisible.value = true;
     },
+    refreshAfter: false,
   },
 ];
 

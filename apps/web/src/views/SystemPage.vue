@@ -565,11 +565,6 @@ async function removeMenu(row: any) {
   await load();
 }
 
-watch(resource, () => {
-  keyword.value = '';
-  statusFilter.value = '';
-  if (resource.value !== 'tasks') load();
-});
 watch(
   () => form.staffId,
   () => {

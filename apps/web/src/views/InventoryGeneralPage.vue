@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
@@ -232,10 +232,6 @@ async function toggleInitialInput(value: boolean) {
   ElMessage.success(result.message);
 }
 
-watch(resource, async () => {
-  query.page = 1;
-  await load();
-});
 onMounted(async () => {
   await Promise.all([loadOptions(), load()]);
 });

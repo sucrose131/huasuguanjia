@@ -467,16 +467,14 @@ onMounted(async () => {
       }
     }
   } else if (form.value.id) {
-    const detail: any = await api.get(`/purchase/orders/${form.value.id}`).catch(() => null);
-    if (detail) {
-      Object.assign(form.value, normalizeOrder(detail));
-      form.value.details = (form.value.details ?? []).map((line: any) => ({
-        ...line,
-        totalAmount: Number(
-          line.totalAmount ?? Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0),
-        ),
-      }));
-    }
+    // 编辑/查看的完整详情由 BusinessDocumentPage 统一加载，表单只做显示归一化。
+    Object.assign(form.value, normalizeOrder(form.value));
+    form.value.details = (form.value.details ?? []).map((line: any) => ({
+      ...line,
+      totalAmount: Number(
+        line.totalAmount ?? Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0),
+      ),
+    }));
     if (Array.isArray(form.value.details)) {
       await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
     }

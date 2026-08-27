@@ -276,11 +276,7 @@ onMounted(async () => {
       details: [blankLine()],
     });
   } else if (form.value.id) {
-    // 编辑/查看：拉取完整详情（列表行只有摘要字段）
-    const detail: any = await api
-      .get(`/purchase/applications/${form.value.id}`)
-      .catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    // 编辑/查看的完整详情由 BusinessDocumentPage 统一加载，避免弹框挂载后重复请求。
     if (Array.isArray(form.value.details)) {
       await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
     }
