@@ -6,6 +6,7 @@ import SummaryStrip from '@/components/SummaryStrip.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, display, moneyText } from '@/utils/format';
 import { buildCategoryTree } from '@/utils/category-tree';
 import { useAuthStore } from '@/stores/auth';
@@ -295,8 +296,12 @@ onMounted(async () => {
             prop="goodsName"
             label="商品名称"
             min-width="160"
-            show-overflow-tooltip
-          /><el-table-column prop="brandName" label="品牌" width="110" /><el-table-column
+            ><template #default="s"
+              ><OverflowTooltipCell :content="s.row.goodsName">{{
+                s.row.goodsName
+              }}</OverflowTooltipCell></template
+            ></el-table-column
+          ><el-table-column prop="brandName" label="品牌" width="110" /><el-table-column
             prop="specModels"
             label="规格型号"
             min-width="140"

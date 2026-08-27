@@ -10,6 +10,7 @@ import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.v
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { useBusinessDocumentPermissions } from './use-business-document-permissions';
 import { useBusinessDocumentOptions } from './use-business-document-options';
 import type {
@@ -286,7 +287,8 @@ watch(
     await loadOptionBags();
     // 深链/回显场景：依赖字段已有值时先加载下游选项
     for (const field of props.config.queryFields ?? []) {
-      if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+      if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+        await loadFieldOptions(field);
     }
     await load();
   },
@@ -297,7 +299,8 @@ onMounted(async () => {
   await loadOptionBags();
   // 深链/回显场景：依赖字段已有值时先加载下游选项
   for (const field of props.config.queryFields ?? []) {
-    if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+    if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+      await loadFieldOptions(field);
   }
   await load();
   if (String(route.query.create ?? '') === '1') {
@@ -440,7 +443,6 @@ onMounted(async () => {
             :width="column.width"
             :min-width="column.minWidth"
             :align="column.align"
-            :show-overflow-tooltip="column.tooltip"
           >
             <template #default="s">
               <button
@@ -467,6 +469,11 @@ onMounted(async () => {
                     : column.statusType
                 "
               />
+              <OverflowTooltipCell
+                v-else-if="column.tooltip"
+                :content="displayCell(s.row, column)"
+                >{{ displayCell(s.row, column) }}</OverflowTooltipCell
+              >
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
           </el-table-column>
