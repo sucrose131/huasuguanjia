@@ -3,10 +3,13 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
-import { dateText, moneyText } from '@/utils/format';
+import { dateText } from '@/utils/format';
 import { filterGoodsByWarehouseType, warehouseTypeOf } from '@/utils/goods-warehouse';
-import RemoteSelect from '@/components/RemoteSelect.vue';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
+import PurchaseOrderBasicInfo from '@/components/purchase/PurchaseOrderBasicInfo.vue';
+import PurchaseOrderDetailsSection from '@/components/purchase/PurchaseOrderDetailsSection.vue';
+import PurchaseOrderPaymentSummary from '@/components/purchase/PurchaseOrderPaymentSummary.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -31,6 +34,9 @@ const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
 const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
+);
 
 function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
   quickCatalogRef.value?.open(line, mode);
@@ -92,14 +98,6 @@ const orderPreviewProgressStatus = computed(() => {
   if (orderNetPaidAmount.value + Number(form.value.currentPaymentAmount ?? 0) > 0) return 1;
   return 0;
 });
-
-function protectedMoney(value: unknown) {
-  return canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
-}
-
-function dictLabel(code: string, value: unknown) {
-  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
-}
 
 async function loadDicts() {
   const [arrivalType, deliveryType, settlementType, paymentChannel, paymentProgress] = await Promise.all([
@@ -169,13 +167,13 @@ async function loadContextGoods() {
 }
 
 /** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
-const documentWarehouseType = computed(() => {
-  const types = new Set(
+const documentWarehouseType = computed<number>(() => {
+  const types = new Set<number>(
     (form.value.details ?? [])
       .map((line: any) => Number(line.goodsWarehouseType ?? 0))
       .filter(Boolean),
   );
-  return types.size === 1 ? [...types][0] : 0;
+  return types.size === 1 ? ([...types][0] ?? 0) : 0;
 });
 
 /** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
@@ -270,11 +268,6 @@ async function enrichLine(line: any) {
   } catch {
     // 商品不存在时保留原始值
   }
-}
-
-function unitName(line: any) {
-  const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
-  return unit?.label ?? unit?.name ?? '—';
 }
 
 function normalizeOrder(data: any) {
@@ -495,258 +488,48 @@ onMounted(async () => {
 </script>
 
 <template>
-  <el-form label-position="top" :disabled="isView">
-    <div class="form-grid">
-      <el-form-item label="来源采购申请">
-        <el-input
-          :model-value="
-            form.applicationNo || (form.applicationId ? form.applicationId : '直接采购')
-          "
-          disabled
-        />
-      </el-form-item>
-      <el-form-item label="供应商" required>
-        <el-select v-model="form.vendorId" filterable clearable :disabled="isView">
-          <el-option
-            v-for="x in options.vendors"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="所属组织" required>
-        <el-select
-          v-model="form.orgId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId)"
-          @change="organizationChanged"
-        >
-          <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="目标仓库" required>
-        <el-select
-          v-model="form.warehouseId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId) || !form.orgId"
-          @change="warehouseChanged"
-        >
-          <el-option
-            v-for="x in warehouseOptions"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
-        </el-select>
-        <div
-          v-if="documentWarehouseType && form.details?.some((l: any) => l.goodsId)"
-          class="warehouse-hint"
-        >
-          已按明细商品类型匹配仓库
-        </div>
-      </el-form-item>
-      <el-form-item label="接收部门" required>
-        <el-select
-          v-model="form.deptId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId)"
-          @change="departmentChanged"
-        >
-          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="收货人" required>
-        <el-select
-          v-model="form.receiverId"
-          filterable
-          clearable
-          :disabled="isView || !form.orgId || !form.deptId"
-          placeholder="请选择接收部门下的收货人"
-        >
-          <el-option
-            v-for="x in options.receivers"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="到货方式">
-        <el-select v-model="form.arrivalType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.purchase_arrival_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="计划到货日期" required>
-        <el-date-picker
-          v-model="form.planArrivalDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :disabled="isView"
-        />
-      </el-form-item>
-      <el-form-item label="运输方式">
-        <el-select v-model="form.deliveryType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.purchase_delivery_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="物流单号">
-        <el-input v-model="form.deliveryNo" :disabled="isView" />
-      </el-form-item>
-      <el-form-item label="结算方式">
-        <el-select v-model="form.paymentType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.purchase_settlement_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="计划付款日期">
-        <el-date-picker
-          v-model="form.planPayDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :disabled="isView"
-        />
-      </el-form-item>
-      <el-form-item label="备注" class="span-2">
-        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
-      </el-form-item>
-    </div>
+  <el-form label-position="top" :disabled="isView" class="purchase-order-form">
+    <PurchaseOrderBasicInfo
+      :form="form"
+      :mode="mode"
+      :options="options"
+      :dicts="dicts"
+      :organization-tree="organizationTree"
+      :warehouse-options="warehouseOptions"
+      :document-warehouse-type="documentWarehouseType"
+      @organization-change="organizationChanged"
+      @warehouse-change="warehouseChanged"
+      @department-change="departmentChanged"
+    />
 
-    <div class="details-header">
-      <span class="details-title">订单明细</span>
-      <el-button v-if="!isView" link type="primary" @click="addLine">+ 添加明细</el-button>
-    </div>
-    <el-table :data="form.details ?? []" border size="small">
-      <el-table-column label="商品" min-width="200">
-        <template #default="s">
-          <RemoteSelect
-            v-if="!isView"
-            v-model="s.row.goodsId"
-            :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="!form.orgId"
-            placeholder="输入商品名称或编码搜索"
-            @change="lineGoodsChanged(s.row)"
-          />
-          <el-button v-if="!isView && !form.applicationId" link type="primary" @click="openQuickCatalog(s.row, 'goods')">快捷新增商品</el-button>
-          <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
-          <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">
-          <span>{{ s.row.skuSpec || s.row.skuId || '—' }}</span>
-          <el-button v-if="!isView && !form.applicationId && s.row.goodsId && !s.row.newGoods" link type="primary" @click="openQuickCatalog(s.row, 'sku')">补充 SKU</el-button>
-        </template>
-      </el-table-column>
-      <el-table-column label="单位" width="80">
-        <template #default="s">{{ unitName(s.row) }}</template>
-      </el-table-column>
-      <el-table-column label="采购数量" width="120">
-        <template #default="s">
-          <el-input-number
-            v-model="s.row.quantity"
-            :min="1"
-            :precision="0"
-            :step="1"
-            :disabled="isView"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column label="总金额" width="155" align="right">
-        <template #default="s">
-          <el-input-number
-            v-if="canViewAmount"
-            v-model="s.row.totalAmount"
-            :min="0"
-            :precision="2"
-            :step="1"
-            controls-position="right"
-            :disabled="isView || !canEditAmount"
-          />
-          <span v-else>****</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="计算单价" width="120" align="right">
-        <template #default="s">
-          {{
-            canViewAmount
-              ? lineUnitPrice(s.row).toLocaleString('zh-CN', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })
-              : '****'
-          }}
-        </template>
-      </el-table-column>
-      <el-table-column label="备注" min-width="130">
-        <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
-      </el-table-column>
-      <el-table-column v-if="!isView" label="" width="60">
-        <template #default="s">
-          <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <PurchaseOrderPaymentSummary
+      :form="form"
+      :mode="mode"
+      :dicts="dicts"
+      :can-view-amount="canViewAmount"
+      :can-edit-amount="canEditAmount"
+      :order-total="orderTotal"
+      :effective-payable="orderEffectivePayable"
+      :net-paid-amount="orderNetPaidAmount"
+      :remaining-after-payment="orderRemainingAfterPayment"
+      :preview-progress-status="orderPreviewProgressStatus"
+    />
 
-    <div class="form-total">
-      合计：{{ orderQuantity }} 件　订单金额
-      {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
-    </div>
-
-    <div class="section-title">
-      <strong>金额与付款</strong>
-      <span>订单金额自动汇总；本次付款可为 0，后续仍可从订单操作列分次付款</span>
-    </div>
-    <div class="form-grid order-payment-summary">
-      <el-form-item label="订单总金额"><el-input :model-value="protectedMoney(orderTotal)" disabled /></el-form-item>
-      <el-form-item label="退货后应付"><el-input :model-value="protectedMoney(orderEffectivePayable)" disabled /></el-form-item>
-      <el-form-item label="累计付款"><el-input :model-value="protectedMoney(form.paidAmount ?? 0)" disabled /></el-form-item>
-      <el-form-item label="累计退款"><el-input :model-value="protectedMoney(form.refundedAmount ?? 0)" disabled /></el-form-item>
-      <el-form-item label="净已付款"><el-input :model-value="protectedMoney(orderNetPaidAmount)" disabled /></el-form-item>
-      <el-form-item label="本次付款金额">
-        <el-input-number
-          v-if="mode === 'create' && canEditAmount"
-          v-model="form.currentPaymentAmount"
-          :min="0"
-          :max="orderTotal"
-          :precision="2"
-          controls-position="right"
-          style="width: 100%"
-        />
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="付款后待付"><el-input :model-value="protectedMoney(orderRemainingAfterPayment)" disabled /></el-form-item>
-      <el-form-item label="付款进度"><el-input :model-value="dictLabel('purchase_payment_progress_status', orderPreviewProgressStatus)" disabled /></el-form-item>
-      <el-form-item label="本次付款日期">
-        <el-date-picker v-if="mode === 'create'" v-model="form.currentPaymentDate" value-format="YYYY-MM-DD" :disabled="!Number(form.currentPaymentAmount)" />
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="本次付款渠道">
-        <el-select v-if="mode === 'create'" v-model="form.currentPaymentChannel" :disabled="!Number(form.currentPaymentAmount)">
-          <el-option v-for="item in dicts.payment_channel || []" :key="item.value" :label="item.label" :value="Number(item.value)" />
-        </el-select>
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="付款备注" class="span-2">
-        <el-input v-if="mode === 'create'" v-model="form.currentPaymentRemark" :disabled="!Number(form.currentPaymentAmount)" />
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-    </div>
+    <PurchaseOrderDetailsSection
+      :form="form"
+      :mode="mode"
+      :can-view-amount="canViewAmount"
+      :can-edit-amount="canEditAmount"
+      :order-quantity="orderQuantity"
+      :order-total="orderTotal"
+      :units="options.units"
+      :search-goods-options="searchGoodsOptions"
+      :line-unit-price="lineUnitPrice"
+      @add="addLine"
+      @remove="removeLine"
+      @goods-change="lineGoodsChanged"
+      @quick-catalog="openQuickCatalog"
+    />
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
@@ -759,48 +542,42 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0 16px;
-}
-.span-2 {
-  grid-column: 1 / -1;
-}
-.warehouse-hint {
-  font-size: 12px;
-  color: var(--hs-muted, #909399);
-  margin-top: 2px;
-}
-.details-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-}
-.details-title {
-  font-weight: 600;
-}
-.section-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 18px 0 10px;
-}
-.section-title span {
-  color: #909399;
-  font-size: 12px;
-}
-.form-total {
-  margin-top: 12px;
-  text-align: right;
-  color: #606266;
-  font-variant-numeric: tabular-nums;
+.purchase-order-form {
+  min-width: 0;
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-body);
+  line-height: var(--hs-line-body);
 }
 .form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--hs-space-2);
+  margin-top: var(--hs-space-5);
+}
+:global(.purchase-order-form-dialog) {
+  max-width: calc(100vw - 32px);
+}
+:global(.purchase-order-form-dialog .el-dialog__header) {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--hs-color-border);
+}
+:global(.purchase-order-form-dialog .el-dialog__title) {
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-dialog-title);
+  line-height: var(--hs-line-dialog-title);
+  font-weight: 600;
+}
+:global(.purchase-order-form-dialog .el-dialog__body) {
+  max-height: calc(94vh - 80px);
+  padding: 16px 20px 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+@media (max-width: 760px) {
+  :global(.purchase-order-form-dialog) {
+    width: calc(100vw - 24px) !important;
+    margin-right: auto;
+    margin-left: auto;
+  }
 }
 </style>

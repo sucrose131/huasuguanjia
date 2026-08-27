@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
-import InventoryAdjustmentForm from './forms/InventoryAdjustmentForm.vue';
+import InventoryQuickAdjustDialog from '@/components/inventory/InventoryQuickAdjustDialog.vue';
 
 type Row = Record<string, any>;
 
@@ -19,10 +19,8 @@ const summary = reactive<Record<string, any>>({ itemCount: 0, totalAmount: 0, wa
 const recentLedger = ref<Row[]>([]);
 const ledger = ref<Row[]>([]);
 const ledgerDialog = ref(false);
+const quickAdjustDialog = ref<InstanceType<typeof InventoryQuickAdjustDialog>>();
 const ledgerContext = reactive({ title: '', subtitle: '' });
-const adjustDialog = ref(false);
-const adjustForm = reactive<Record<string, any>>({});
-const adjustRow = ref<Row | null>(null);
 
 const organizationTree = computed(() =>
   buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
@@ -210,14 +208,7 @@ async function showLedger(row: Row) {
 }
 
 function adjustStock(row: Row) {
-  Object.keys(adjustForm).forEach((key) => delete adjustForm[key]);
-  adjustRow.value = row;
-  adjustDialog.value = true;
-}
-
-function onAdjusted() {
-  adjustDialog.value = false;
-  load();
+  quickAdjustDialog.value?.open(row);
 }
 
 onMounted(async () => {
@@ -498,18 +489,6 @@ onMounted(async () => {
       </el-table>
     </div>
 
-    <el-dialog v-model="adjustDialog" title="账面调整" width="1280px" top="4vh">
-      <InventoryAdjustmentForm
-        v-if="adjustDialog"
-        :model-value="adjustForm"
-        mode="create"
-        :lock-stock="true"
-        :preset-row="adjustRow"
-        @saved="onAdjusted"
-        @cancel="adjustDialog = false"
-      />
-    </el-dialog>
-
     <el-dialog v-model="ledgerDialog" :title="ledgerContext.title" width="1080px">
       <p class="dialog-subtitle">{{ ledgerContext.subtitle }}</p>
       <el-table :data="ledger" border>
@@ -541,6 +520,8 @@ onMounted(async () => {
       </el-table>
       <template #footer><el-button @click="ledgerDialog = false">关闭</el-button></template>
     </el-dialog>
+
+    <InventoryQuickAdjustDialog ref="quickAdjustDialog" @saved="load" />
   </section>
 </template>
 

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import BusinessStatusTag from '@/components/business/BusinessStatusTag.vue';
+import InventoryProductBatchLayout from '@/components/inventory/InventoryProductBatchLayout.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -99,16 +100,6 @@ const checkProductGroups = computed<any[]>(() => {
       ),
     );
 });
-const selectedCheckProduct = ref<any>();
-const selectedCheckBatches = computed<any[]>(() => selectedCheckProduct.value?.batches ?? []);
-function selectCheckProduct(row?: any) {
-  selectedCheckProduct.value = row;
-}
-watch(checkProductGroups, async (groups) => {
-  const currentKey = selectedCheckProduct.value?.key;
-  selectedCheckProduct.value = groups.find((group) => group.key === currentKey) ?? groups[0];
-});
-
 const checkQuantityStatus = (line: any) =>
   Number(line.differentQty) < 0
     ? { text: dictLabel('checkResult', 1), semantic: 'danger' as const }
@@ -389,54 +380,20 @@ onMounted(async () => {
       </div>
 
       <div class="form-section-title">批次盘点明细</div>
-      <div class="check-master-detail-layout">
-        <div class="check-product-list-panel">
-          <div class="check-panel-heading">
-            <strong>盘点商品</strong><span>共 {{ checkProductGroups.length }} 项，点击切换</span>
-          </div>
+      <InventoryProductBatchLayout
+        :groups="checkProductGroups"
+        product-title="盘点商品"
+        product-empty-text="载入库存后显示商品"
+      >
+        <template #batches="{ batches }">
           <el-table
-            :data="checkProductGroups"
-            border
-            highlight-current-row
-            row-key="key"
-            height="360"
-            empty-text="载入库存后显示商品"
-            class="check-product-table"
-            @current-change="selectCheckProduct"
-          >
-            <el-table-column label="商品编码 / 名称 / 规格" min-width="220" show-overflow-tooltip>
-              <template #default="s">
-                <div class="check-product-cell">
-                  <strong>{{ s.row.goodsCode || '—' }} · {{ s.row.goodsName || '—' }}</strong>
-                  <span>{{ s.row.skuSpec || '默认规格' }} · {{ s.row.unitName || '—' }}</span>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="批次" width="56" align="center">
-              <template #default="s">{{ s.row.batches.length }}</template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div class="check-batch-detail-panel">
-          <div class="check-panel-heading">
-            <strong>{{
-              selectedCheckProduct ? `${selectedCheckProduct.goodsName}的批次明细` : '批次明细'
-            }}</strong>
-            <span v-if="selectedCheckProduct"
-              >{{ selectedCheckProduct.goodsCode }} ·
-              {{ selectedCheckProduct.skuSpec || '默认规格' }} · 共
-              {{ selectedCheckBatches.length }} 个批次</span
-            >
-            <span v-else>请先从左侧选择商品</span>
-          </div>
-          <el-table
-            :data="selectedCheckBatches"
+            :data="batches"
             border
             table-layout="fixed"
             max-height="360"
             :row-key="checkBatchRowKey"
             :row-class-name="checkBatchRowClassName"
-            :show-summary="selectedCheckBatches.length > 1"
+            :show-summary="batches.length > 1"
             :summary-method="getCheckSummaries"
             empty-text="请选择左侧商品查看对应批次"
             class="check-batch-table"
@@ -514,8 +471,8 @@ onMounted(async () => {
               </template>
             </el-table-column>
           </el-table>
-        </div>
-      </div>
+        </template>
+      </InventoryProductBatchLayout>
     </template>
 
     <div v-if="!isView" class="form-actions">
@@ -649,70 +606,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   gap: var(--hs-space-1);
-}
-.check-master-detail-layout {
-  display: grid;
-  grid-template-columns: minmax(288px, 28%) minmax(0, 1fr);
-  gap: var(--hs-space-3);
-  align-items: stretch;
-}
-.check-product-list-panel,
-.check-batch-detail-panel {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--hs-color-border);
-  border-radius: var(--hs-radius-md);
-  background: var(--hs-color-surface);
-}
-.check-panel-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--hs-space-3);
-  min-height: 44px;
-  padding: 11px 13px;
-  border-bottom: 1px solid var(--hs-color-border);
-  background: var(--hs-color-surface-muted);
-}
-.check-panel-heading strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--hs-color-text-primary);
-  font-size: var(--hs-font-section);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.check-panel-heading span {
-  flex: none;
-  color: var(--hs-color-text-secondary);
-  font-size: var(--hs-font-helper);
-}
-.check-product-cell {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.check-product-cell strong,
-.check-product-cell span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.check-product-cell strong {
-  color: var(--hs-color-text-primary);
-  font-size: var(--hs-font-body);
-}
-.check-product-cell span {
-  color: var(--hs-color-text-secondary);
-  font-size: var(--hs-font-helper);
-}
-:deep(.check-product-table .el-table__header-wrapper th) {
-  background: var(--hs-color-surface-muted);
-  color: var(--hs-color-text-primary);
-  font-weight: 650;
-}
-:deep(.check-product-table .el-table__body td) {
-  height: var(--hs-list-row-height);
 }
 :deep(.check-batch-table .el-table__header-wrapper th) {
   background: var(--hs-color-surface);
