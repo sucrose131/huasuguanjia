@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -532,7 +533,11 @@ onMounted(async () => {
         <el-table-column label="处理时间" width="168">
           <template #default="{ row }">{{ dateText(row.occurredAt, true) }}</template>
         </el-table-column>
-        <el-table-column prop="content" label="处理内容" min-width="300" show-overflow-tooltip />
+        <el-table-column prop="content" label="处理内容" min-width="300">
+          <template #default="{ row }">
+            <OverflowTooltipCell :content="row.content">{{ row.content }}</OverflowTooltipCell>
+          </template>
+        </el-table-column>
         <el-table-column label="处理状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" effect="plain" :type="serviceProgressStatusType(row)">
@@ -547,9 +552,11 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="处理人" width="120" show-overflow-tooltip>
+        <el-table-column label="处理人" width="120">
           <template #default="{ row }">
-            {{ row.handlerIdName || row.createdByName || '未知操作人' }}
+            <OverflowTooltipCell :content="row.handlerIdName || row.createdByName || '未知操作人'">{{
+              row.handlerIdName || row.createdByName || '未知操作人'
+            }}</OverflowTooltipCell>
           </template>
         </el-table-column>
         <el-table-column v-if="!isView" fixed="right" label="操作" width="110" align="center">

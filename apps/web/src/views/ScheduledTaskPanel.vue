@@ -6,6 +6,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 
 type Mode = 'create' | 'edit' | 'view';
 type TaskType = { code: string; name: string; occupied: boolean };
@@ -319,13 +320,19 @@ onMounted(load);
     <div v-else class="table-wrap" v-loading="loading">
       <el-table :data="filteredRows" stripe min-width="1180">
         <el-table-column type="index" label="序号" width="65" />
-        <el-table-column prop="taskName" label="任务名称" min-width="160" show-overflow-tooltip>
+        <el-table-column prop="taskName" label="任务名称" min-width="160">
           <template #default="{ row }">
-            <strong>{{ row.taskName }}</strong>
+            <OverflowTooltipCell :content="row.taskName"
+              ><strong>{{ row.taskName }}</strong></OverflowTooltipCell
+            >
           </template>
         </el-table-column>
-        <el-table-column label="任务类型" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.taskTypeName }} / {{ row.taskCode }}</template>
+        <el-table-column label="任务类型" min-width="180">
+          <template #default="{ row }">
+            <OverflowTooltipCell :content="`${row.taskTypeName} / ${row.taskCode}`">{{
+              row.taskTypeName
+            }} / {{ row.taskCode }}</OverflowTooltipCell>
+          </template>
         </el-table-column>
         <el-table-column prop="cronExpr" label="Cron" width="140" />
         <el-table-column label="启用" width="90">
@@ -343,16 +350,18 @@ onMounted(load);
         <el-table-column label="最近执行（北京时间）" width="180">
           <template #default="{ row }">{{ timeText(row.lastRunAt) }}</template>
         </el-table-column>
-        <el-table-column label="最近结果" min-width="180" show-overflow-tooltip>
+        <el-table-column label="最近结果" min-width="180">
           <template #default="{ row }">
-            <el-tag
-              v-if="row.lastStatusName !== '—'"
-              :type="row.lastStatus === 1 ? 'success' : row.lastStatus === 2 ? 'warning' : row.lastStatus === 3 ? 'info' : 'danger'"
-            >
-              {{ row.lastStatusName }}
-            </el-tag>
-            <span v-if="row.lastMessage"> {{ row.lastMessage }}</span>
-            <span v-else-if="row.lastStatusName === '—'">—</span>
+            <OverflowTooltipCell>
+              <el-tag
+                v-if="row.lastStatusName !== '—'"
+                :type="row.lastStatus === 1 ? 'success' : row.lastStatus === 2 ? 'warning' : row.lastStatus === 3 ? 'info' : 'danger'"
+              >
+                {{ row.lastStatusName }}
+              </el-tag>
+              <span v-if="row.lastMessage"> {{ row.lastMessage }}</span>
+              <span v-else-if="row.lastStatusName === '—'">—</span>
+            </OverflowTooltipCell>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right" align="center">
@@ -478,14 +487,16 @@ onMounted(load);
         <el-table-column label="耗时" width="90">
           <template #default="{ row }">{{ durationText(row.durationMs) }}</template>
         </el-table-column>
-        <el-table-column label="结果" min-width="200" show-overflow-tooltip>
+        <el-table-column label="结果" min-width="200">
           <template #default="{ row }">
-            <el-tag
-              :type="row.status === 1 ? 'success' : row.status === 2 ? 'warning' : row.status === 3 ? 'info' : 'danger'"
-            >
-              {{ row.statusName }}
-            </el-tag>
-            <span v-if="row.message"> {{ row.message }}</span>
+            <OverflowTooltipCell>
+              <el-tag
+                :type="row.status === 1 ? 'success' : row.status === 2 ? 'warning' : row.status === 3 ? 'info' : 'danger'"
+              >
+                {{ row.statusName }}
+              </el-tag>
+              <span v-if="row.message"> {{ row.message }}</span>
+            </OverflowTooltipCell>
           </template>
         </el-table-column>
       </el-table>

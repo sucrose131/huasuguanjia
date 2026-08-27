@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -189,19 +190,25 @@ onMounted(async () => {
       <el-table-column label="退款日期" width="110">
         <template #default="s">{{ s.row.refundDate ? dateText(s.row.refundDate) : '—' }}</template>
       </el-table-column>
-      <el-table-column
-        prop="supplierSerialNo"
-        label="供应商流水号"
-        min-width="140"
-        show-overflow-tooltip
-      />
-      <el-table-column
-        prop="receiveAccount"
-        label="收款账户"
-        min-width="140"
-        show-overflow-tooltip
-      />
-      <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
+      <el-table-column prop="supplierSerialNo" label="供应商流水号" min-width="140">
+        <template #default="s">
+          <OverflowTooltipCell :content="s.row.supplierSerialNo">{{
+            s.row.supplierSerialNo
+          }}</OverflowTooltipCell>
+        </template>
+      </el-table-column>
+      <el-table-column prop="receiveAccount" label="收款账户" min-width="140">
+        <template #default="s">
+          <OverflowTooltipCell :content="s.row.receiveAccount">{{
+            s.row.receiveAccount
+          }}</OverflowTooltipCell>
+        </template>
+      </el-table-column>
+      <el-table-column prop="remark" label="备注" min-width="140">
+        <template #default="s">
+          <OverflowTooltipCell :content="s.row.remark">{{ s.row.remark }}</OverflowTooltipCell>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="88" fixed="right">
         <template #default="s">
           <el-button v-if="canEditAmount" link type="danger" @click="voidFlow(s.row)">撤销</el-button>
