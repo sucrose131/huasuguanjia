@@ -54,6 +54,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
+      primary: false,
       show: (row) =>
         !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? '')) &&
         Number(row.confirmStatus ?? row.comfirm_status) !== 1 &&

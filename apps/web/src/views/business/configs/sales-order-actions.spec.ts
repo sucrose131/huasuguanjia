@@ -13,6 +13,7 @@ describe('sales order row actions', () => {
 
     expect(primaryKeys).toEqual(['view', 'direct-output']);
     expect(moreKeys).toEqual([
+      'edit',
       'analyze',
       'receive',
       'refund',
