@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { api } from '@/api';
 
 const props = defineProps<{
   query: Record<string, any>;
   load: () => void;
   total: number;
+  warehouseCounts?: Record<string, number>;
 }>();
 
 const tabs = ref<any[]>([]);
 
 async function loadTabs() {
-  tabs.value = (await api.get('/inventory/warehouses/tabs').catch(() => [])) as any[];
+  tabs.value = (await api
+    .get('/inventory/warehouses/tabs', {
+      params: { orgId: props.query.orgId || undefined },
+    })
+    .catch(() => [])) as any[];
 }
 
 function selectWarehouse(value: unknown) {
@@ -21,6 +26,13 @@ function selectWarehouse(value: unknown) {
 }
 
 onMounted(loadTabs);
+watch(
+  () => props.query.orgId,
+  async () => {
+    props.query.warehouseId = '';
+    await loadTabs();
+  },
+);
 </script>
 
 <template>
@@ -37,7 +49,8 @@ onMounted(loadTabs);
       :class="{ active: String(query.warehouseId) === String(item.value) }"
       @click="selectWarehouse(item.value)"
     >
-      {{ item.label }} <span>{{ item.count ?? 0 }}</span>
+      {{ item.label }}
+      <span>{{ warehouseCounts?.[String(item.value)] ?? item.count ?? 0 }}</span>
     </button>
   </div>
 </template>
