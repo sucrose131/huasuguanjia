@@ -41,17 +41,17 @@ async function sourceOutputChanged() {
     receiverName: o.receiverName ?? o.applicantName ?? '',
   });
   form.value.details = (o.details ?? [])
-    .filter((x: any) => Boolean(x.returnable) && Number(x.remainingQty) > 0)
+    .filter((x: any) => Boolean(x.returnable) && Number(x.returnableRemainingQty) > 0)
     .map((x: any) => ({
       goodsId: x.goodsId,
       skuId: x.skuId,
       goodsName: x.goodsName ?? '',
       skuSpec: x.skuSpec ?? '',
       batchNo: x.batchNo ?? '',
-      quantity: x.remainingQty,
+      quantity: x.returnableRemainingQty,
       issuedQty: x.quantity,
-      historicalQty: x.historicalQty,
-      remainingQty: x.remainingQty,
+      historicalQty: x.returnedQty,
+      remainingQty: x.returnableRemainingQty,
       outputDetailId: x.id,
       unitType: x.unitType ?? 0,
       returnable: true,
@@ -69,7 +69,9 @@ function optionName(items: any[], id: unknown) {
 }
 
 function dictLabel(code: string, value: unknown) {
-  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
+  return (
+    (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—'
+  );
 }
 
 function validate(submit: boolean) {
@@ -125,9 +127,7 @@ onMounted(async () => {
       details: [],
     });
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/requisitions/returns/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/requisitions/returns/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
   }
   // 编辑/查看已有来源出库时回填明细
@@ -154,26 +154,49 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="部门">
-        <el-input :model-value="form.deptName || optionName(options.departments || [], form.deptId)" readonly />
+        <el-input
+          :model-value="form.deptName || optionName(options.departments || [], form.deptId)"
+          readonly
+        />
       </el-form-item>
       <el-form-item label="退回人">
-        <el-input :model-value="form.receiverName || form.returnerName || optionName(options.receivers || [], form.receiverId)" readonly />
+        <el-input
+          :model-value="
+            form.receiverName ||
+            form.returnerName ||
+            optionName(options.receivers || [], form.receiverId)
+          "
+          readonly
+        />
       </el-form-item>
       <el-form-item label="退回日期" required>
-        <el-date-picker v-model="form.returnDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.returnDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="原因">
         <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
       <template v-if="isView">
         <el-form-item label="确认状态">
-          <el-input :model-value="form.confirmStatusName || dictLabel('requisition_confirm_status', form.confirmStatus)" readonly />
+          <el-input
+            :model-value="
+              form.confirmStatusName || dictLabel('requisition_confirm_status', form.confirmStatus)
+            "
+            readonly
+          />
         </el-form-item>
         <el-form-item label="确认人">
           <el-input :model-value="form.confirmByName || '—'" readonly />
         </el-form-item>
         <el-form-item label="确认时间">
-          <el-input :model-value="form.confirmDate ? dateText(form.confirmDate, true) : '—'" readonly />
+          <el-input
+            :model-value="form.confirmDate ? dateText(form.confirmDate, true) : '—'"
+            readonly
+          />
         </el-form-item>
         <el-form-item label="确认意见" class="span-2">
           <el-input :model-value="form.confirmComment || '—'" readonly />

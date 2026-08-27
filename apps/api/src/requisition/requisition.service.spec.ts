@@ -46,7 +46,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     service: new RequisitionService(
       prisma as never,
       posting as never,
-      { enrich: vi.fn() } as never,
+      { enrich: vi.fn(), enrichGoods: vi.fn(async (rows: unknown) => rows) } as never,
       documentTrace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       oaApproval as never,
@@ -95,6 +95,69 @@ describe('RequisitionService inventory posting line aggregation', () => {
   });
 });
 
+describe('RequisitionService output detail quantities', () => {
+  it('keeps output allowance separate from return allowance for non-returnable items', async () => {
+    const output = {
+      draw_output_id: 12n,
+      draw_output_no: 'DRO12',
+      draw_id: 7n,
+      receiver_id: 3n,
+      comfirm_status: 0,
+      auto_created: 1,
+    };
+    const root = {
+      hspsi_draw_approve_output: {
+        findFirst: vi.fn().mockResolvedValue(output),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            output_detail_id: 120n,
+            draw_output_id: 12n,
+            draw_detail_id: 70n,
+            goods_id: 1n,
+            sku_id: 2n,
+            batch_no: '',
+            unit_type: 1,
+            draw_qty: 3,
+            fact_draw_qty: 3,
+            is_returnable: 0,
+            remark: '',
+          },
+        ]),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_id: 7n,
+          draw_no: 'DR7',
+          applicant_id: 3n,
+        }),
+      },
+      hspsi_draw_approve_detail: {
+        findMany: vi.fn().mockResolvedValue([{ draw_detail_id: 70n, draw_qty: 3 }]),
+      },
+      hspsi_draw_approve_output_exit: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_basic_staff: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_sys_user: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const { service } = serviceWithTransaction({}, root);
+
+    const detail = await service.output('12');
+
+    expect(detail.details).toEqual([
+      expect.objectContaining({
+        applicationQty: 3,
+        historicalQty: 0,
+        remainingQty: 3,
+        quantity: 3,
+        returnedQty: 0,
+        returnableRemainingQty: 0,
+      }),
+    ]);
+  });
+});
+
 describe('RequisitionService locked requisition mutations', () => {
   it('stores a new handwritten signature as OSS attachment metadata without database base64', async () => {
     const tx = {
@@ -113,7 +176,14 @@ describe('RequisitionService locked requisition mutations', () => {
         findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
       },
       hspsi_basic_staff: {
-        findFirst: vi.fn().mockResolvedValue({ id: 9n, account_set_id: 1n, outer_ref_id: 'M-9', out_staff_id: 'S-9' }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 9n,
+            account_set_id: 1n,
+            outer_ref_id: 'M-9',
+            out_staff_id: 'S-9',
+          }),
       },
       hspsi_basic_staff_organizations: {
         findFirst: vi.fn().mockResolvedValue({ org_id: 3n, org_type: 2 }),
@@ -594,7 +664,14 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       hspsi_basic_organization: { findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }) },
       hspsi_sys_user_oa_staff: { findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }) },
       hspsi_basic_staff: {
-        findFirst: vi.fn().mockResolvedValue({ id: 9n, account_set_id: 1n, outer_ref_id: 'M-9', out_staff_id: 'S-9' }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 9n,
+            account_set_id: 1n,
+            outer_ref_id: 'M-9',
+            out_staff_id: 'S-9',
+          }),
       },
       hspsi_basic_staff_organizations: {
         findFirst: vi.fn().mockResolvedValue({ org_id: 3n, org_type: 2 }),
@@ -603,7 +680,9 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
     const root = {
       hspsi_draw_approve: {
         // 事务外的提交后查询（非借用 → 写 todo）
-        findFirst: vi.fn().mockResolvedValue({ draw_type: 1, draw_no: 'LY202608260001', org_id: 9n }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ draw_type: 1, draw_no: 'LY202608260001', org_id: 9n }),
       },
       hspsi_sys_user_authorized_org: {
         findMany: vi.fn().mockResolvedValue([{ user_id: 3n }, { user_id: 4n }, { user_id: 5n }]),
@@ -633,7 +712,10 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
         ]),
       },
     };
-    const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(tx, root);
+    const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(
+      tx,
+      root,
+    );
     attachmentsService.uploadSignatureDataUrlForIntegration.mockResolvedValue({
       id: 'signature-77',
       objectKey: 'documents/requisition_application/signatures/signature-77.png',
@@ -694,7 +776,14 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       hspsi_basic_organization: { findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }) },
       hspsi_sys_user_oa_staff: { findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }) },
       hspsi_basic_staff: {
-        findFirst: vi.fn().mockResolvedValue({ id: 9n, account_set_id: 1n, outer_ref_id: 'M-9', out_staff_id: 'S-9' }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 9n,
+            account_set_id: 1n,
+            outer_ref_id: 'M-9',
+            out_staff_id: 'S-9',
+          }),
       },
       hspsi_basic_staff_organizations: {
         findFirst: vi.fn().mockResolvedValue({ org_id: 3n, org_type: 2 }),
@@ -702,10 +791,15 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
     };
     const root = {
       hspsi_draw_approve: {
-        findFirst: vi.fn().mockResolvedValue({ draw_type: 2, draw_no: 'LY202608260002', org_id: 9n }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ draw_type: 2, draw_no: 'LY202608260002', org_id: 9n }),
       },
     };
-    const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(tx, root);
+    const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(
+      tx,
+      root,
+    );
     attachmentsService.uploadSignatureDataUrlForIntegration.mockResolvedValue({
       id: 'signature-78',
       objectKey: 'documents/requisition_application/signatures/signature-78.png',
