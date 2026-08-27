@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api';
 import { dateText } from '@/utils/format';
 import { canPageAction } from '@/utils/permission';
@@ -8,11 +7,10 @@ import { useAuthStore } from '@/stores/auth';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import StatusTag from '@/components/StatusTag.vue';
+import InventoryQuickAdjustDialog from '@/components/inventory/InventoryQuickAdjustDialog.vue';
 
 type Row = Record<string, any>;
 
-const route = useRoute();
-const router = useRouter();
 const auth = useAuthStore();
 
 const rows = ref<Row[]>([]);
@@ -22,6 +20,7 @@ const summary = reactive<Record<string, any>>({ itemCount: 0, totalAmount: 0, wa
 const recentLedger = ref<Row[]>([]);
 const ledger = ref<Row[]>([]);
 const ledgerDialog = ref(false);
+const quickAdjustDialog = ref<InstanceType<typeof InventoryQuickAdjustDialog>>();
 const ledgerContext = reactive({ title: '', subtitle: '' });
 
 const organizationTree = computed(() =>
@@ -222,16 +221,7 @@ async function showLedger(row: Row) {
 }
 
 function adjustStock(row: Row) {
-  router.push({
-    path: '/inventory/adjustments',
-    query: {
-      create: '1',
-      goodsId: String(row.goodsId),
-      skuId: String(row.skuId),
-      warehouseId: String(row.warehouseId),
-      batchNo: String(row.batchNo ?? ''),
-    },
-  });
+  quickAdjustDialog.value?.open(row);
 }
 
 onMounted(async () => {
@@ -527,6 +517,8 @@ onMounted(async () => {
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <InventoryQuickAdjustDialog ref="quickAdjustDialog" />
   </section>
 </template>
 

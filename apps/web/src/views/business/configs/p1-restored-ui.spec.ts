@@ -12,7 +12,13 @@ function source(relativePath: string) {
 
 describe('P1 restored frontend UI contract', () => {
   it('restores the purchase dialogs and their old actions', () => {
-    const order = source('../forms/PurchaseOrderForm.vue');
+    const order = [
+      source('../forms/PurchaseOrderForm.vue'),
+      source('../../../components/purchase/PurchaseOrderBasicInfo.vue'),
+      source('../../../components/purchase/PurchaseOrderPaymentSummary.vue'),
+      source('../../../components/purchase/PurchaseOrderDetailsSection.vue'),
+      source('../../../components/purchase/PurchaseQuickCatalogDialog.vue'),
+    ].join('\n');
     expect(order).toContain('快捷新增商品');
     expect(order).toContain('补充 SKU');
     expect(order).toContain('运输方式');
