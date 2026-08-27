@@ -518,7 +518,7 @@ onMounted(async () => {
       </el-table>
     </el-dialog>
 
-    <InventoryQuickAdjustDialog ref="quickAdjustDialog" />
+    <InventoryQuickAdjustDialog ref="quickAdjustDialog" @saved="load" />
   </section>
 </template>
 

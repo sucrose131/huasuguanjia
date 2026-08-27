@@ -1,17 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import { dateText } from '@/utils/format';
 import InventoryProductBatchLayout from './InventoryProductBatchLayout.vue';
+import { buildQuickAdjustmentDetails } from './inventory-quick-adjust';
 
 type StockRow = Record<string, any>;
 
 const auth = useAuthStore();
+const emit = defineEmits<{ saved: [] }>();
 const visible = ref(false);
 const loading = ref(false);
+const saving = ref(false);
 const source = ref<StockRow>({});
 const batchRows = ref<StockRow[]>([]);
+const reason = ref('');
 
 const quantity = (value: unknown) =>
   Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
@@ -34,14 +39,8 @@ const groups = computed(() =>
 );
 
 const summary = computed(() => {
-  const beforeQty = batchRows.value.reduce(
-    (total, line) => total + Number(line.beforeQty ?? 0),
-    0,
-  );
-  const afterQty = batchRows.value.reduce(
-    (total, line) => total + Number(line.afterQty ?? 0),
-    0,
-  );
+  const beforeQty = batchRows.value.reduce((total, line) => total + Number(line.beforeQty ?? 0), 0);
+  const afterQty = batchRows.value.reduce((total, line) => total + Number(line.afterQty ?? 0), 0);
   return { beforeQty, afterQty, differentQty: afterQty - beforeQty };
 });
 
@@ -64,6 +63,7 @@ function direction(line: StockRow) {
 async function open(row: StockRow) {
   source.value = { ...row };
   batchRows.value = [];
+  reason.value = '';
   visible.value = true;
   loading.value = true;
   try {
@@ -92,8 +92,52 @@ async function open(row: StockRow) {
   }
 }
 
-function previewSubmit() {
-  ElMessage.info('当前仅完成界面与字段映射，提交、审核及库存变更逻辑待界面确认后接入');
+async function submitAdjustment() {
+  const adjustReason = reason.value.trim();
+  if (!adjustReason) {
+    ElMessage.warning('请输入调整原因');
+    return;
+  }
+  const details = buildQuickAdjustmentDetails(batchRows.value);
+  if (!details.length) {
+    ElMessage.warning('请至少调整一个库存批次');
+    return;
+  }
+  if (details.some((line) => !line.goodsId || !line.skuId || !line.warehouseId)) {
+    ElMessage.warning('库存批次字段不完整，请刷新页面后重试');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `本次将调整 ${details.length} 个批次。提交后生成库存调整单并进入审批，审批通过后才会改变库存，是否继续？`,
+      '提交库存调整',
+      {
+        type: 'warning',
+        confirmButtonText: '确认提交',
+        cancelButtonText: '取消',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  saving.value = true;
+  try {
+    const result = (await api.post('/inventory/adjustments', {
+      reason: adjustReason,
+      applicantDate: dateText(new Date()),
+      remark: '从库存查询发起的单品批次调整',
+      submit: true,
+      details,
+    })) as any;
+    ElMessage.success(result?.message ?? '库存调整单已生成并提交审批');
+    visible.value = false;
+    emit('saved');
+  } catch {
+    // 接口错误已由统一拦截器提示。
+  } finally {
+    saving.value = false;
+  }
 }
 
 defineExpose({ open });
@@ -115,19 +159,36 @@ defineExpose({ open });
           <strong>调整范围</strong>
           <span>商品由库存查询行锁定；批次数据来自当前组织、仓库及商品 SKU 的即时库存</span>
         </div>
-        <el-tag type="info" effect="plain">界面确认阶段</el-tag>
+        <el-tag type="warning" effect="plain">审批通过后过账</el-tag>
       </div>
       <div class="adjust-master-grid">
-        <div><span>所属组织</span><strong>{{ source.orgName || '—' }}</strong></div>
-        <div><span>所在仓库</span><strong>{{ source.warehouseName || '—' }}</strong></div>
-        <div><span>调整人</span><strong>{{ auth.user?.username || '—' }}</strong></div>
-        <div><span>库存批次</span><strong>{{ batchRows.length }}</strong></div>
+        <div>
+          <span>所属组织</span><strong>{{ source.orgName || '—' }}</strong>
+        </div>
+        <div>
+          <span>所在仓库</span><strong>{{ source.warehouseName || '—' }}</strong>
+        </div>
+        <div>
+          <span>调整人</span><strong>{{ auth.user?.username || '—' }}</strong>
+        </div>
+        <div>
+          <span>库存批次</span><strong>{{ batchRows.length }}</strong>
+        </div>
+      </div>
+      <div class="adjust-reason">
+        <span>调整原因</span>
+        <el-input
+          v-model="reason"
+          maxlength="200"
+          show-word-limit
+          placeholder="请填写本次库存调整的实际原因"
+        />
       </div>
     </div>
 
     <el-alert
-      title="本阶段只验证界面、交互和数据库字段映射，不会生成调整单，也不会改变库存。"
-      type="info"
+      title="提交后将生成库存调整记录并进入审批；只有审批通过后，系统才会执行库存过账。"
+      type="warning"
       :closable="false"
       show-icon
       class="adjust-stage-alert"
@@ -175,7 +236,8 @@ defineExpose({ open });
                     'difference-negative': Number(scope.row.differentQty) < 0,
                   }"
                 >
-                  {{ Number(scope.row.differentQty) > 0 ? '+' : '' }}{{ quantity(scope.row.differentQty) }}
+                  {{ Number(scope.row.differentQty) > 0 ? '+' : ''
+                  }}{{ quantity(scope.row.differentQty) }}
                 </strong>
               </template>
             </el-table-column>
@@ -200,8 +262,12 @@ defineExpose({ open });
     </div>
 
     <div class="adjust-summary">
-      <span>当前库存合计 <strong>{{ quantity(summary.beforeQty) }}</strong></span>
-      <span>调整后合计 <strong>{{ quantity(summary.afterQty) }}</strong></span>
+      <span
+        >当前库存合计 <strong>{{ quantity(summary.beforeQty) }}</strong></span
+      >
+      <span
+        >调整后合计 <strong>{{ quantity(summary.afterQty) }}</strong></span
+      >
       <span>
         净调整
         <strong
@@ -217,7 +283,9 @@ defineExpose({ open });
 
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" @click="previewSubmit">提交调整</el-button>
+      <el-button type="primary" :loading="saving" :disabled="loading" @click="submitAdjustment"
+        >提交调整</el-button
+      >
     </template>
   </el-dialog>
 </template>
@@ -269,6 +337,17 @@ defineExpose({ open });
   font-size: var(--hs-font-body);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.adjust-reason {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--hs-space-3);
+  margin-top: var(--hs-space-4);
+}
+.adjust-reason > span {
+  color: var(--hs-color-text-secondary);
+  font-size: var(--hs-font-helper);
 }
 .adjust-stage-alert {
   margin-bottom: var(--hs-space-4);
