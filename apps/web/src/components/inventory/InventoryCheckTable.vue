@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import BusinessStatusTag from '@/components/business/BusinessStatusTag.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import {
   inventoryCheckTableSchema,
   type InventoryCheckColumn,
@@ -71,28 +72,37 @@ const differenceClass = (column: InventoryCheckColumn, row: Row) => {
       :min-width="column.minWidth"
       :fixed="column.fixed"
       :align="column.align"
-      show-overflow-tooltip
     >
       <template #default="{ row }">
-        <button
-          v-if="column.key === 'checkNo'"
-          type="button"
-          class="document-link"
-          @click="emit('view', row)"
+        <OverflowTooltipCell v-if="column.key === 'checkNo'" :content="row.checkNo || '—'">
+          <button
+            type="button"
+            class="document-link"
+            @click="emit('view', row)"
+          >
+            {{ row.checkNo || '—' }}
+          </button>
+        </OverflowTooltipCell>
+        <OverflowTooltipCell v-else-if="column.kind === 'date'" :content="dateText(row[column.key])">
+          {{ dateText(row[column.key]) }}
+        </OverflowTooltipCell>
+        <OverflowTooltipCell
+          v-else-if="column.kind === 'quantity'"
+          :content="quantity(row[column.key])"
         >
-          {{ row.checkNo || '—' }}
-        </button>
-        <span v-else-if="column.kind === 'date'">{{ dateText(row[column.key]) }}</span>
-        <span v-else-if="column.kind === 'quantity'" class="numeric-value">{{
-          quantity(row[column.key])
-        }}</span>
-        <span
+          <span class="numeric-value">{{ quantity(row[column.key]) }}</span>
+        </OverflowTooltipCell>
+        <OverflowTooltipCell
           v-else-if="column.kind === 'difference'"
-          class="difference-value"
-          :class="differenceClass(column, row)"
+          :content="quantity(row[column.key])"
         >
-          {{ quantity(row[column.key]) }}
-        </span>
+          <span
+            class="difference-value"
+            :class="differenceClass(column, row)"
+          >
+            {{ quantity(row[column.key]) }}
+          </span>
+        </OverflowTooltipCell>
         <div v-else-if="column.kind === 'progress'" class="progress-cell">
           <el-progress
             :percentage="Math.round(progress(row))"
@@ -106,7 +116,9 @@ const differenceClass = (column: InventoryCheckColumn, row: Row) => {
           :semantic="statusSemantic(row)"
           :text="props.statusLabel(row)"
         />
-        <span v-else>{{ row[column.key] ?? '—' }}</span>
+        <OverflowTooltipCell v-else :content="row[column.key] ?? '—'">{{
+          row[column.key] ?? '—'
+        }}</OverflowTooltipCell>
       </template>
     </el-table-column>
 

@@ -7,6 +7,7 @@ import { canPageAction } from '@/utils/permission';
 import { useAuthStore } from '@/stores/auth';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import StatusTag from '@/components/StatusTag.vue';
 
 type Row = Record<string, any>;
@@ -522,8 +523,12 @@ onMounted(async () => {
           <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
         </el-table-column>
         <el-table-column prop="operatorName" label="操作人" width="90" />
-        <el-table-column label="备注" min-width="140" show-overflow-tooltip>
-          <template #default="s">{{ s.row.remark || '—' }}</template>
+        <el-table-column label="备注" min-width="140">
+          <template #default="s">
+            <OverflowTooltipCell :content="s.row.remark || '—'">{{
+              s.row.remark || '—'
+            }}</OverflowTooltipCell>
+          </template>
         </el-table-column>
       </el-table>
     </el-dialog>

@@ -5,6 +5,7 @@ import type { TableInstance } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { api } from '@/api';
 import StatusTag from '@/components/StatusTag.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, moneyText } from '@/utils/format';
 
 type PreviewMode = 'all' | 'partial' | 'related';
@@ -237,8 +238,12 @@ watch(
           class="generation-table"
         >
           <el-table-column prop="orderNo" label="采购订单号" min-width="166" />
-          <el-table-column label="供应商" min-width="180" show-overflow-tooltip>
-            <template #default="scope">{{ lookup('vendors', scope.row.vendorId) }}</template>
+          <el-table-column label="供应商" min-width="180">
+            <template #default="scope">
+              <OverflowTooltipCell :content="lookup('vendors', scope.row.vendorId)">{{
+                lookup('vendors', scope.row.vendorId)
+              }}</OverflowTooltipCell>
+            </template>
           </el-table-column>
           <el-table-column prop="itemCount" label="商品种类" width="96" align="right" />
           <el-table-column prop="quantity" label="采购数量" width="104" align="right" />
@@ -349,13 +354,20 @@ watch(
             :selectable="canSelect"
           />
           <el-table-column prop="goodsCode" label="商品编码" width="126" fixed="left" />
-          <el-table-column
-            prop="goodsName"
-            label="商品名称"
-            min-width="168"
-            show-overflow-tooltip
-          />
-          <el-table-column prop="skuName" label="SKU/规格" min-width="136" show-overflow-tooltip />
+          <el-table-column prop="goodsName" label="商品名称" min-width="168">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.goodsName">{{
+                scope.row.goodsName
+              }}</OverflowTooltipCell>
+            </template>
+          </el-table-column>
+          <el-table-column prop="skuName" label="SKU/规格" min-width="136">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.skuName">{{
+                scope.row.skuName
+              }}</OverflowTooltipCell>
+            </template>
+          </el-table-column>
           <el-table-column label="单位" width="72">
             <template #default="scope">{{ lookup('units', scope.row.unitType) }}</template>
           </el-table-column>
@@ -370,8 +382,12 @@ watch(
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="对应订单" min-width="150" show-overflow-tooltip>
-            <template #default="scope">{{ scope.row.generatedOrderNo || '—' }}</template>
+          <el-table-column label="对应订单" min-width="150">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.generatedOrderNo || '—'">{{
+                scope.row.generatedOrderNo || '—'
+              }}</OverflowTooltipCell>
+            </template>
           </el-table-column>
           <el-table-column label="参考价格" width="112" align="right">
             <template #default="scope">{{ protectedMoneyText(scope.row.referencePrice) }}</template>

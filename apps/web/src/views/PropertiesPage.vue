@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue';
 import { api } from '@/api';
 import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, display } from '@/utils/format';
 const rows = ref<any[]>([]),
   total = ref(0),
@@ -90,23 +91,26 @@ onMounted(async () => {
             prop="name"
             label="属性名称"
             min-width="140"
-          /><el-table-column
-            prop="description"
-            label="属性描述"
-            min-width="190"
-            show-overflow-tooltip
-          /><el-table-column
-            prop="logic"
-            label="逻辑定义"
-            min-width="220"
-            show-overflow-tooltip
-          /><el-table-column prop="categoryCount" label="关联分类数" width="105" /><el-table-column
+          /><el-table-column prop="description" label="属性描述" min-width="190"
+            ><template #default="s"
+              ><OverflowTooltipCell :content="s.row.description">{{
+                s.row.description
+              }}</OverflowTooltipCell></template
+            ></el-table-column
+          ><el-table-column prop="logic" label="逻辑定义" min-width="220"
+            ><template #default="s"
+              ><OverflowTooltipCell :content="s.row.logic">{{
+                s.row.logic
+              }}</OverflowTooltipCell></template
+            ></el-table-column
+          ><el-table-column prop="categoryCount" label="关联分类数" width="105" /><el-table-column
             label="关联分类"
             min-width="190"
-            show-overflow-tooltip
-            ><template #default="s">{{
-              s.row.categoryNames?.join('、') || '—'
-            }}</template></el-table-column
+            ><template #default="s"
+              ><OverflowTooltipCell :content="s.row.categoryNames?.join('、') || '—'">{{
+                s.row.categoryNames?.join('、') || '—'
+              }}</OverflowTooltipCell></template
+            ></el-table-column
           ><el-table-column prop="sort" label="排序" width="75" /><el-table-column
             label="状态"
             width="90"
