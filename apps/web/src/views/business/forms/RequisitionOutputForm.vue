@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -118,17 +119,17 @@ async function applicationChanged() {
       stockKey: stockKeyOf(x, a.warehouseId),
     }));
   await loadRequisitionOptions(form.value.orgId);
+  await loadStocks();
 }
 
 async function searchGoodsOptions(keyword: string) {
   // 商品选项取自按 orgId+warehouseId 加载的库存（后端已过滤仓库类型），未选仓库时为空
-  const kw = String(keyword ?? '').trim().toLowerCase();
+  const kw = String(keyword ?? '')
+    .trim()
+    .toLowerCase();
   const seen = new Map<string, any>();
   for (const s of options.stocks ?? []) {
-    if (
-      form.value.warehouseId &&
-      String(s.warehouseId) !== String(form.value.warehouseId)
-    )
+    if (form.value.warehouseId && String(s.warehouseId) !== String(form.value.warehouseId))
       continue;
     if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
     if (!seen.has(String(s.goodsId))) seen.set(String(s.goodsId), s);
@@ -144,11 +145,9 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 async function lineGoodsChanged(line: any) {
@@ -171,7 +170,12 @@ function removeLine(index: number) {
 
 function validate() {
   if (form.value.directOutput) {
-    if (!form.value.orgId || !form.value.warehouseId || !form.value.deptId || !form.value.receiverId) {
+    if (
+      !form.value.orgId ||
+      !form.value.warehouseId ||
+      !form.value.deptId ||
+      !form.value.receiverId
+    ) {
       ElMessage.warning('请选择所属组织、领用部门、领用仓库和接收人');
       return false;
     }
@@ -225,16 +229,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, applications, stocks] = await Promise.all([
+  const [orgs, units, applications] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/requisitions/application-options').catch(() => []),
-    api.get('/inventory/stock-options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
   options.applications = applications;
-  options.stocks = stocks;
   await loadDicts();
 
   if (props.mode === 'create') {
@@ -250,23 +252,23 @@ onMounted(async () => {
     if (form.value.directOutput) {
       form.value.requestKey = form.value.requestKey || createRequestId();
       form.value.drawType = 2;
-      if (!(form.value.details ?? []).length) form.value.details = [{ ...blankLine(), returnable: true }];
+      if (!(form.value.details ?? []).length)
+        form.value.details = [{ ...blankLine(), returnable: true }];
     } else {
       form.value.details = [];
       if (form.value.applicationId) await applicationChanged();
     }
     await loadRequisitionOptions(form.value.orgId);
+    await loadStocks();
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/requisitions/outputs/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/requisitions/outputs/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
     form.value.details = (form.value.details ?? []).map((line: any) => ({
       ...line,
       stockKey: stockKeyOf(line, form.value.warehouseId),
     }));
     await loadRequisitionOptions(form.value.orgId);
-    if (form.value.directOutput) await loadStocks();
+    await loadStocks();
   }
 });
 </script>
@@ -274,18 +276,19 @@ onMounted(async () => {
 <template>
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
-      <el-form-item
-        v-if="!form.directOutput"
-        label="领用申请"
-        required
-      >
+      <el-form-item v-if="!form.directOutput" label="领用申请" required>
         <el-select
           v-model="form.applicationId"
           filterable
           :disabled="mode !== 'create' || Boolean(form.autoCreated)"
           @change="applicationChanged"
         >
-          <el-option v-for="x in options.applications" :key="x.id" :label="x.applicationNo" :value="x.id" />
+          <el-option
+            v-for="x in options.applications"
+            :key="x.id"
+            :label="x.applicationNo"
+            :value="x.id"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="仓库" required>
@@ -309,23 +312,40 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="出库日期" required>
-        <el-date-picker v-model="form.outDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.outDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="领用部门" required>
         <el-select v-model="form.deptId" filterable :disabled="isView || !form.directOutput">
-          <el-option v-for="x in options.requisitionDepts" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option
+            v-for="x in options.requisitionDepts"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="领用接收人" required>
         <el-select v-model="form.receiverId" filterable :disabled="isView || !form.directOutput">
-          <el-option v-for="x in options.employees" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option
+            v-for="x in options.employees"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
     </div>
 
     <div class="details-header">
       <span class="details-title">出库明细</span>
-      <el-button v-if="!isView && form.directOutput" link type="primary" @click="addLine">+ 添加明细</el-button>
+      <el-button v-if="!isView && form.directOutput" link type="primary" @click="addLine"
+        >+ 添加明细</el-button
+      >
     </div>
     <el-table :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="220">
@@ -346,7 +366,9 @@ onMounted(async () => {
         <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
-        <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">{{
+          s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—'
+        }}</template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ unitName(s.row) }}</template>
@@ -417,7 +439,10 @@ onMounted(async () => {
           <el-input :model-value="form.confirmByName || '—'" readonly />
         </el-form-item>
         <el-form-item label="确认时间">
-          <el-input :model-value="form.confirmDate ? dateText(form.confirmDate, true) : '—'" readonly />
+          <el-input
+            :model-value="form.confirmDate ? dateText(form.confirmDate, true) : '—'"
+            readonly
+          />
         </el-form-item>
         <el-form-item label="确认意见" class="span-2">
           <el-input :model-value="form.confirmComment || '—'" readonly />

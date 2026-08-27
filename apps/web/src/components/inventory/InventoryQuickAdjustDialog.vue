@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import InventoryProductBatchLayout from './InventoryProductBatchLayout.vue';
 import { buildQuickAdjustmentDetails } from './inventory-quick-adjust';
+import { fetchScopedStockOptions } from '@/views/business/use-scoped-stock-options';
 
 type StockRow = Record<string, any>;
 
@@ -67,9 +68,7 @@ async function open(row: StockRow) {
   visible.value = true;
   loading.value = true;
   try {
-    const stocks = (await api.get('/inventory/stock-options', {
-      params: { orgId: row.orgId, warehouseId: row.warehouseId },
-    })) as StockRow[];
+    const stocks = (await fetchScopedStockOptions(row.orgId, row.warehouseId)) as StockRow[];
     batchRows.value = (stocks ?? [])
       .filter((item) => sameId(item.goodsId, row.goodsId) && sameId(item.skuId, row.skuId))
       .map((item): StockRow => ({

@@ -113,10 +113,11 @@ onMounted(async () => {
   options.plans = (plans as any).items ?? [];
 
   if (props.mode === 'create') {
+    const initialPlanId = form.value.planId ?? '';
     Object.assign(form.value, {
       orgId: auth.user?.orgId ?? '',
       warehouseId: '',
-      planId: '',
+      planId: initialPlanId,
       goodsId: '',
       skuId: '',
       planQty: 0,
@@ -129,6 +130,7 @@ onMounted(async () => {
       inputDate: dateText(new Date()),
       remark: '',
     });
+    if (form.value.planId) await planChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/inputs/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
@@ -162,28 +164,52 @@ onMounted(async () => {
       <el-form-item label="剩余可入">
         <el-input
           :model-value="
-            Math.max(0, (Number(form.planQty) || 0) - (Number(form.deliveredQty ?? form.cumulativeQty) || 0))
+            Math.max(
+              0,
+              (Number(form.planQty) || 0) - (Number(form.deliveredQty ?? form.cumulativeQty) || 0),
+            )
           "
           readonly
         />
       </el-form-item>
       <el-form-item label="本次入库数量" required>
-        <el-input-number v-model="form.quantity" :min="1" :precision="0" :step="1" :disabled="isView" />
+        <el-input-number
+          v-model="form.quantity"
+          :min="1"
+          :precision="0"
+          :step="1"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="批号" required>
         <el-input v-model="form.batchNo" :disabled="isView" />
       </el-form-item>
       <el-form-item label="生产日期">
-        <el-date-picker v-model="form.productDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.productDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="有效期">
-        <el-date-picker v-model="form.validityPeriod" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.validityPeriod"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="库位">
         <el-input v-model="form.position" :disabled="isView" />
       </el-form-item>
       <el-form-item label="入库日期" required>
-        <el-date-picker v-model="form.inputDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.inputDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="仓库" required>
         <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">

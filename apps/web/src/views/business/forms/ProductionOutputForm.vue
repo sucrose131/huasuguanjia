@@ -7,6 +7,7 @@ import { dateText } from '@/utils/format';
 import { lineUnitName, type UnitOption } from '@/utils/unit-name';
 import BatchMaterialTable from '@/components/production/BatchMaterialTable.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 type B = Record<string, any>;
 
@@ -74,13 +75,9 @@ function blankRow(): B {
 function refreshRowStock(row: B) {
   const stocks = allStocks.value.filter(
     (stock: B) =>
-      String(stock.goodsId) === String(row.goodsId) &&
-      String(stock.skuId) === String(row.skuId),
+      String(stock.goodsId) === String(row.goodsId) && String(stock.skuId) === String(row.skuId),
   );
-  row.stockQty = stocks.reduce(
-    (sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0),
-    0,
-  );
+  row.stockQty = stocks.reduce((sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0), 0);
   for (const batchRow of row.batchRows ?? []) {
     const stock = stocks.find((item: B) => String(item.batchNo) === String(batchRow.batchNo));
     batchRow.avail = Number(stock?.inventoryQty ?? 0);
@@ -99,11 +96,7 @@ async function reloadStocks() {
     return;
   }
   const [stocks, goods] = (await Promise.all([
-    api
-      .get('/inventory/stock-options', {
-        params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-      })
-      .catch(() => []),
+    fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(() => []),
     api
       .get('/production/product-options', {
         params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
@@ -180,10 +173,11 @@ async function planChanged() {
 
 async function searchPlanOptions(keyword: string) {
   if (!String(keyword ?? '').trim()) {
-    const base = (options.plans ?? []).filter((p: B) =>
-      Number(p.planStatus) === 3 &&
-      Number(p.approveStatus) === 1 &&
-      Number(p.outboundStatus) === 0,
+    const base = (options.plans ?? []).filter(
+      (p: B) =>
+        Number(p.planStatus) === 3 &&
+        Number(p.approveStatus) === 1 &&
+        Number(p.outboundStatus) === 0,
     );
     return base.map((x: B) => ({ value: x.id, label: x.planNo }));
   }
@@ -300,7 +294,11 @@ onMounted(async () => {
       for (const line of form.value.details ?? []) {
         const key = `${line.goodsId ?? ''}:${line.skuId ?? ''}`;
         const existing = grouped.get(key);
-        const batchRow = { batchNo: line.batchNo ?? '', qty: Number(line.quantity ?? 0), avail: Number(line.inventoryQty ?? 0) };
+        const batchRow = {
+          batchNo: line.batchNo ?? '',
+          qty: Number(line.quantity ?? 0),
+          avail: Number(line.inventoryQty ?? 0),
+        };
         if (existing) {
           existing.batchRows.push(batchRow);
           continue;
@@ -384,8 +382,18 @@ watch(
         />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId" @change="reloadStocks">
-          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select
+          v-model="form.warehouseId"
+          filterable
+          :disabled="isView || !form.orgId"
+          @change="reloadStocks"
+        >
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item v-if="isLab" label="出库去向" required>
@@ -399,7 +407,12 @@ watch(
         </el-select>
       </el-form-item>
       <el-form-item label="出库日期" required>
-        <el-date-picker v-model="form.outDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.outDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <template v-if="!isLab">
         <el-form-item label="BOM编号">

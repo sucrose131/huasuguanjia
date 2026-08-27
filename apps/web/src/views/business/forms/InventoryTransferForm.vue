@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -54,10 +55,10 @@ const inWarehouses = computed(() => {
   const sourceType = optionWarehouseType(source);
   if (sourceType > 0) requiredTypes.add(sourceType);
   return (options.inWarehouses ?? []).filter((item: any) => {
-    const isCurrentViewValue = isView.value && String(item.value) === String(form.value.toWarehouseId);
+    const isCurrentViewValue =
+      isView.value && String(item.value) === String(form.value.toWarehouseId);
     const differentWarehouse = String(item.value) !== String(form.value.warehouseId);
-    const matchesType =
-      !requiredTypes.size || requiredTypes.has(optionWarehouseType(item));
+    const matchesType = !requiredTypes.size || requiredTypes.has(optionWarehouseType(item));
     return isCurrentViewValue || (differentWarehouse && matchesType);
   });
 });
@@ -127,11 +128,9 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 function addLine() {
@@ -252,17 +251,15 @@ async function saveAndSubmit() {
 }
 
 onMounted(async () => {
-  const [orgs, users, units, stocks] = await Promise.all([
+  const [orgs, users, units] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     // 发出人/接收人为系统用户（后端按 hspsi_sys_user 校验与解析姓名）
     api.get('/inventory/users/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api.get('/inventory/stock-options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.users = users;
   options.units = units;
-  options.stocks = stocks;
 
   if (props.mode === 'create') {
     Object.assign(form.value, {
@@ -278,9 +275,7 @@ onMounted(async () => {
       details: [blankLine()],
     });
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/transfers/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/transfers/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
     form.value.details = (form.value.details ?? []).map((line: any) => ({
       ...line,
@@ -352,37 +347,18 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="调入仓库" required>
-        <el-select
-          v-model="form.toWarehouseId"
-          filterable
-          :disabled="isView || !form.warehouseId"
-        >
-          <el-option
-            v-for="x in inWarehouses"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
+        <el-select v-model="form.toWarehouseId" filterable :disabled="isView || !form.warehouseId">
+          <el-option v-for="x in inWarehouses" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="发出人" required>
         <el-select v-model="form.sendBy" filterable :disabled="isView">
-          <el-option
-            v-for="x in options.users"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
+          <el-option v-for="x in options.users" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="接收人" required>
         <el-select v-model="form.receiveBy" filterable :disabled="isView">
-          <el-option
-            v-for="x in options.users"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
+          <el-option v-for="x in options.users" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="调拨理由" required>

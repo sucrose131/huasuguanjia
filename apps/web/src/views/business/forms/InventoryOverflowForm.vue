@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -83,16 +84,16 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { warehouseId: form.value.warehouseId, orgId: form.value.orgId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 async function searchGoodsOptions(keyword: string) {
   // 商品选项取自按 orgId+warehouseId 加载的库存（后端已过滤仓库类型），未选仓库时为空
-  const kw = String(keyword ?? '').trim().toLowerCase();
+  const kw = String(keyword ?? '')
+    .trim()
+    .toLowerCase();
   const seen = new Map<string, any>();
   for (const s of options.stocks as any[]) {
     if (kw && !`${s.goodsCode ?? ''} ${s.goodsName ?? ''}`.toLowerCase().includes(kw)) continue;
@@ -211,9 +212,7 @@ onMounted(async () => {
     });
     if (!(form.value.details ?? []).length) form.value.details = [blankLine()];
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/overflows/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/overflows/${form.value.id}`).catch(() => null);
     if (detail) {
       Object.assign(form.value, detail);
       form.value.documentType =
@@ -297,7 +296,12 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="日期">
-        <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.date"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="经办人">
         <el-input :model-value="form.operatorName || auth.user?.username || '—'" disabled />
@@ -378,7 +382,9 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="金额" width="110">
-        <template #default="s">{{ Number(s.row.amount ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</template>
+        <template #default="s">{{
+          Number(s.row.amount ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+        }}</template>
       </el-table-column>
       <el-table-column label="备注" min-width="130">
         <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>

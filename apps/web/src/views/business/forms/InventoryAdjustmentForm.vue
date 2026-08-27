@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -77,7 +78,8 @@ function lineStocks(line: any) {
 }
 
 function stockChanged(line: any) {
-  const stock = (options.stocks ?? []).find((s: any) => stockKeyOf(s) === line.stockKey);
+  const pool = Array.isArray(line.stocks) && line.stocks.length ? line.stocks : options.stocks;
+  const stock = (pool ?? []).find((s: any) => stockKeyOf(s) === line.stockKey);
   if (!stock) return;
   Object.assign(line, {
     goodsId: stock.goodsId,
@@ -98,7 +100,9 @@ function stockChanged(line: any) {
 async function searchGoodsOptions(line: any, keyword: string) {
   // 商品选项取自该行仓库库存（按 orgId+warehouseId 后端过滤），未选仓库时为空
   if (!form.value.orgId || !line.warehouseId) return [];
-  const kw = String(keyword ?? '').trim().toLowerCase();
+  const kw = String(keyword ?? '')
+    .trim()
+    .toLowerCase();
   const pool = Array.isArray(line.stocks) && line.stocks.length ? line.stocks : options.stocks;
   const seen = new Map<string, any>();
   for (const s of pool ?? []) {
@@ -117,11 +121,7 @@ async function loadLineStocks(line: any) {
     line.stocks = [];
     return;
   }
-  line.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { orgId: form.value.orgId, warehouseId: line.warehouseId },
-    })
-    .catch(() => [])) as any[];
+  line.stocks = await fetchScopedStockOptions(form.value.orgId, line.warehouseId).catch(() => []);
 }
 
 async function warehouseChanged(line: any) {
@@ -229,15 +229,13 @@ async function loadOrgWarehouses(orgId: unknown) {
 }
 
 onMounted(async () => {
-  const [orgs, units, stocks, adjustTypes] = await Promise.all([
+  const [orgs, units, adjustTypes] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api.get('/inventory/stock-options').catch(() => []),
     api.get('/dictionaries/inventory_adjust_type').catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.stocks = stocks;
   dicts.adjustTypes = adjustTypes as any[];
 
   if (props.mode === 'create') {
@@ -249,9 +247,7 @@ onMounted(async () => {
       details: [blankLine()],
     });
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/adjustments/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/adjustments/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
     form.value.details = (form.value.details ?? []).map((line: any) => ({
       ...line,

@@ -45,8 +45,7 @@ export const productionPlanConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
-      show: (row) =>
-        Number(row.approveStatus) === 0 && [0, 1].includes(Number(row.planStatus)),
+      show: (row) => Number(row.approveStatus) === 0 && [0, 1].includes(Number(row.planStatus)),
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {
@@ -91,7 +90,8 @@ export const productionPlanConfig: BusinessDocumentConfig = {
         Number(row.approveStatus) === 0 &&
         Number(row.planStatus) === 7 &&
         Number(row.outboundStatus) === 0 &&
-        Number(row.materialStatus) === 4,
+        Number(row.materialStatus) === 4 &&
+        Number(row.deliveredQty ?? 0) === 0,
       confirm: '重新校验库存并更新缺料清单，是否继续？',
       handler: async (row) => {
         const result: any = await api.post(`/production/plans/${row.id}/recheck`, {});
@@ -114,6 +114,22 @@ export const productionPlanConfig: BusinessDocumentConfig = {
         ctx.navigate('/production/outputs', {
           planId: String(row.id),
           outType: '1',
+        }),
+    },
+    {
+      key: 'create-input',
+      label: '成品入库',
+      permission: 'production:inputs:create',
+      kind: 'success',
+      primary: false,
+      show: (row) =>
+        Number(row.outboundStatus) === 2 &&
+        [3, 4].includes(Number(row.planStatus)) &&
+        Number(row.deliveredQty ?? 0) < Number(row.planQty ?? 0),
+      handler: (row, ctx) =>
+        ctx.navigate('/production/inputs', {
+          create: '1',
+          planId: String(row.id),
         }),
     },
     {

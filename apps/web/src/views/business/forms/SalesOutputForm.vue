@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -87,15 +88,17 @@ async function loadOrgOptions(orgId: unknown) {
     return;
   }
   const [warehouses, depts] = await Promise.all([
-    api
-      .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
-    api
-      .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
+    api.get('/base-data/warehouses/options', { params: { orgId: String(orgId) } }).catch(() => []),
+    api.get('/base-data/departments/options', { params: { orgId: String(orgId) } }).catch(() => []),
   ]);
   options.warehouses = warehouses as any[];
   options.depts = depts as any[];
+}
+
+async function loadStocks() {
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 function toOutputOrderOption(order: any) {
@@ -112,17 +115,14 @@ async function searchSalesOrderOptions(keyword: string) {
   const r: any = await api.get('/sales/money-order-options', {
     params: { keyword, pageSize: 50 },
   });
-  const items = (Array.isArray(r) ? r : r.items ?? []) as any[];
+  const items = (Array.isArray(r) ? r : (r.items ?? [])) as any[];
   return items.filter((x) => !isNoOutputOrder(x)).map(toOutputOrderOption);
 }
 
 async function enrichGoodsInfo(lines: any[], orderDetails?: any[]) {
   const ids = [...new Set(lines.map((l: any) => String(l.goodsId)).filter(Boolean))];
   const priceMap = new Map(
-    (orderDetails ?? []).map((d: any) => [
-      `${d.goodsId}:${d.skuId}`,
-      Number(d.price ?? 0),
-    ]),
+    (orderDetails ?? []).map((d: any) => [`${d.goodsId}:${d.skuId}`, Number(d.price ?? 0)]),
   );
   const goodsMap = new Map<string, any>();
   await Promise.all(
@@ -181,6 +181,7 @@ async function orderChanged() {
   }));
   await enrichGoodsInfo(form.value.details);
   await loadOrgOptions(form.value.orgId);
+  await loadStocks();
 }
 
 function validate() {
@@ -219,18 +220,16 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, users, units, stocks, orders, destinationDict] = await Promise.all([
+  const [orgs, users, units, orders, destinationDict] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/users/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api.get('/inventory/stock-options').catch(() => []),
     api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
     api.get('/dictionaries/sales_output_destination').catch(() => []),
   ]);
   options.orgs = orgs;
   options.users = users;
   options.units = units;
-  options.stocks = stocks;
   options.orders = Array.isArray(orders) ? orders : ((orders as any).items ?? []);
   options.destinationDict = destinationDict;
 
@@ -261,6 +260,7 @@ onMounted(async () => {
       }));
       await enrichGoodsInfo(form.value.details, order?.details ?? []);
       await loadOrgOptions(form.value.orgId);
+      await loadStocks();
     }
   }
 });
@@ -283,12 +283,13 @@ onMounted(async () => {
         <el-input :model-value="form.customerName || '—'" readonly />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select
-          v-model="form.warehouseId"
-          filterable
-          :disabled="mode !== 'create' || !form.orgId || Boolean(form.sourceLocked)"
-        >
-          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select v-model="form.warehouseId" filterable disabled>
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="出库类型">
