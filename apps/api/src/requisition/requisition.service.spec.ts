@@ -680,7 +680,7 @@ describe('RequisitionService locked requisition mutations', () => {
 });
 
 describe('RequisitionService direct output reverse workflow', () => {
-  it('posts inventory and creates an approved reverse application atomically', async () => {
+  it('posts inventory and creates an approved reverse application atomically (直接领用)', async () => {
     const tx = {
       hspsi_draw_approve_output: {
         findUnique: vi.fn().mockResolvedValue(null),
@@ -695,7 +695,18 @@ describe('RequisitionService direct output reverse workflow', () => {
       },
       hspsi_draw_approve_output_detail: { createMany: vi.fn() },
     };
-    const { service, posting, documentTrace } = serviceWithTransaction(tx);
+    const { service, posting, documentTrace, attachmentsService, oaApproval } =
+      serviceWithTransaction(tx);
+    attachmentsService.uploadSignatureDataUrlForIntegration.mockResolvedValue({
+      id: 'sig-1',
+      objectKey: 'documents/requisition_application/signatures/sig-1.png',
+      fileName: '领用人签名-sig-1.png',
+      contentType: 'image/png',
+      size: 1,
+      uploadedBy: '9',
+      uploadedAt: '2026-08-28T00:00:00.000Z',
+      category: 'signature',
+    });
     vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
 
     const result = await service.saveOutput(
@@ -703,21 +714,55 @@ describe('RequisitionService direct output reverse workflow', () => {
       {
         directOutput: true,
         requestKey: 'direct-test-0001',
+        drawType: 1,
         orgId: 1,
         warehouseId: 2,
         deptId: 3,
         receiverId: 4,
-        details: [{ goodsId: 5, skuId: 6, batchNo: 'PH20260807', unitType: 1, quantity: 2 }],
+        signatureContent: 'data:image/png;base64,AAAA',
+        details: [
+          {
+            goodsId: 5,
+            skuId: 6,
+            batchNo: 'PH20260807',
+            unitType: 1,
+            drawQty: 3,
+            quantity: 2,
+            returnable: false,
+          },
+        ],
       },
       adminUser('9'),
     );
 
     expect(result).toMatchObject({ id: 12n, applicationId: 7n });
+    expect(attachmentsService.uploadSignatureDataUrlForIntegration).toHaveBeenCalledWith(
+      'requisition_application',
+      'data:image/png;base64,AAAA',
+      '9',
+    );
     expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ approve_status: 1, fact_draw_qty: 2, draw_type: 2 }),
+        data: expect.objectContaining({
+          approve_status: 1,
+          draw_type: 1,
+          draw_qty: 3,
+          fact_draw_qty: 2,
+          signature_attachment: 'sig-1',
+          signed_by: 4n,
+        }),
       }),
     );
+    expect(tx.hspsi_draw_approve_detail.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ draw_qty: 3, is_returnable: 0 }),
+      }),
+    );
+    expect(tx.hspsi_draw_approve_output_detail.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ draw_qty: 3, fact_draw_qty: 2, is_returnable: 0 }),
+      ],
+    });
     expect(posting.post).toHaveBeenCalledWith(
       expect.objectContaining({ direction: -1, sourceType: 'requisition_output' }),
       tx,
@@ -726,6 +771,8 @@ describe('RequisitionService direct output reverse workflow', () => {
       expect.objectContaining({ relationKind: 'reverse_generated' }),
       tx,
     );
+    // 直接领用不走 OA
+    expect(oaApproval.submit).not.toHaveBeenCalled();
   });
 
   it('rejects only the reverse application and idempotently creates a draft return', async () => {
@@ -781,6 +828,160 @@ describe('RequisitionService direct output reverse workflow', () => {
     );
     expect(posting.post).not.toHaveBeenCalled();
   });
+
+  it('borrow direct output creates a pending application and submits OA', async () => {
+    const tx = {
+      hspsi_draw_approve_output: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ draw_output_id: 12n }),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: { create: vi.fn().mockResolvedValue({ draw_id: 7n }) },
+      hspsi_draw_approve_detail: { create: vi.fn().mockResolvedValue({ draw_detail_id: 70n }) },
+      hspsi_draw_approve_output_detail: { createMany: vi.fn() },
+    };
+    const { service, attachmentsService, oaApproval } = serviceWithTransaction(tx);
+    attachmentsService.uploadSignatureDataUrlForIntegration.mockResolvedValue({
+      id: 'sig-2',
+      objectKey: 'k',
+      fileName: 'f.png',
+      contentType: 'image/png',
+      size: 1,
+      uploadedBy: '9',
+      uploadedAt: '2026-08-28T00:00:00.000Z',
+      category: 'signature',
+    });
+    oaApproval.submit.mockResolvedValue({
+      instanceId: 1n,
+      procInstId: 'P-1',
+      procStatus: 'RUNNING',
+      busKey: 'requisition_application:7',
+      errorMessage: '',
+    });
+    vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
+
+    const result = await service.saveOutput(
+      null,
+      {
+        directOutput: true,
+        requestKey: 'direct-borrow-0001',
+        drawType: 2,
+        orgId: 1,
+        warehouseId: 2,
+        deptId: 3,
+        receiverId: 4,
+        signatureContent: 'data:image/png;base64,AAAA',
+        details: [
+          {
+            goodsId: 5,
+            skuId: 6,
+            batchNo: 'PH20260807',
+            unitType: 1,
+            drawQty: 2,
+            quantity: 2,
+            returnable: true,
+          },
+        ],
+      },
+      adminUser('9'),
+    );
+
+    expect(result).toMatchObject({ id: 12n, applicationId: 7n, oaStatus: 'RUNNING' });
+    expect(tx.hspsi_draw_approve.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ approve_status: 0, draw_type: 2, status: 1 }),
+      }),
+    );
+    expect(oaApproval.submit).toHaveBeenCalledWith(7n, '9');
+  });
+
+  it('rejects direct output without the applicant signature', async () => {
+    const { service } = serviceWithTransaction({});
+    await expect(
+      service.saveOutput(
+        null,
+        {
+          directOutput: true,
+          requestKey: 'direct-nosig-0001',
+          drawType: 1,
+          orgId: 1,
+          warehouseId: 2,
+          deptId: 3,
+          receiverId: 4,
+          details: [
+            {
+              goodsId: 5,
+              skuId: 6,
+              batchNo: 'PH01',
+              unitType: 1,
+              drawQty: 1,
+              quantity: 1,
+              returnable: false,
+            },
+          ],
+        },
+        adminUser('9'),
+      ),
+    ).rejects.toThrow('直接领用出库必须完成领用人签字确认');
+  });
+
+  it('rejects direct output when output quantity exceeds application quantity', async () => {
+    const { service } = serviceWithTransaction({});
+    await expect(
+      service.saveOutput(
+        null,
+        {
+          directOutput: true,
+          requestKey: 'direct-qty-0001',
+          drawType: 1,
+          orgId: 1,
+          warehouseId: 2,
+          deptId: 3,
+          receiverId: 4,
+          details: [
+            {
+              goodsId: 5,
+              skuId: 6,
+              batchNo: 'PH01',
+              unitType: 1,
+              drawQty: 1,
+              quantity: 2,
+              returnable: false,
+            },
+          ],
+        },
+        adminUser('9'),
+      ),
+    ).rejects.toThrow('出库数量不能超过申请数量');
+  });
+
+  it('ensureAutomaticOutput reuses the existing direct output instead of creating a duplicate', async () => {
+    const tx = {
+      hspsi_draw_approve: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ draw_id: 7n, draw_no: 'RA1' }),
+      },
+      hspsi_draw_approve_output: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ draw_output_id: 12n, draw_output_no: 'RO1', draw_id: 7n }),
+        findUnique: vi.fn(),
+        create: vi.fn(),
+      },
+    };
+    const { service } = serviceWithTransaction(tx);
+
+    const output = await (service as any).ensureAutomaticOutput(tx, 7n, '0');
+
+    expect(output.draw_output_id).toBe(12n);
+    expect(tx.hspsi_draw_approve_output.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          generation_key: { startsWith: 'direct-requisition-output:' },
+        }),
+      }),
+    );
+    expect(tx.hspsi_draw_approve_output.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('RequisitionService OA callback result handling', () => {
@@ -806,6 +1007,7 @@ describe('RequisitionService OA callback result handling', () => {
         findFirst: vi.fn().mockResolvedValue(application),
         update: vi.fn(),
       },
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(null) },
       hspsi_oa_approval_callback_log: { update: vi.fn() },
     };
     const { service } = serviceWithTransaction(tx, {
@@ -836,6 +1038,73 @@ describe('RequisitionService OA callback result handling', () => {
       where: { id: 99n },
       data: expect.objectContaining({ processed: 1, proc_status: 'REJECTED' }),
     });
+  });
+
+  it('creates a pending return draft when OA rejects a borrow direct output', async () => {
+    const instance = {
+      id: 31n,
+      business_type: 'requisition_application',
+      business_id: 7n,
+      bus_key: 'requisition_application:7',
+      proc_inst_id: 'PROC-7',
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+    };
+    const application = { draw_id: 7n, approve_status: 0, status: 1 };
+    const directOutput = {
+      draw_output_id: 12n,
+      draw_output_no: 'RO1',
+      draw_id: 7n,
+      org_id: 1n,
+      warehouse_id: 2n,
+      dept_id: 3n,
+      receiver_id: 4n,
+    };
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(directOutput) },
+      hspsi_draw_approve_output_exit: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ draw_exit_id: 20n }),
+      },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          { output_detail_id: 120n, is_returnable: 1, fact_draw_qty: 2 },
+        ]),
+      },
+      hspsi_draw_approve_output_exit_detail: { createMany: vi.fn() },
+      hspsi_business_document_relation: { upsert: vi.fn() },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const { service } = serviceWithTransaction(tx, {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
+    });
+    const payload = {
+      prjCod: 'PRJ-1',
+      procStatus: 'REJECTED' as const,
+      busKey: 'requisition_application:7',
+      procInstId: 'PROC-7',
+      procKey: 'PROC-KEY',
+      formKey: 'PROC-KEY',
+    };
+
+    const result = await service.handleOaApprovalResult(payload, payload, 99n);
+
+    expect(result).toMatchObject({ processed: true, procStatus: 'REJECTED' });
+    expect(tx.hspsi_draw_approve_output_exit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ comfirm_status: 0, exit_qty: 2 }),
+      }),
+    );
   });
 });
 
@@ -1195,11 +1464,22 @@ describe('RequisitionService direct output cross-org options and authorization',
         {
           directOutput: true,
           requestKey: 'direct-unauthorized-0001',
+          drawType: 1,
           orgId: 2,
           warehouseId: 3,
           deptId: 4,
           receiverId: 5,
-          details: [{ goodsId: 1, skuId: 1, batchNo: 'PH01', unitType: 1, quantity: 1 }],
+          details: [
+            {
+              goodsId: 1,
+              skuId: 1,
+              batchNo: 'PH01',
+              unitType: 1,
+              drawQty: 1,
+              quantity: 1,
+              returnable: false,
+            },
+          ],
         },
         user as never,
       ),

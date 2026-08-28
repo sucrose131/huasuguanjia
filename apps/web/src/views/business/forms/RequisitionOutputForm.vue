@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import SignaturePad from '@/components/requisition/SignaturePad.vue';
 import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
@@ -36,13 +37,14 @@ function blankLine() {
     skuId: '',
     unitType: 0,
     batchNo: '',
+    drawQty: 1,
     quantity: 1,
     applicationQty: 0,
     historicalQty: 0,
     remainingQty: null,
     applicationDetailId: '',
     outputDetailId: '',
-    returnable: null,
+    returnable: Number(form.value.drawType) === 2,
     remark: '',
   };
 }
@@ -70,13 +72,22 @@ function selectedStock(line: any) {
     (x: any) => `${x.goodsId}-${x.skuId}-${x.warehouseId}-${x.batchNo}` === line.stockKey,
   );
 }
+/** 剩余可出：直接出库 = min(申请数量, 批次库存)；非直接 = 申请剩余可出 */
+function remainingOutputQty(line: any) {
+  if (form.value.directOutput) {
+    // 创建/编辑用 drawQty，查看直接出库记录时明细回显的是 applicationQty
+    const applyQty = Number(line.drawQty ?? line.applicationQty ?? 0);
+    const stock = selectedStock(line);
+    const stockQty = stock ? Math.max(0, Number(stock.inventoryQty) || 0) : Infinity;
+    return Math.min(Math.max(0, applyQty), stockQty);
+  }
+  return Math.max(0, Number(line.remainingQty) || 0);
+}
+
 function maxOutputQty(line: any) {
-  // 直接领用出库没有申请剩余量：未选库存批次时不设上限，选中后按批次库存量封顶
   // 所有分支保证 max >= 1，避免 el-input-number 在 min > max 时抛错导致表格渲染崩溃
   if (form.value.directOutput) {
-    const stock = selectedStock(line);
-    if (!stock) return undefined;
-    return Math.max(1, Number(stock.inventoryQty) || 0);
+    return Math.max(1, remainingOutputQty(line) || 1);
   }
   const remaining = Math.max(0, Number(line.remainingQty) || 0);
   const stock = selectedStock(line);
@@ -89,10 +100,12 @@ function unitName(line: any) {
 }
 
 async function loadDicts() {
-  const [confirm] = await Promise.all([
+  const [confirm, drawType] = await Promise.all([
     api.get('/dictionaries/requisition_confirm_status').catch(() => []),
+    api.get('/dictionaries/draw_type').catch(() => []),
   ]);
   dicts.requisition_confirm_status = confirm as any[];
+  dicts.draw_type = drawType as any[];
 }
 
 async function loadRequisitionOptions(orgId: unknown, deptId?: unknown, preserveWarehouses = false) {
@@ -138,7 +151,7 @@ async function directWarehouseChanged() {
   form.value.orgId = String(raw.orgId ?? '');
   form.value.deptId = '';
   form.value.receiverId = '';
-  form.value.details = [{ ...blankLine(), returnable: true }];
+  form.value.details = [{ ...blankLine() }];
   await loadRequisitionOptions(form.value.orgId, '', true);
   // 部门自动带出：仓库挂部门则直接选中；组织只有一个启用部门则自动选中；否则留空手选
   const depts = options.requisitionDepts ?? [];
@@ -156,6 +169,20 @@ async function directWarehouseChanged() {
 async function deptChanged() {
   if (!form.value.directOutput || !form.value.orgId) return;
   await loadRequisitionOptions(form.value.orgId, form.value.deptId, true);
+}
+
+/** 直接领用出库：切换领用类型联动明细“是否可归还”（借用=可归还，直接领用=无需归还） */
+function directDrawTypeChanged(value: unknown) {
+  const returnable = Number(value) === 2;
+  for (const line of form.value.details ?? []) line.returnable = returnable;
+}
+
+/** 直接领用出库：领用人签字（签署人默认=领用接收人） */
+function signatureChanged(value: string) {
+  form.value.signatureContent = value;
+  form.value.signatureAttachment = '';
+  form.value.signedBy = value ? form.value.receiverId : '';
+  form.value.signedAt = value ? new Date().toISOString() : null;
 }
 
 async function applicationChanged() {
@@ -236,6 +263,10 @@ function removeLine(index: number) {
 
 function validate() {
   if (form.value.directOutput) {
+    if (![1, 2].includes(Number(form.value.drawType))) {
+      ElMessage.warning('请选择领用类型');
+      return false;
+    }
     if (
       !form.value.orgId ||
       !form.value.warehouseId ||
@@ -245,12 +276,30 @@ function validate() {
       ElMessage.warning('请选择所属组织、领用部门、领用仓库和接收人');
       return false;
     }
+    const lines = form.value.details ?? [];
     if (
-      !(form.value.details ?? []).some(
+      !lines.some(
         (line: any) => line.goodsId && line.skuId && line.batchNo && Number(line.quantity) > 0,
       )
     ) {
       ElMessage.warning('请至少选择一条完整的库存批次并填写出库数量');
+      return false;
+    }
+    if (lines.some((line: any) => line.goodsId && Number(line.drawQty ?? 0) < 1)) {
+      ElMessage.warning('申请数量必须为正整数');
+      return false;
+    }
+    if (
+      lines.some((line: any) => line.goodsId && Number(line.quantity) > Number(line.drawQty))
+    ) {
+      ElMessage.warning('出库数量不能超过申请数量');
+      return false;
+    }
+    if (
+      !String(form.value.signatureContent ?? '').trim() &&
+      !String(form.value.signatureAttachment ?? '').trim()
+    ) {
+      ElMessage.warning('保存前必须完成领用人签字');
       return false;
     }
   } else if (!form.value.applicationId) {
@@ -273,7 +322,9 @@ async function save() {
   try {
     if (form.value.directOutput) {
       await ElMessageBox.confirm(
-        '保存后将立即扣减库存，并自动生成一张已通过的领用申请单。是否继续？',
+        Number(form.value.drawType) === 2
+          ? '保存后将立即扣减库存，并同步反向生成借用领用申请单提交OA审批。是否继续？'
+          : '保存后将立即扣减库存，并自动生成一张已通过的领用申请单。是否继续？',
         '确认直接领用出库',
         { type: 'warning' },
       );
@@ -320,8 +371,8 @@ onMounted(async () => {
       form.value.drawType = 2;
       form.value.deptId = '';
       form.value.receiverId = '';
-      if (!(form.value.details ?? []).length)
-        form.value.details = [{ ...blankLine(), returnable: true }];
+      form.value.applicantId = ''; // 反向申请单领用人由后端以接收人身份生成，无需前端携带
+      if (!(form.value.details ?? []).length) form.value.details = [{ ...blankLine() }];
       await loadDirectOutputWarehouses();
     } else {
       form.value.details = [];
@@ -357,6 +408,20 @@ onMounted(async () => {
             :key="x.id"
             :label="x.applicationNo"
             :value="x.id"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="form.directOutput" label="领用类型" required>
+        <el-select
+          v-model="form.drawType"
+          :disabled="isView"
+          @change="directDrawTypeChanged"
+        >
+          <el-option
+            v-for="item in dicts.draw_type || []"
+            :key="item.value"
+            :label="item.label"
+            :value="Number(item.value)"
           />
         </el-select>
       </el-form-item>
@@ -453,9 +518,22 @@ onMounted(async () => {
           }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="applicationQty" label="申请数量" width="110" />
+      <el-table-column label="申请数量" width="130">
+        <template #default="s">
+          <el-input-number
+            v-if="form.directOutput && !isView"
+            v-model="s.row.drawQty"
+            :min="1"
+            :precision="0"
+            :step="1"
+          />
+          <span v-else>{{ s.row.applicationQty ?? s.row.drawQty ?? '—' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="historicalQty" label="历史已出" width="110" />
-      <el-table-column prop="remainingQty" label="剩余可出" width="110" />
+      <el-table-column label="剩余可出" width="110">
+        <template #default="s">{{ remainingOutputQty(s.row) }}</template>
+      </el-table-column>
       <el-table-column label="库存批次" min-width="190">
         <template #default="s">
           <el-select
@@ -502,6 +580,24 @@ onMounted(async () => {
         </template>
       </el-table-column>
     </el-table>
+
+    <el-form-item
+      v-if="form.directOutput"
+      label="领用人签字"
+      required
+      class="span-2"
+      style="margin-top: 12px"
+    >
+      <SignaturePad
+        :model-value="form.signatureContent"
+        :has-stored-signature="Boolean(form.signatureAttachment)"
+        :disabled="mode === 'view' || !form.receiverId"
+        @update:model-value="signatureChanged"
+      />
+      <div v-if="!form.receiverId && !isView" class="warehouse-hint">
+        请先选择仓库与领用接收人，再由接收人完成签字
+      </div>
+    </el-form-item>
 
     <div class="form-grid" style="margin-top: 12px">
       <el-form-item label="备注" class="span-2">

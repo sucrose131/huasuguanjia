@@ -54,7 +54,7 @@ export class RequisitionOaApprovalService {
     // 不信任前端自动填入的主身份 staff_id（多账套用户可能跨账套错配）。
     const appBrief = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
-      select: { org_id: true, draw_type: true },
+      select: { org_id: true, draw_type: true, applicant_id: true },
     });
     if (!appBrief) throw new BadRequestException('领用申请不存在');
     // 非「借用」类型的领用申请走系统内审批，不推送 OA。
@@ -67,15 +67,34 @@ export class RequisitionOaApprovalService {
     });
     if (!orgBrief?.account_set_id) throw new BadRequestException('领用申请所属组织未关联OA账套');
     const accountSetId = orgBrief.account_set_id;
-    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
-      where: { user_id: BigInt(userId), account_set_id: accountSetId },
-      select: { staff_id: true },
+    // 直接领用出库反向生成的借用申请：以领用人（接收人）的身份发起 OA，操作人仅作系统提交人；
+    // 正常借用申请：申请人必须是提交人在单据账套下的 OA 员工身份（防跨账套错配）。
+    const directOutput = await this.prisma.hspsi_draw_approve_output.findFirst({
+      where: {
+        draw_id: drawId,
+        generation_key: { startsWith: 'direct-requisition-output:' },
+        deleted_at: null,
+      },
+      select: { draw_output_id: true },
     });
-    if (!identity?.staff_id) {
-      throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
+    let applicantStaffId: bigint;
+    if (directOutput) {
+      if (!appBrief.applicant_id || appBrief.applicant_id <= 0n) {
+        throw new BadRequestException('领用申请领用人无效，无法发起OA');
+      }
+      applicantStaffId = appBrief.applicant_id;
+    } else {
+      const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+        where: { user_id: BigInt(userId), account_set_id: accountSetId },
+        select: { staff_id: true },
+      });
+      if (!identity?.staff_id) {
+        throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
+      }
+      applicantStaffId = identity.staff_id;
     }
     const form = await this.mappingService.getMapping(BUSINESS_TYPE, accountSetId);
-    const context = await this.buildSubmissionContext(drawId, form, accountSetId, identity.staff_id);
+    const context = await this.buildSubmissionContext(drawId, form, accountSetId, applicantStaffId);
     const credential = await this.credentialService.getById(context.accountSetId);
     if (!credential) throw new BadRequestException('领用人所属OA账套未启用');
 

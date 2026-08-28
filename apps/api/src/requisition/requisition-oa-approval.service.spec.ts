@@ -62,6 +62,7 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
   };
   const prisma = {
     hspsi_draw_approve: { findFirst: vi.fn().mockResolvedValue(application) },
+    hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(null) },
     hspsi_draw_approve_detail: {
       findMany: vi
         .fn()
@@ -180,6 +181,26 @@ describe('RequisitionOaApprovalService', () => {
 
     expect(result).toMatchObject({ procStatus: 'RUNNING', procInstId: 'PROC-1' });
     expect(approvalService.startFormProcess).not.toHaveBeenCalled();
+  });
+
+  it('initiates OA with the applicant identity for a direct-output borrow (代提交)', async () => {
+    const { service, prisma, approvalService } = createFixture();
+    // 直接领用出库反向生成的借用申请：存在 generation_key 以 direct-requisition-output: 开头的出库单
+    (prisma.hspsi_draw_approve_output.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      draw_output_id: 12n,
+    });
+
+    const result = await service.submit(7n, '5');
+
+    expect(result).toMatchObject({ procStatus: 'RUNNING' });
+    // 代提交：不再解析提交人的 OA 身份
+    expect(prisma.hspsi_sys_user_oa_staff.findFirst).not.toHaveBeenCalled();
+    // 发起人以领用人（applicant_id=9n）的 OA 身份为准
+    const params = approvalService.startFormProcess.mock.calls[0]![1];
+    expect(params).toMatchObject({ starterId: 'MEMBER-9', starterOrgId: 'DEPT-6' });
+    expect(JSON.parse(params.formData)['51c0cg9xhbzv']).toEqual([
+      { USRNAM: '张三', STFSEQ: 'STAFF-9', USRNBR: 'MEMBER-9', ORGSEQ: 'DEPT-6' },
+    ]);
   });
 
   it('keeps the local application and marks the OA instance failed when push fails', async () => {

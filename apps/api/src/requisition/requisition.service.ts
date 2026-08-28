@@ -1021,6 +1021,17 @@ export class RequisitionService {
     const application = await tx.hspsi_draw_approve.findUniqueOrThrow({
       where: { draw_id: drawId },
     });
+    // 直接领用出库反向生成的申请单：出库单已存在（generation_key 为 direct-requisition-output: 前缀），
+    // 审批通过时直接复用，不得再自动生成第二张出库单。
+    const directOutput = await tx.hspsi_draw_approve_output.findFirst({
+      where: {
+        draw_id: drawId,
+        generation_key: { startsWith: 'direct-requisition-output:' },
+        deleted_at: null,
+      },
+      orderBy: { draw_output_id: 'desc' },
+    });
+    if (directOutput) return directOutput;
     const existing = await tx.hspsi_draw_approve_output.findUnique({
       where: { generation_key: generationKey },
     });
@@ -1334,6 +1345,18 @@ export class RequisitionService {
           outputId = output.draw_output_id;
           await this.syncApprovedRequisitionTodos(tx, application, '0');
         } else {
+          // OA 驳回：若该申请已存在直接领用出库单（先出库后审批），自动生成待确认退回单追回物资
+          const directOutput = await tx.hspsi_draw_approve_output.findFirst({
+            where: {
+              draw_id: application.draw_id,
+              generation_key: { startsWith: 'direct-requisition-output:' },
+              deleted_at: null,
+            },
+            orderBy: { draw_output_id: 'desc' },
+          });
+          if (directOutput) {
+            await this.ensureRejectedDirectOutputReturn(tx, application, directOutput, '0');
+          }
           await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
         }
       } else if (payload.procStatus === 'PASSED') {
@@ -1672,6 +1695,8 @@ export class RequisitionService {
             receiverId: item.receiver_id,
             outDate: item.output_date,
             autoCreated: item.auto_created === 1,
+            directOutput: item.generation_key?.startsWith('direct-requisition-output:') ?? false,
+            drawType: application.draw_type,
             confirmStatus: item.comfirm_status,
             confirmComment: item.comfirm_comment,
             confirmBy: item.comfirm_by,
@@ -1912,15 +1937,29 @@ export class RequisitionService {
 
   private async saveDirectOutput(body: Body, user: AuthUser) {
     const generationKey = this.directOutputGenerationKey(body.requestKey);
+    const drawType = Number(body.drawType ?? 0);
+    if (drawType !== 1 && drawType !== 2) throw new BadRequestException('领用类型无效');
     const lines = this.detailLines(body.details).map((line) => {
       const batchNo = String(line.batchNo ?? '').trim();
       if (!batchNo) throw new BadRequestException('直接领用出库必须选择库存批次');
+      const drawQty = this.positiveQuantity(line.drawQty, '申请数量');
+      const quantity = this.positiveQuantity(line.quantity, '出库数量');
+      if (quantity > drawQty) throw new BadRequestException('出库数量不能超过申请数量');
+      const returnable = this.returnable(line.returnable);
+      if (drawType === 1 && returnable === 1) {
+        throw new BadRequestException('直接领用的明细必须选择“无需归还”');
+      }
+      if (drawType === 2 && returnable === 0) {
+        throw new BadRequestException('借用的明细必须选择“可归还”');
+      }
       return {
         goodsId: this.bigint(line.goodsId, '商品'),
         skuId: this.bigint(line.skuId, 'SKU'),
         batchNo,
         unitType: Number(line.unitType ?? 0),
-        quantity: this.positiveQuantity(line.quantity, '出库数量'),
+        drawQty,
+        quantity,
+        returnable,
         remark: String(line.remark ?? ''),
       };
     });
@@ -1930,6 +1969,20 @@ export class RequisitionService {
     const deptId = this.bigint(body.deptId, '领用部门');
     const receiverId = this.bigint(body.receiverId, '领用接收人');
     const userId = user.id;
+
+    // 领用人签字：必填；签署人默认=领用接收人（领用人）。签名 dataUrl 先上传 OSS，再进事务。
+    const submittedSignature = String(body.signatureContent ?? '').trim();
+    if (!submittedSignature && !String(body.signatureAttachment ?? '').trim()) {
+      throw new BadRequestException('直接领用出库必须完成领用人签字确认');
+    }
+    const uploadedSignature = submittedSignature
+      ? await this.attachmentsService.uploadSignatureDataUrlForIntegration(
+          'requisition_application',
+          submittedSignature,
+          userId,
+        )
+      : null;
+    const signedAt = new Date();
 
     const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.hspsi_draw_approve_output.findUnique({
@@ -1948,7 +2001,7 @@ export class RequisitionService {
         warehouseId,
         deptId,
         applicantId: receiverId,
-        drawType: 2,
+        drawType,
       });
       await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
       const [applicationNo, outputNo] = await Promise.all([
@@ -1956,28 +2009,34 @@ export class RequisitionService {
         this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT),
       ]);
       const now = new Date();
-      const total = lines.reduce((sum, line) => sum + line.quantity, 0);
+      const drawTotal = lines.reduce((sum, line) => sum + line.drawQty, 0);
+      const factTotal = lines.reduce((sum, line) => sum + line.quantity, 0);
+      const attachments = uploadedSignature
+        ? [...this.attachmentItems(undefined), uploadedSignature]
+        : [];
+      const approvedDirect = drawType === 1;
       const application = await tx.hspsi_draw_approve.create({
         data: {
           draw_no: applicationNo,
-          draw_qty: total,
-          fact_draw_qty: total,
+          draw_qty: drawTotal,
+          fact_draw_qty: factTotal,
           org_id: orgId,
           warehouse_id: warehouseId,
           dept_id: deptId,
           applicant_id: receiverId,
-          draw_type: 2,
+          draw_type: drawType,
           draw_date: new Date(body.outDate ?? now),
           draw_reason: String(body.reason ?? body.remark ?? '').trim() || '直接领用出库反向生成',
+          attachments,
           signature_content: null,
-          signature_attachment: '',
-          signed_by: 0n,
-          signed_at: null,
+          signature_attachment: uploadedSignature?.id ?? '',
+          signed_by: receiverId,
+          signed_at: signedAt,
           status: 1,
-          approve_status: 1,
-          approve_comment: '直接领用出库后由系统自动生成并标记通过',
-          approve_by: BigInt(userId),
-          approve_date: now,
+          approve_status: approvedDirect ? 1 : 0,
+          approve_comment: approvedDirect ? '直接领用出库后由系统自动生成并标记通过' : '',
+          approve_by: approvedDirect ? BigInt(userId) : 0n,
+          approve_date: approvedDirect ? now : null,
           remark: String(body.remark ?? ''),
           created_by: BigInt(userId),
           updated_by: BigInt(userId),
@@ -1992,8 +2051,8 @@ export class RequisitionService {
               sku_id: line.skuId,
               batch_no: line.batchNo,
               unit_type: line.unitType,
-              draw_qty: line.quantity,
-              is_returnable: 1,
+              draw_qty: line.drawQty,
+              is_returnable: line.returnable,
               remark: line.remark,
             },
           }),
@@ -2027,9 +2086,9 @@ export class RequisitionService {
           sku_id: line.skuId,
           batch_no: line.batchNo,
           unit_type: line.unitType,
-          draw_qty: line.quantity,
+          draw_qty: line.drawQty,
           fact_draw_qty: line.quantity,
-          is_returnable: 1,
+          is_returnable: line.returnable,
           remark: line.remark,
         })),
       });
@@ -2090,6 +2149,19 @@ export class RequisitionService {
         already: false,
       };
     });
+    // 借用：反向生成的申请单与正常借用一样走 OA 审核（幂等重放时不重复提交）
+    if (drawType === 2 && !result.already) {
+      const oa = await this.oaApproval.submit(result.applicationId, userId);
+      return {
+        id: result.outputId,
+        applicationId: result.applicationId,
+        message:
+          oa.procStatus === 'PUSH_FAILED'
+            ? `直接领用出库已完成，但提交OA失败：${oa.errorMessage ?? '请稍后重试'}`
+            : '直接领用出库已完成，借用申请已提交OA审批',
+        oaStatus: oa.procStatus,
+      };
+    }
     return {
       id: result.outputId,
       applicationId: result.applicationId,
