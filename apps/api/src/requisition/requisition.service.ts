@@ -1647,30 +1647,35 @@ export class RequisitionService {
       };
     });
     const enrichedDetails = await this.references.enrichGoods(mappedDetails);
-    const [enriched] = await this.enrichRequisitionStaff([
-      {
-        ...item,
-        id: item.draw_output_id,
-        outputNo: item.draw_output_no ?? '',
-        applicationId: item.draw_id,
-        applicationNo: application.draw_no,
-        applicantId: application.applicant_id,
-        orgId: item.org_id,
-        warehouseId: item.warehouse_id,
-        deptId: item.dept_id,
-        receiverId: item.receiver_id,
-        outDate: item.output_date,
-        autoCreated: item.auto_created === 1,
-        confirmStatus: item.comfirm_status,
-        confirmComment: item.comfirm_comment,
-        confirmBy: item.comfirm_by,
-        confirmDate: item.comfirm_date,
-        hasReturnableItems: mappedDetails.some(
-          (detail) => detail.returnable && detail.returnableRemainingQty > 0,
-        ),
-        details: enrichedDetails,
-      },
-    ]);
+    const [enriched] = await this.enrichRequisitionStaff(
+      await this.references.enrich(
+        [
+          {
+            ...item,
+            id: item.draw_output_id,
+            outputNo: item.draw_output_no ?? '',
+            applicationId: item.draw_id,
+            applicationNo: application.draw_no,
+            applicantId: application.applicant_id,
+            orgId: item.org_id,
+            warehouseId: item.warehouse_id,
+            deptId: item.dept_id,
+            receiverId: item.receiver_id,
+            outDate: item.output_date,
+            autoCreated: item.auto_created === 1,
+            confirmStatus: item.comfirm_status,
+            confirmComment: item.comfirm_comment,
+            confirmBy: item.comfirm_by,
+            confirmDate: item.comfirm_date,
+            hasReturnableItems: mappedDetails.some(
+              (detail) => detail.returnable && detail.returnableRemainingQty > 0,
+            ),
+            details: enrichedDetails,
+          },
+        ],
+        { confirmStatus: 'requisition_confirm_status' },
+      ),
+    );
     return enriched!;
   }
 
@@ -2331,47 +2336,55 @@ export class RequisitionService {
           where: { draw_output_id: output.draw_output_id },
         })
       : [];
-    const [enriched] = await this.enrichRequisitionStaff([
-      {
-        ...item,
-        id: item.draw_exit_id,
-        returnNo: item.draw_exit_no ?? '',
-        applicationId: item.draw_id,
-        applicationNo: application?.draw_no ?? '',
-        applicantId: application?.applicant_id ?? 0,
-        outputId: item.draw_output_id,
-        outputNo: output?.draw_output_no ?? '',
-        orgId: item.org_id,
-        warehouseId: item.warehouse_id,
-        deptId: item.dept_id,
-        receiverId: item.receiver_id,
-        returnDate: item.return_date,
-        reason: item.exit_reson,
-        status: item.status,
-        confirmStatus: item.comfirm_status,
-        confirmComment: item.comfirm_comment,
-        confirmBy: item.comfirm_by,
-        confirmDate: item.comfirm_date,
-        details: details.map((detail) => {
-          const source = sourceDetails.find(
-            (sourceDetail) => sourceDetail.output_detail_id === detail.draw_output_detail_id,
-          );
-          return {
-            id: detail.exit_detail_id,
-            outputDetailId: detail.draw_output_detail_id,
-            goodsId: detail.goods_id,
-            skuId: detail.sku_id,
-            batchNo: detail.batch_no,
-            unitType: detail.unit_type,
-            issuedQty: detail.so_qty,
-            quantity: detail.exit_qty,
-            storageLocation: detail.storage_location,
-            returnable: source?.is_returnable === 1,
-            remark: detail.remark,
-          };
-        }),
-      },
-    ]);
+    const [enriched] = await this.enrichRequisitionStaff(
+      await this.references.enrich(
+        [
+          {
+            ...item,
+            id: item.draw_exit_id,
+            returnNo: item.draw_exit_no ?? '',
+            applicationId: item.draw_id,
+            applicationNo: application?.draw_no ?? '',
+            applicantId: application?.applicant_id ?? 0,
+            outputId: item.draw_output_id,
+            outputNo: output?.draw_output_no ?? '',
+            orgId: item.org_id,
+            warehouseId: item.warehouse_id,
+            deptId: item.dept_id,
+            receiverId: item.receiver_id,
+            returnDate: item.return_date,
+            reason: item.exit_reson,
+            status: item.status,
+            confirmStatus: item.comfirm_status,
+            confirmComment: item.comfirm_comment,
+            confirmBy: item.comfirm_by,
+            confirmDate: item.comfirm_date,
+            details: details.map((detail) => {
+              const source = sourceDetails.find(
+                (sourceDetail) => sourceDetail.output_detail_id === detail.draw_output_detail_id,
+              );
+              return {
+                id: detail.exit_detail_id,
+                outputDetailId: detail.draw_output_detail_id,
+                goodsId: detail.goods_id,
+                skuId: detail.sku_id,
+                batchNo: detail.batch_no,
+                unitType: detail.unit_type,
+                issuedQty: detail.so_qty,
+                quantity: detail.exit_qty,
+                storageLocation: detail.storage_location,
+                returnable: source?.is_returnable === 1,
+                remark: detail.remark,
+              };
+            }),
+          },
+        ],
+        {
+          status: 'requisition_status',
+          confirmStatus: 'requisition_confirm_status',
+        },
+      ),
+    );
     return enriched!;
   }
 

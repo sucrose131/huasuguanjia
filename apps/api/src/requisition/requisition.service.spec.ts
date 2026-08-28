@@ -46,11 +46,15 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     resolveRecipients: vi.fn().mockResolvedValue([]),
   };
   const oaApproval = { submit: vi.fn() };
+  const references = {
+    enrich: vi.fn(async (rows: unknown) => rows),
+    enrichGoods: vi.fn(async (rows: unknown) => rows),
+  };
   return {
     service: new RequisitionService(
       prisma as never,
       posting as never,
-      { enrich: vi.fn(), enrichGoods: vi.fn(async (rows: unknown) => rows) } as never,
+      references as never,
       documentTrace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       oaApproval as never,
@@ -64,6 +68,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     attachmentsService,
     todoService,
     oaApproval,
+    references,
   };
 }
 
@@ -159,6 +164,166 @@ describe('RequisitionService output detail quantities', () => {
         returnableRemainingQty: 0,
       }),
     ]);
+  });
+});
+
+describe('RequisitionService return-source staff and department enrichment', () => {
+  function outputRoot() {
+    return {
+      hspsi_draw_approve_output: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_output_id: 12n,
+          draw_output_no: 'DRO12',
+          draw_id: 7n,
+          org_id: 9n,
+          warehouse_id: 3n,
+          dept_id: 70n,
+          receiver_id: 3n,
+          output_date: new Date('2026-08-28'),
+          auto_created: 0,
+          comfirm_status: 1,
+          comfirm_comment: '',
+          comfirm_by: 0n,
+          comfirm_date: null,
+        }),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            output_detail_id: 120n,
+            draw_output_id: 12n,
+            draw_detail_id: 70n,
+            goods_id: 1n,
+            sku_id: 2n,
+            batch_no: '',
+            unit_type: 1,
+            draw_qty: 3,
+            fact_draw_qty: 3,
+            is_returnable: 1,
+            remark: '',
+          },
+        ]),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_id: 7n,
+          draw_no: 'DR7',
+          applicant_id: 3n,
+        }),
+      },
+      hspsi_draw_approve_detail: {
+        findMany: vi.fn().mockResolvedValue([{ draw_detail_id: 70n, draw_qty: 3 }]),
+      },
+      hspsi_draw_approve_output_exit: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_basic_staff: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 3n, name: '张三', staff_code: 'S3' },
+        ]),
+      },
+      hspsi_sys_user: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+  }
+
+  it('output detail runs references.enrich so deptName is returned and staff name fills receiver', async () => {
+    const root = outputRoot();
+    const { service, references } = serviceWithTransaction({}, root);
+
+    const detail: any = await service.output('12');
+
+    expect(references.enrich).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ deptId: 70n, receiverId: 3n, applicantId: 3n }),
+      ]),
+      { confirmStatus: 'requisition_confirm_status' },
+    );
+    expect(detail.receiverIdName).toBe('张三');
+    expect(detail.applicantIdName).toBe('张三');
+  });
+
+  it('return detail runs references.enrich with status dictionaries so deptName is returned', async () => {
+    const root = {
+      hspsi_draw_approve_output_exit: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_exit_id: 22n,
+          draw_exit_no: 'DRR22',
+          draw_id: 7n,
+          draw_output_id: 12n,
+          exit_reson: '退回测试',
+          exit_qty: 1,
+          org_id: 9n,
+          warehouse_id: 3n,
+          dept_id: 70n,
+          receiver_id: 3n,
+          return_date: new Date('2026-08-28'),
+          status: 1,
+          comfirm_status: 1,
+          comfirm_comment: '',
+          comfirm_by: 0n,
+          comfirm_date: null,
+        }),
+      },
+      hspsi_draw_approve_output_exit_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            exit_detail_id: 220n,
+            draw_exit_id: 22n,
+            draw_output_detail_id: 120n,
+            goods_id: 1n,
+            sku_id: 2n,
+            batch_no: '',
+            unit_type: 1,
+            so_qty: 3,
+            exit_qty: 1,
+            storage_location: '',
+            remark: '',
+          },
+        ]),
+      },
+      hspsi_draw_approve_output: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_output_id: 12n,
+          draw_output_no: 'DRO12',
+          draw_id: 7n,
+        }),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_id: 7n,
+          draw_no: 'DR7',
+          applicant_id: 3n,
+        }),
+      },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            output_detail_id: 120n,
+            draw_output_id: 12n,
+            is_returnable: 1,
+          },
+        ]),
+      },
+      hspsi_basic_staff: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 3n, name: '张三', staff_code: 'S3' },
+        ]),
+      },
+      hspsi_sys_user: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const { service, references } = serviceWithTransaction({}, root);
+
+    const detail: any = await service.returnOne('22');
+
+    expect(references.enrich).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ deptId: 70n, receiverId: 3n }),
+      ]),
+      {
+        status: 'requisition_status',
+        confirmStatus: 'requisition_confirm_status',
+      },
+    );
+    expect(detail.receiverIdName).toBe('张三');
   });
 });
 

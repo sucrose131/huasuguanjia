@@ -38,7 +38,8 @@ async function sourceOutputChanged() {
     deptId: o.deptId,
     receiverId: o.receiverId ?? o.applicantId,
     deptName: o.deptName ?? o.departmentName ?? '',
-    receiverName: o.receiverName ?? o.applicantName ?? '',
+    receiverName:
+      o.receiverIdName ?? o.applicantIdName ?? o.receiverName ?? o.applicantName ?? '',
   });
   form.value.details = (o.details ?? [])
     .filter((x: any) => Boolean(x.returnable) && Number(x.returnableRemainingQty) > 0)
@@ -164,6 +165,7 @@ onMounted(async () => {
           :model-value="
             form.receiverName ||
             form.returnerName ||
+            form.receiverIdName ||
             optionName(options.receivers || [], form.receiverId)
           "
           readonly
