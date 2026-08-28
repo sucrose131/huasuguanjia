@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { filterMappedGoodsByKeyword } from '@/utils/goods-warehouse';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -19,6 +20,7 @@ const options = reactive<Record<string, any>>({
   warehouses: [],
   units: [],
   goodsSkus: [],
+  orgGoods: [],
   contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
@@ -56,6 +58,16 @@ async function loadContextGoods() {
   })) as any[];
 }
 
+async function loadOrganizationGoods() {
+  if (!form.value.orgId) {
+    options.orgGoods = [];
+    return;
+  }
+  options.orgGoods = (await api
+    .get('/production/all-product-options', { params: { orgId: form.value.orgId } })
+    .catch(() => [])) as any[];
+}
+
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
 async function loadOrgWarehouses(orgId: unknown) {
   if (!orgId) {
@@ -67,11 +79,16 @@ async function loadOrgWarehouses(orgId: unknown) {
     .catch(() => [])) as any[];
 }
 
-function organizationChanged() {
+async function organizationChanged() {
   form.value.warehouseId = '';
+  form.value.goodsId = '';
+  form.value.skuId = '';
+  form.value.goodsCode = '';
+  form.value.goodsName = '';
   form.value.details = [blankLine()];
+  options.orgGoods = [];
   options.contextGoods = [];
-  loadOrgWarehouses(form.value.orgId);
+  await Promise.all([loadOrgWarehouses(form.value.orgId), loadOrganizationGoods()]);
 }
 
 function businessWarehouseChanged() {
@@ -102,20 +119,14 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  // 成品选择始终走远程搜索，不再依赖 onMounted 全量商品列表
-  const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
-  return (r.items ?? []).map((g: any) => ({
+  return filterMappedGoodsByKeyword(options.orgGoods, keyword).map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
   }));
 }
 
 async function searchLineGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
-  );
-  return list.map((g: any) => ({
+  return filterMappedGoodsByKeyword(options.contextGoods, keyword).map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
   }));
@@ -207,7 +218,7 @@ onMounted(async () => {
     }));
     await loadContextGoods();
   }
-  await loadOrgWarehouses(form.value.orgId);
+  await Promise.all([loadOrgWarehouses(form.value.orgId), loadOrganizationGoods()]);
 });
 </script>
 

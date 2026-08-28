@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { filterGoodsByWarehouseType, warehouseTypeOf } from './goods-warehouse';
+import {
+  filterGoodsByWarehouseType,
+  filterMappedGoodsByKeyword,
+  warehouseTypeOf,
+} from './goods-warehouse';
 
 const goods = [
   { id: 1, goodsName: '原料A', categoryWarehouseType: 1 },
@@ -13,13 +17,40 @@ describe('filterGoodsByWarehouseType', () => {
     expect(filterGoodsByWarehouseType(goods, undefined)).toHaveLength(3);
   });
 
-  it('选了仓库后只保留匹配类型与无类型商品', () => {
+  it('选了仓库后只保留仓库类型完全匹配的商品', () => {
     const result = filterGoodsByWarehouseType(goods, 1);
-    expect(result.map((g) => g.id)).toEqual([1, 3]);
+    expect(result.map((g) => g.id)).toEqual([1]);
   });
 
   it('空列表安全返回', () => {
     expect(filterGoodsByWarehouseType([], 1)).toEqual([]);
+  });
+});
+
+describe('filterMappedGoodsByKeyword', () => {
+  const searchableGoods = [
+    {
+      id: 1,
+      queryCode: 'KF-001',
+      goodsName: '康复训练弹力带',
+      shortName: '弹力带',
+      brandName: '华溯',
+    },
+    { id: 2, queryCode: 'WATER-01', goodsName: '低氘水', shortName: '', brandName: '清源' },
+  ];
+
+  it('支持名称、编码、简称和品牌，并忽略首尾空格及大小写', () => {
+    expect(filterMappedGoodsByKeyword(searchableGoods, ' 弹力带 ').map((item) => item.id)).toEqual([
+      1,
+    ]);
+    expect(filterMappedGoodsByKeyword(searchableGoods, 'water').map((item) => item.id)).toEqual([
+      2,
+    ]);
+    expect(filterMappedGoodsByKeyword(searchableGoods, '华溯').map((item) => item.id)).toEqual([1]);
+  });
+
+  it('清空关键字后恢复全部映射候选', () => {
+    expect(filterMappedGoodsByKeyword(searchableGoods, '  ')).toEqual(searchableGoods);
   });
 });
 

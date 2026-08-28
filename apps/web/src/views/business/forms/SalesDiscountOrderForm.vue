@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { filterMappedGoodsByKeyword } from '@/utils/goods-warehouse';
 import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
@@ -173,13 +174,7 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '')
-    .trim()
-    .toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
-  );
-  return list.map((g: any) => ({
+  return filterMappedGoodsByKeyword(options.contextGoods, keyword).map((g: any) => ({
     value: g.id,
     label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
   }));

@@ -75,7 +75,7 @@ describe('GoodsService categories', () => {
     );
 
     expect(prisma.hspsi_basic_warehouse.findMany).toHaveBeenCalledWith({
-      where: { org_id: 6n, status: 1, deleted_at: null },
+      where: { org_id: { in: [6n] }, status: 1, deleted_at: null },
       distinct: ['warehouse_type'],
       select: { warehouse_type: true },
     });
@@ -125,6 +125,34 @@ describe('GoodsService organization visibility', () => {
       }),
     ).resolves.toEqual([]);
     expect(warehouseFindMany).not.toHaveBeenCalled();
+  });
+
+  it('uses the union of primary and additional authorized organizations', async () => {
+    const warehouseFindMany = vi
+      .fn()
+      .mockResolvedValue([{ warehouse_type: 1 }, { warehouse_type: 2 }]);
+    const service = new GoodsService({
+      hspsi_basic_warehouse: { findMany: warehouseFindMany },
+    } as never, amountAccess as never);
+
+    await expect(
+      (service as any).visibleWarehouseTypes({
+        id: '9',
+        username: 'buyer',
+        orgId: '6',
+        deptId: null,
+        permissions: ['goods'],
+        authorizedOrganizations: [
+          { id: '6', name: '本组织' },
+          { id: '9', name: '额外组织' },
+        ],
+      }),
+    ).resolves.toEqual([1, 2]);
+    expect(warehouseFindMany).toHaveBeenCalledWith({
+      where: { org_id: { in: [6n, 9n] }, status: 1, deleted_at: null },
+      distinct: ['warehouse_type'],
+      select: { warehouse_type: true },
+    });
   });
 
   it('rejects direct detail access when the goods category is outside the user organization scope', async () => {

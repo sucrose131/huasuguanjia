@@ -28,6 +28,8 @@ function createService(initialInputEnabled = true) {
           unit_type: 3,
           query_code: 'WATER',
           goods_name: '饮用水',
+          short_name: '水',
+          brand_name: '清源',
         },
       ]),
     },
@@ -43,20 +45,50 @@ function createService(initialInputEnabled = true) {
         },
       ]),
     },
+    hspsi_basic_unit: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 3n, name: '瓶' },
+        { id: 5n, name: '箱' },
+      ]),
+    },
     $transaction: vi.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
   };
   const posting = { post: vi.fn().mockResolvedValue(undefined) };
   const businessNumber = { generate: vi.fn().mockResolvedValue(order.business_no) };
+  const masterData = {
+    assertWarehouse: vi.fn(),
+    goodsOptions: vi.fn().mockResolvedValue([{ goodsId: 1n }]),
+  };
   const service = new InventoryGeneralService(
     prisma as never,
     posting as never,
     businessNumber as never,
-    { assertWarehouse: vi.fn() } as never,
+    masterData as never,
   );
-  return { service, prisma, posting, tx };
+  return { service, prisma, posting, masterData, tx };
 }
 
 describe('InventoryGeneralService', () => {
+  it('loads inbound product options from the shared warehouse-type mapping', async () => {
+    const { service, prisma, masterData } = createService();
+
+    const result = await service.productOptions('2', '8');
+
+    expect(masterData.goodsOptions).toHaveBeenCalledWith(2n, 8n);
+    expect(prisma.hspsi_goods_info.findMany).toHaveBeenCalledWith({
+      where: { goods_id: { in: [1n] }, status: 1, deleted_at: null },
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        goodsId: 1n,
+        skuId: 4n,
+        shortName: '水',
+        brandName: '清源',
+        documentUnitName: '箱',
+      }),
+    ]);
+  });
+
   it('converts document quantity to integer pieces and snapshots base cost', async () => {
     const { service, posting, tx } = createService();
 
