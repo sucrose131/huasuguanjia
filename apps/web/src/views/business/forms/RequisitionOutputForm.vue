@@ -71,10 +71,17 @@ function selectedStock(line: any) {
   );
 }
 function maxOutputQty(line: any) {
+  // 直接领用出库没有申请剩余量：未选库存批次时不设上限，选中后按批次库存量封顶
+  // 所有分支保证 max >= 1，避免 el-input-number 在 min > max 时抛错导致表格渲染崩溃
+  if (form.value.directOutput) {
+    const stock = selectedStock(line);
+    if (!stock) return undefined;
+    return Math.max(1, Number(stock.inventoryQty) || 0);
+  }
   const remaining = Math.max(0, Number(line.remainingQty) || 0);
   const stock = selectedStock(line);
-  if (!stock) return remaining;
-  return Math.min(remaining, Math.max(0, Number(stock.inventoryQty) || 0));
+  if (!stock) return Math.max(1, remaining);
+  return Math.max(1, Math.min(remaining, Math.max(0, Number(stock.inventoryQty) || 0)));
 }
 function unitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
@@ -479,7 +486,10 @@ onMounted(async () => {
             :max="maxOutputQty(s.row)"
             :precision="0"
             :step="1"
-            :disabled="isView || !(Number(s.row.remainingQty) > 0)"
+            :disabled="
+              isView ||
+              (form.directOutput ? !selectedStock(s.row) : !(Number(s.row.remainingQty) > 0))
+            "
           />
         </template>
       </el-table-column>
