@@ -154,10 +154,12 @@ function selectableKey(item: Row) {
 }
 
 function selectableLabel(item: Row) {
+  const aliases = [item.shortName, item.brandName].filter(Boolean).join(' · ');
+  const aliasesText = aliases ? ` · ${aliases}` : '';
   const stockText = isInput.value
     ? ''
     : ` · 批次 ${item.batchNo || '无'} · 可用 ${item.inventoryQty}`;
-  return `${item.goodsCode || ''} ${item.goodsName} · ${item.skuSpec || '默认规格'}${stockText}`;
+  return `${item.goodsCode || ''} ${item.goodsName}${aliasesText} · ${item.skuSpec || '默认规格'}${stockText}`;
 }
 
 function selectProduct(line: Row) {

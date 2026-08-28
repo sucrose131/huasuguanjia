@@ -59,24 +59,15 @@ export class InventoryGeneralService {
     if (!orgIdValue || !warehouseIdValue) return [];
     const orgId = this.identifier(orgIdValue, '组织');
     const warehouseId = this.identifier(warehouseIdValue, '仓库');
-    const warehouse = await this.masterData.assertWarehouse(orgId, warehouseId);
+    const mappedOptions = await this.masterData.goodsOptions(orgId, warehouseId);
+    if (!mappedOptions.length) return [];
+    const mappedGoodsIds = mappedOptions.map((item) => item.goodsId);
     const goods = await this.prisma.hspsi_goods_info.findMany({
-      where: { org_id: { in: [0n, orgId] }, status: 1, deleted_at: null },
+      where: { goods_id: { in: mappedGoodsIds }, status: 1, deleted_at: null },
     });
-    const categories = await this.prisma.hspsi_goods_info_category.findMany({
-      where: {
-        goods_catg_id: { in: [...new Set(goods.map((item) => item.goods_catg_id))] },
-        warehouse_type: warehouse.warehouse_type,
-        status: 1,
-        deleted_at: null,
-      },
-      select: { goods_catg_id: true },
-    });
-    const categoryIds = new Set(categories.map((item) => String(item.goods_catg_id)));
-    const matchedGoods = goods.filter((item) => categoryIds.has(String(item.goods_catg_id)));
     const skus = await this.prisma.hspsi_goods_info_sku.findMany({
       where: {
-        good_id: { in: matchedGoods.map((item) => item.goods_id) },
+        good_id: { in: goods.map((item) => item.goods_id) },
         status: 1,
         deleted_at: null,
       },
@@ -84,18 +75,20 @@ export class InventoryGeneralService {
     });
     const unitIds = [
       ...new Set(
-        [...matchedGoods.map((item) => item.unit_type), ...skus.map((item) => item.unit_type)]
+        [...goods.map((item) => item.unit_type), ...skus.map((item) => item.unit_type)]
           .filter((id) => id > 0)
           .map((id) => BigInt(id)),
       ),
     ];
     const units = await this.prisma.hspsi_basic_unit.findMany({ where: { id: { in: unitIds } } });
     return skus.map((sku) => {
-      const item = matchedGoods.find((goodsItem) => goodsItem.goods_id === sku.good_id)!;
+      const item = goods.find((goodsItem) => goodsItem.goods_id === sku.good_id)!;
       return {
         goodsId: item.goods_id,
         goodsCode: item.query_code,
         goodsName: item.goods_name,
+        shortName: item.short_name,
+        brandName: item.brand_name,
         skuId: sku.sku_id,
         skuSpec: sku.spec_models,
         documentUnitType: sku.unit_type,

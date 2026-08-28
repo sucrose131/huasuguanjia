@@ -6,6 +6,7 @@ function fixture(overrides: Record<string, any> = {}) {
   const prisma = {
     hspsi_basic_warehouse: {
       findFirst: vi.fn().mockResolvedValue({ warehouse_id: 15n, org_id: 9n, warehouse_type: 2 }),
+      findMany: vi.fn().mockResolvedValue([{ warehouse_type: 2 }]),
     },
     hspsi_goods_info: {
       findMany: vi.fn().mockResolvedValue([
@@ -26,8 +27,11 @@ function fixture(overrides: Record<string, any> = {}) {
 }
 
 describe('BusinessMasterDataService', () => {
-  it('accepts global goods with an enabled matching category and SKU', async () => {
+  it('accepts mapped goods regardless of historical goods org_id', async () => {
     const { service, prisma } = fixture();
+    prisma.hspsi_goods_info.findMany.mockResolvedValue([
+      { goods_id: 101n, org_id: 88n, goods_catg_id: 27n, goods_name: '跨组织历史商品' },
+    ]);
 
     await expect(
       service.assertGoodsLines(9, 15, [{ goodsId: 101, skuId: 202 }]),
@@ -35,7 +39,6 @@ describe('BusinessMasterDataService', () => {
     expect(prisma.hspsi_goods_info.findMany).toHaveBeenCalledWith({
       where: {
         goods_id: { in: [101n] },
-        org_id: { in: [0n, 9n] },
         status: 1,
         deleted_at: null,
       },
@@ -108,11 +111,44 @@ describe('BusinessMasterDataService', () => {
   });
 
   it('goodsOptions includes categoryWarehouseType for frontend linkage', async () => {
-    const { service } = fixture();
+    const { service, prisma } = fixture();
 
     const result = await service.goodsOptions(9, 15);
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ categoryWarehouseType: 2 });
+    expect(prisma.hspsi_goods_info.findMany).toHaveBeenCalledWith({
+      where: {
+        goods_catg_id: { in: [27n] },
+        status: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ sort: 'asc' }, { goods_id: 'asc' }],
+    });
+  });
+
+  it('rejects mapped goods when the organization owns no warehouse of that type', async () => {
+    const { service } = fixture({
+      hspsi_basic_warehouse: {
+        findFirst: vi.fn().mockResolvedValue({ warehouse_id: 15n, org_id: 9n, warehouse_type: 2 }),
+        findMany: vi.fn().mockResolvedValue([{ warehouse_type: 1 }]),
+      },
+    });
+
+    await expect(service.assertGoodsActive(9, [{ goodsId: 101, skuId: 202 }])).rejects.toThrow(
+      '当前单据组织没有商品“全局商品”对应仓库类型的启用仓库',
+    );
+  });
+
+  it('goodsOptionsByOrg returns the union of categories mapped to organization warehouse types', async () => {
+    const { service, prisma } = fixture();
+
+    const result = await service.goodsOptionsByOrg(9);
+
+    expect(result).toHaveLength(1);
+    expect(prisma.hspsi_goods_info_category.findMany).toHaveBeenCalledWith({
+      where: { warehouse_type: { in: [2] }, status: 1, deleted_at: null },
+      select: { goods_catg_id: true, warehouse_type: true },
+    });
   });
 });

@@ -13,6 +13,12 @@ describe('PrismaService organization scope scalar mapping', () => {
     expect(scopedOrganizationValue('hspsi_inventory_total', '9')).toBe(9n);
   });
 
+  it('商品主档不再使用历史 org_id 参与通用组织隔离', () => {
+    expect(() => scopedOrganizationValue('hspsi_goods_info', '9')).toThrow(
+      '模型 hspsi_goods_info 没有组织字段',
+    );
+  });
+
   it('普通用户的组织范围由固定组织和人工额外授权组织合并', () => {
     runWithDataScope(
       {

@@ -31,6 +31,11 @@ export class ProductionController {
     return this.s.productOptions(orgId, warehouseId);
   }
   @RequirePermissions('production')
+  @Get('all-product-options')
+  allProductOptions(@Query('orgId') orgId?: string) {
+    return this.s.allProductOptions(orgId);
+  }
+  @RequirePermissions('production')
   @Get('warehouse-options')
   warehouseOptions(@Query('orgId') orgId?: string, @Query('goodsId') goodsId?: string) {
     return this.s.warehouseOptions(orgId, goodsId);

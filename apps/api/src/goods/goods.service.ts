@@ -19,10 +19,18 @@ export class GoodsService {
   }
   private async visibleWarehouseTypes(user?: AuthUser) {
     if (!user || user.permissions.includes('*')) return null;
-    if (!user.orgId) return [];
+    const organizationIds = [
+      ...new Set(
+        [
+          user.orgId,
+          ...(user.authorizedOrganizations ?? []).map((organization) => organization.id),
+        ].filter((value): value is string => Boolean(value)),
+      ),
+    ];
+    if (!organizationIds.length) return [];
     const warehouses = await this.prisma.hspsi_basic_warehouse.findMany({
       where: {
-        org_id: BigInt(user.orgId),
+        org_id: { in: organizationIds.map(BigInt) },
         status: 1,
         deleted_at: null,
       },

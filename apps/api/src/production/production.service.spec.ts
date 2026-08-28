@@ -5,6 +5,11 @@ function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
   posting: Record<string, any> = { post: vi.fn() },
+  masterData: Record<string, any> = {
+    assertGoodsLines: vi.fn(),
+    assertGoodsActive: vi.fn(),
+    assertWarehouse: vi.fn(),
+  },
 ) {
   return new ProductionService(
     prisma as never,
@@ -13,9 +18,28 @@ function serviceWith(
     { enrich: vi.fn(async (rows: unknown[]) => rows) } as never,
     trace as never,
     { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
-    { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn(), assertWarehouse: vi.fn() } as never,
+    masterData as never,
   );
 }
+
+describe('ProductionService mapped product options', () => {
+  it('loads BOM finished-goods candidates from all warehouse types owned by the organization', async () => {
+    const masterData = {
+      assertGoodsLines: vi.fn(),
+      assertGoodsActive: vi.fn(),
+      assertWarehouse: vi.fn(),
+      goodsOptionsByOrg: vi
+        .fn()
+        .mockResolvedValue([{ goodsId: 101n, goodsName: '康复训练成品' }]),
+    };
+    const service = serviceWith({}, undefined, undefined, masterData);
+
+    await expect(service.allProductOptions('6')).resolves.toEqual([
+      { goodsId: 101n, goodsName: '康复训练成品' },
+    ]);
+    expect(masterData.goodsOptionsByOrg).toHaveBeenCalledWith(6n);
+  });
+});
 
 describe('ProductionService chain guards', () => {
   it('allows confirmed temporary supplements and subtracts draft BOM return occupancy', async () => {

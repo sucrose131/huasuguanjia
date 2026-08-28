@@ -4,7 +4,11 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
-import { filterGoodsByWarehouseType, warehouseTypeOf } from '@/utils/goods-warehouse';
+import {
+  filterGoodsByWarehouseType,
+  filterMappedGoodsByKeyword,
+  warehouseTypeOf,
+} from '@/utils/goods-warehouse';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
 import PurchaseOrderBasicInfo from '@/components/purchase/PurchaseOrderBasicInfo.vue';
@@ -202,12 +206,9 @@ function warehouseChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = filterGoodsByWarehouseType(
-    options.contextGoods,
-    selectedWarehouseType.value,
-  ).filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  const list = filterMappedGoodsByKeyword(
+    filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
+    keyword,
   );
   return list.map((g: any) => ({
     value: g.id,
@@ -227,6 +228,21 @@ async function lineGoodsChanged(line: any) {
     (g: any) => String(g.id) === String(line.goodsId),
   );
   line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+  const otherTypes = new Set(
+    (form.value.details ?? [])
+      .filter((item: any) => item !== line)
+      .map((item: any) => Number(item.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  if (
+    line.goodsWarehouseType > 0 &&
+    otherTypes.size > 0 &&
+    !otherTypes.has(line.goodsWarehouseType)
+  ) {
+    Object.assign(line, blankLine());
+    ElMessage.warning('同一采购订单只能选择相同仓库类型的商品，请拆分订单');
+    return;
+  }
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';

@@ -12,18 +12,23 @@ type ScopedModel = {
   compoundKeys: string[][];
   hasCreatedBy: boolean;
   personalScope: boolean;
-  includesSharedOrganization: boolean;
 };
 
-const excludedPolymorphicModels = new Set([
+/**
+ * 不使用表内组织字段做通用数据隔离的模型。
+ * 商品主档的业务可用范围由“组织仓库类型 → 商品分类”显式计算，
+ * 不能再由商品历史 org_id 截断。
+ */
+const excludedOrganizationScopedModels = new Set([
   'hspsi_basic_staff_organizations',
   'hspsi_sys_user_authorized_org',
+  'hspsi_goods_info',
 ]);
 
 function scopedModels() {
   const result = new Map<string, ScopedModel>();
   for (const model of Prisma.dmmf.datamodel.models) {
-    if (excludedPolymorphicModels.has(model.name)) continue;
+    if (excludedOrganizationScopedModels.has(model.name)) continue;
     const orgField = model.fields.some((field) => field.name === 'org_id')
       ? 'org_id'
       : model.fields.some((field) => field.name === 'organization_id')
@@ -50,7 +55,6 @@ function scopedModels() {
       ],
       hasCreatedBy: model.fields.some((field) => field.name === 'created_by'),
       personalScope: false,
-      includesSharedOrganization: model.name === 'hspsi_goods_info',
     });
   }
   return result;
@@ -79,9 +83,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       if (!scope.authorizedOrgIds.length) throw new ForbiddenException('当前账号没有已授权组织');
 
       const allowedIds = scope.authorizedOrgIds.map((orgId) => organizationValue(meta, orgId));
-      const modelAllowedIds = meta.includesSharedOrganization
-        ? [...new Set([organizationValue(meta, 0), ...allowedIds])]
-        : allowedIds;
+      const modelAllowedIds = allowedIds;
       const orgCondition: Record<string, unknown> = { [meta.orgField]: { in: modelAllowedIds } };
 
       params.args ??= {};

@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { filterMappedGoodsByKeyword } from '@/utils/goods-warehouse';
 import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
@@ -121,6 +122,7 @@ async function warehouseChanged() {
 }
 
 async function loadScopedStocks() {
+  // 销售订单记录客户需求；库存仅用于提示可用量，不能反向限制商品候选。
   options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
     () => [],
   );
@@ -180,15 +182,9 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '')
-    .trim()
-    .toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
-  );
-  return list.map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
+  return filterMappedGoodsByKeyword(options.contextGoods, keyword).map((item: any) => ({
+    value: item.id ?? item.goodsId,
+    label: `${item.queryCode || ''} ${item.goodsName || ''}`.trim(),
   }));
 }
 
