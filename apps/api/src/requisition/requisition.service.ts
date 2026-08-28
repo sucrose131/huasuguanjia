@@ -21,6 +21,7 @@ import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/appro
 import { Attachment, AttachmentsService } from '../attachments/attachments.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { TodoService } from '../database/todo.service';
+import type { AuthUser } from '../auth/auth.types';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -240,8 +241,9 @@ export class RequisitionService {
     }));
   }
 
-  async applicationFormOptions(orgIdValue: string) {
+  async applicationFormOptions(orgIdValue: string, deptIdValue?: string) {
     const orgId = this.bigint(orgIdValue, '所属组织');
+    const deptId = deptIdValue && String(deptIdValue).trim() !== '' ? this.bigint(deptIdValue, '领用部门') : null;
     const departments = await this.prisma.hspsi_basic_dept.findMany({
       where: { org_id: orgId, status: 1, deleted_at: null },
       orderBy: [{ sort: 'asc' }, { dept_id: 'asc' }],
@@ -251,10 +253,17 @@ export class RequisitionService {
     const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
       where: {
         deleted_at: null,
-        OR: [
-          { org_type: 1, org_id: orgId },
-          { org_type: 2, org_id: { in: departmentIds } },
-        ],
+        // 指定部门时按该部门筛人（org_type=2），并保留组织直属人员（org_type=1）兜底；
+        // 未指定部门时返回组织直属 + 全部部门成员（原口径）。
+        OR: deptId
+          ? [
+              { org_type: 2, org_id: deptId },
+              { org_type: 1, org_id: orgId },
+            ]
+          : [
+              { org_type: 1, org_id: orgId },
+              { org_type: 2, org_id: { in: departmentIds } },
+            ],
       },
       select: { staff_id: true },
     });
@@ -1724,8 +1733,9 @@ export class RequisitionService {
     return { id, message: '删除成功' };
   }
 
-  async saveOutput(id: string | null, body: Body, userId: string) {
-    if (!id && body.directOutput === true) return this.saveDirectOutput(body, userId);
+  async saveOutput(id: string | null, body: Body, user: AuthUser) {
+    if (!id && body.directOutput === true) return this.saveDirectOutput(body, user);
+    const userId = user.id;
     const applicationId = this.bigint(body.applicationId, '来源领用申请');
     const explicitTargetId = id ? this.bigint(id, '领用出库单') : null;
     const automaticTarget =
@@ -1900,7 +1910,7 @@ export class RequisitionService {
     return { id: outputId, message: '领用出库单已保存' };
   }
 
-  private async saveDirectOutput(body: Body, userId: string) {
+  private async saveDirectOutput(body: Body, user: AuthUser) {
     const generationKey = this.directOutputGenerationKey(body.requestKey);
     const lines = this.detailLines(body.details).map((line) => {
       const batchNo = String(line.batchNo ?? '').trim();
@@ -1915,9 +1925,11 @@ export class RequisitionService {
       };
     });
     const orgId = this.bigint(body.orgId, '所属组织');
+    this.assertAuthorizedOrganization(user, orgId, '所属组织');
     const warehouseId = this.bigint(body.warehouseId, '领用仓库');
     const deptId = this.bigint(body.deptId, '领用部门');
     const receiverId = this.bigint(body.receiverId, '领用接收人');
+    const userId = user.id;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.hspsi_draw_approve_output.findUnique({
@@ -2247,6 +2259,68 @@ export class RequisitionService {
     return items.filter(
       (item: Body) => item.hasReturnableItems && Number(item.returnableRemainingQuantity) > 0,
     );
+  }
+
+  /**
+   * 直接领用出库专用：返回当前账号授权组织范围内全部领用类仓库。
+   * 每个仓库携带 orgId/deptId，前端据此反推组织、带出部门并筛选人员。
+   */
+  async directOutputOptions(user: AuthUser) {
+    const authorizedOrgIds = [
+      ...new Set(
+        [user.orgId, ...(user.authorizedOrganizations ?? []).map((org) => org.id)].filter(
+          (value): value is string => Boolean(value),
+        ),
+      ),
+    ].map(BigInt);
+    const [organizations, warehouses] = await Promise.all([
+      authorizedOrgIds.length
+        ? this.prisma.hspsi_basic_organization.findMany({
+            where: { org_id: { in: authorizedOrgIds }, operation_status: 1, deleted_at: null },
+            select: { org_id: true, name: true },
+          })
+        : [],
+      authorizedOrgIds.length
+        ? this.prisma.hspsi_basic_warehouse.findMany({
+            where: {
+              org_id: { in: authorizedOrgIds },
+              warehouse_type: { in: this.requisitionWarehouseTypes },
+              status: 1,
+              deleted_at: null,
+            },
+            orderBy: [{ sort: 'asc' }, { warehouse_id: 'asc' }],
+            select: {
+              warehouse_id: true,
+              name: true,
+              warehouse_type: true,
+              dept_id: true,
+              org_id: true,
+            },
+          })
+        : [],
+    ]);
+    const orgNames = new Map(organizations.map((org) => [String(org.org_id), org.name]));
+    return warehouses.map((warehouse) => ({
+      value: warehouse.warehouse_id,
+      label: orgNames.has(String(warehouse.org_id))
+        ? `${warehouse.name}（${orgNames.get(String(warehouse.org_id))}）`
+        : warehouse.name,
+      raw: {
+        warehouseType: warehouse.warehouse_type,
+        deptId: warehouse.dept_id,
+        orgId: warehouse.org_id,
+      },
+    }));
+  }
+
+  /** 后端最终权限校验：直接领用出库所选组织必须在当前账号授权组织范围内 */
+  private assertAuthorizedOrganization(user: AuthUser, orgId: bigint, label: string) {
+    if (user.isSuperAdmin) return;
+    const authorized = new Set(
+      [user.orgId, ...(user.authorizedOrganizations ?? []).map((org) => org.id)].filter(Boolean),
+    );
+    if (!authorized.has(String(orgId)))
+      throw new ForbiddenException(`${label}不在当前账号授权组织范围内`);
   }
 
   async returns(query: Body) {

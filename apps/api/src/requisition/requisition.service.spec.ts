@@ -79,6 +79,26 @@ function expectLockBeforeRead(lock: ReturnType<typeof vi.fn>, read: ReturnType<t
   );
 }
 
+/** 供 saveOutput 等接口使用的超管会话（跳过组织授权校验） */
+function adminUser(id: string) {
+  return {
+    id,
+    username: 'admin',
+    orgId: '9',
+    orgName: '测试组织',
+    deptId: null,
+    staffId: null,
+    positionId: null,
+    positionName: null,
+    roleName: '管理员',
+    currentOrgId: '9',
+    currentOrgName: '测试组织',
+    authorizedOrganizations: [{ id: '9', name: '测试组织' }],
+    isSuperAdmin: true,
+    permissions: ['*'],
+  };
+}
+
 describe('RequisitionService inventory posting line aggregation', () => {
   it('aggregates duplicate goods/SKU/batch/unit integer quantities', () => {
     const lines: InventoryLine[] = [
@@ -467,7 +487,7 @@ describe('RequisitionService locked requisition mutations', () => {
           applicationId: 7,
           details: [{ applicationDetailId: 70, quantity: 1 }],
         },
-        '3',
+        adminUser('3'),
       ),
     ).rejects.toThrow('已确认领用出库单不可编辑');
 
@@ -499,7 +519,7 @@ describe('RequisitionService locked requisition mutations', () => {
           applicationId: 7,
           details: [{ applicationDetailId: 70, quantity: 1 }],
         },
-        '3',
+        adminUser('3'),
       ),
     ).rejects.toThrow('领用出库单已有退回单，不可编辑');
     expect(editTx.hspsi_draw_approve_output.update).not.toHaveBeenCalled();
@@ -596,7 +616,7 @@ describe('RequisitionService locked requisition mutations', () => {
           applicationId: 7,
           details: [{ applicationDetailId: 70, quantity: 2 }],
         },
-        '3',
+        adminUser('3'),
       ),
     ).rejects.toThrow('本次领用超过申请剩余数量');
 
@@ -689,7 +709,7 @@ describe('RequisitionService direct output reverse workflow', () => {
         receiverId: 4,
         details: [{ goodsId: 5, skuId: 6, batchNo: 'PH20260807', unitType: 1, quantity: 2 }],
       },
-      '9',
+      adminUser('9'),
     );
 
     expect(result).toMatchObject({ id: 12n, applicationId: 7n });
@@ -1061,5 +1081,128 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       businessId: 7,
     });
     expect(createCalls.every((call) => call[1] === tx)).toBe(true);
+  });
+});
+
+describe('RequisitionService direct output cross-org options and authorization', () => {
+  it('returns requisition warehouses across authorized orgs with orgId/deptId', async () => {
+    const root = {
+      hspsi_basic_organization: {
+        findMany: vi.fn().mockResolvedValue([
+          { org_id: 9n, name: '组织九' },
+          { org_id: 2n, name: '组织二' },
+        ]),
+      },
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            warehouse_id: 91n,
+            name: '行政-办公耗材仓',
+            warehouse_type: 7,
+            dept_id: 10n,
+            org_id: 9n,
+          },
+          { warehouse_id: 21n, name: '办公用品库', warehouse_type: 7, dept_id: 0n, org_id: 2n },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+    const user = {
+      id: '1',
+      orgId: '9',
+      currentOrgId: '9',
+      authorizedOrganizations: [
+        { id: '9', name: '组织九' },
+        { id: '2', name: '组织二' },
+      ],
+      isSuperAdmin: false,
+      permissions: ['requisitions'],
+    };
+
+    const result = await service.directOutputOptions(user as never);
+
+    expect(result).toEqual([
+      {
+        value: 91n,
+        label: '行政-办公耗材仓（组织九）',
+        raw: { warehouseType: 7, deptId: 10n, orgId: 9n },
+      },
+      {
+        value: 21n,
+        label: '办公用品库（组织二）',
+        raw: { warehouseType: 7, deptId: 0n, orgId: 2n },
+      },
+    ]);
+    expect(root.hspsi_basic_warehouse.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ org_id: { in: [9n, 2n] } }),
+      }),
+    );
+  });
+
+  it('filters employees by dept when deptId is provided in application-form-options', async () => {
+    const root = {
+      hspsi_basic_dept: {
+        findMany: vi.fn().mockResolvedValue([
+          { dept_id: 10n, name: '行政部' },
+          { dept_id: 7n, name: '健服部' },
+        ]),
+      },
+      hspsi_basic_staff_organizations: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ staff_id: 100n }, { staff_id: 101n }]),
+      },
+      hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_basic_staff: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 100n, name: '甲', staff_code: 'S1' },
+          { id: 101n, name: '乙', staff_code: 'S2' },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+
+    const result = await service.applicationFormOptions('9', '10');
+
+    expect(root.hspsi_basic_staff_organizations.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { org_type: 2, org_id: 10n },
+            { org_type: 1, org_id: 9n },
+          ],
+        }),
+      }),
+    );
+    expect(result.employees.map((item: any) => item.label)).toEqual(['甲（S1）', '乙（S2）']);
+  });
+
+  it('rejects direct output when org is outside the user authorized range', async () => {
+    const { service } = serviceWithTransaction({});
+    const user = {
+      id: '1',
+      orgId: '9',
+      currentOrgId: '9',
+      authorizedOrganizations: [{ id: '9', name: '组织九' }],
+      isSuperAdmin: false,
+      permissions: ['requisitions'],
+    };
+
+    await expect(
+      service.saveOutput(
+        null,
+        {
+          directOutput: true,
+          requestKey: 'direct-unauthorized-0001',
+          orgId: 2,
+          warehouseId: 3,
+          deptId: 4,
+          receiverId: 5,
+          details: [{ goodsId: 1, skuId: 1, batchNo: 'PH01', unitType: 1, quantity: 1 }],
+        },
+        user as never,
+      ),
+    ).rejects.toThrow('所属组织不在当前账号授权组织范围内');
   });
 });

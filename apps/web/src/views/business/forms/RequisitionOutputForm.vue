@@ -88,19 +88,67 @@ async function loadDicts() {
   dicts.requisition_confirm_status = confirm as any[];
 }
 
-async function loadRequisitionOptions(orgId: unknown) {
+async function loadRequisitionOptions(orgId: unknown, deptId?: unknown, preserveWarehouses = false) {
   if (!orgId) {
     options.requisitionWarehouses = [];
     options.requisitionDepts = [];
     options.employees = [];
     return;
   }
-  const result: any = await api.get('/requisitions/application-form-options', {
-    params: { orgId },
-  });
-  options.requisitionWarehouses = result.warehouses ?? [];
+  const params: Record<string, any> = { orgId };
+  if (deptId && String(deptId).trim() !== '') params.deptId = deptId;
+  const result: any = await api.get('/requisitions/application-form-options', { params });
+  // 直接领用出库的仓库下拉来自跨组织仓库列表，刷新部门/人员时保留，避免把用户困在当前组织
+  if (!preserveWarehouses) options.requisitionWarehouses = result.warehouses ?? [];
   options.requisitionDepts = result.departments ?? [];
   options.employees = result.employees ?? [];
+}
+
+/** 直接领用出库：加载当前账号全部授权组织的领用类仓库（携带 orgId/deptId，用于反推组织） */
+async function loadDirectOutputWarehouses() {
+  options.requisitionWarehouses = (await api
+    .get('/requisitions/direct-output-options')
+    .catch(() => [])) as any[];
+  options.requisitionDepts = [];
+  options.employees = [];
+}
+
+/** 直接领用出库：选仓库后反推组织、带出部门并加载该组织部门/人员 */
+async function directWarehouseChanged() {
+  if (!form.value.directOutput) return;
+  if (!form.value.warehouseId) {
+    form.value.orgId = '';
+    form.value.deptId = '';
+    form.value.receiverId = '';
+    options.requisitionDepts = [];
+    options.employees = [];
+    return;
+  }
+  const current = (options.requisitionWarehouses ?? []).find(
+    (w: any) => String(w.value) === String(form.value.warehouseId),
+  );
+  const raw = current?.raw ?? {};
+  form.value.orgId = String(raw.orgId ?? '');
+  form.value.deptId = '';
+  form.value.receiverId = '';
+  form.value.details = [{ ...blankLine(), returnable: true }];
+  await loadRequisitionOptions(form.value.orgId, '', true);
+  // 部门自动带出：仓库挂部门则直接选中；组织只有一个启用部门则自动选中；否则留空手选
+  const depts = options.requisitionDepts ?? [];
+  if (raw.deptId && String(raw.deptId) !== '0') {
+    const matched = depts.find((d: any) => String(d.value) === String(raw.deptId));
+    if (matched) form.value.deptId = String(matched.value);
+  } else if (depts.length === 1) {
+    form.value.deptId = String(depts[0].value);
+  }
+  if (form.value.deptId) await loadRequisitionOptions(form.value.orgId, form.value.deptId, true);
+  await loadStocks();
+}
+
+/** 直接领用出库：切换部门后按部门刷新人员（保留跨组织仓库列表） */
+async function deptChanged() {
+  if (!form.value.directOutput || !form.value.orgId) return;
+  await loadRequisitionOptions(form.value.orgId, form.value.deptId, true);
 }
 
 async function applicationChanged() {
@@ -263,13 +311,16 @@ onMounted(async () => {
     if (form.value.directOutput) {
       form.value.requestKey = form.value.requestKey || createRequestId();
       form.value.drawType = 2;
+      form.value.deptId = '';
+      form.value.receiverId = '';
       if (!(form.value.details ?? []).length)
         form.value.details = [{ ...blankLine(), returnable: true }];
+      await loadDirectOutputWarehouses();
     } else {
       form.value.details = [];
       if (form.value.applicationId) await applicationChanged();
+      await loadRequisitionOptions(form.value.orgId);
     }
-    await loadRequisitionOptions(form.value.orgId);
     await loadStocks();
   } else if (form.value.id) {
     const detail: any = await api.get(`/requisitions/outputs/${form.value.id}`).catch(() => null);
@@ -306,13 +357,8 @@ onMounted(async () => {
         <el-select
           v-model="form.warehouseId"
           filterable
-          :disabled="isView || !form.orgId || !form.directOutput"
-          @change="
-            if (form.directOutput) {
-              form.details = [{ ...blankLine(), returnable: true }];
-              loadStocks();
-            }
-          "
+          :disabled="isView || !form.directOutput"
+          @change="directWarehouseChanged"
         >
           <el-option
             v-for="x in options.requisitionWarehouses"
@@ -331,7 +377,12 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="领用部门" required>
-        <el-select v-model="form.deptId" filterable :disabled="isView || !form.directOutput">
+        <el-select
+          v-model="form.deptId"
+          filterable
+          :disabled="isView || !form.directOutput || !form.warehouseId"
+          @change="deptChanged"
+        >
           <el-option
             v-for="x in options.requisitionDepts"
             :key="x.value"
@@ -341,7 +392,11 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="领用接收人" required>
-        <el-select v-model="form.receiverId" filterable :disabled="isView || !form.directOutput">
+        <el-select
+          v-model="form.receiverId"
+          filterable
+          :disabled="isView || !form.directOutput || !form.warehouseId"
+        >
           <el-option
             v-for="x in options.employees"
             :key="x.value"
