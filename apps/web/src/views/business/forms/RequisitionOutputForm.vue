@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -155,11 +156,9 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 async function lineGoodsChanged(line: any) {
@@ -271,6 +270,7 @@ onMounted(async () => {
       if (form.value.applicationId) await applicationChanged();
     }
     await loadRequisitionOptions(form.value.orgId);
+    await loadStocks();
   } else if (form.value.id) {
     const detail: any = await api.get(`/requisitions/outputs/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);

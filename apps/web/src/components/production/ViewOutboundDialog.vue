@@ -70,7 +70,12 @@ async function load() {
     const [document, stockData] = (await Promise.all([
       api.get(`/production/outputs/${props.outRow.id}`),
       api.get('/inventory/stocks', {
-        params: { warehouseId: props.outRow.warehouseId, pageSize: 200 },
+        params: {
+          orgId: props.outRow.orgId,
+          warehouseId: props.outRow.warehouseId,
+          inStockOnly: true,
+          pageSize: 200,
+        },
       }),
     ])) as any[];
     detail.value = document;

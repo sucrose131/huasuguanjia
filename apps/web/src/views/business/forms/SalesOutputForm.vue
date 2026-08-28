@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -84,18 +85,23 @@ async function loadOrgOptions(orgId: unknown) {
   if (!orgId) {
     options.warehouses = [];
     options.depts = [];
+    options.users = [];
     return;
   }
-  const [warehouses, depts] = await Promise.all([
-    api
-      .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
-    api
-      .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
+  const [warehouses, depts, users] = await Promise.all([
+    api.get('/base-data/warehouses/options', { params: { orgId: String(orgId) } }).catch(() => []),
+    api.get('/base-data/departments/options', { params: { orgId: String(orgId) } }).catch(() => []),
+    api.get('/inventory/users/options', { params: { orgId: String(orgId) } }).catch(() => []),
   ]);
   options.warehouses = warehouses as any[];
   options.depts = depts as any[];
+  options.users = users as any[];
+}
+
+async function loadStocks() {
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 function toOutputOrderOption(order: any) {
@@ -112,18 +118,22 @@ async function searchSalesOrderOptions(keyword: string) {
   const r: any = await api.get('/sales/money-order-options', {
     params: { keyword, pageSize: 50 },
   });
-  const items = (Array.isArray(r) ? r : r.items ?? []) as any[];
+  const items = (Array.isArray(r) ? r : (r.items ?? [])) as any[];
   return items.filter((x) => !isNoOutputOrder(x)).map(toOutputOrderOption);
 }
 
 async function enrichGoodsInfo(lines: any[], orderDetails?: any[]) {
-  const ids = [...new Set(lines.map((l: any) => String(l.goodsId)).filter(Boolean))];
-  const priceMap = new Map(
-    (orderDetails ?? []).map((d: any) => [
-      `${d.goodsId}:${d.skuId}`,
-      Number(d.price ?? 0),
-    ]),
+  const orderMap = new Map(
+    (orderDetails ?? []).map((d: any) => [`${d.goodsId}:${d.skuId}`, d]),
   );
+  const ids = [
+    ...new Set(
+      lines
+        .filter((line: any) => !line.goodsName || !line.goodsCode || !line.skuSpec)
+        .map((line: any) => String(line.goodsId))
+        .filter(Boolean),
+    ),
+  ];
   const goodsMap = new Map<string, any>();
   await Promise.all(
     ids.map(async (id) => {
@@ -135,6 +145,14 @@ async function enrichGoodsInfo(lines: any[], orderDetails?: any[]) {
     }),
   );
   for (const line of lines) {
+    const orderLine = orderMap.get(`${line.goodsId}:${line.skuId}`);
+    if (orderLine) {
+      line.goodsName ||= orderLine.goodsName ?? '';
+      line.goodsCode ||= orderLine.goodsCode ?? '';
+      line.skuSpec ||= orderLine.skuSpec ?? '';
+      if (!line.unitType) line.unitType = orderLine.unitType ?? 0;
+      if (line.price == null) line.price = Number(orderLine.price ?? 0);
+    }
     const g = goodsMap.get(String(line.goodsId));
     if (g) {
       line.goodsName = line.goodsName || g.goodsName;
@@ -146,7 +164,7 @@ async function enrichGoodsInfo(lines: any[], orderDetails?: any[]) {
         if (!line.unitType) line.unitType = sku.unitType;
       }
     }
-    if (line.price == null) line.price = priceMap.get(`${line.goodsId}:${line.skuId}`) ?? 0;
+    if (line.price == null) line.price = 0;
   }
 }
 
@@ -181,6 +199,7 @@ async function orderChanged() {
   }));
   await enrichGoodsInfo(form.value.details);
   await loadOrgOptions(form.value.orgId);
+  await loadStocks();
 }
 
 function validate() {
@@ -219,18 +238,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, users, units, stocks, orders, destinationDict] = await Promise.all([
+  const [orgs, units, orders, destinationDict] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
-    api.get('/base-data/users/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api.get('/inventory/stock-options').catch(() => []),
     api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
     api.get('/dictionaries/sales_output_destination').catch(() => []),
   ]);
   options.orgs = orgs;
-  options.users = users;
   options.units = units;
-  options.stocks = stocks;
   options.orders = Array.isArray(orders) ? orders : ((orders as any).items ?? []);
   options.destinationDict = destinationDict;
 
@@ -248,19 +263,40 @@ onMounted(async () => {
     if (detail) {
       const order: any = await api.get(`/sales/orders/${detail.orderId}`).catch(() => null);
       Object.assign(form.value, detail, {
-        deptId: nid(detail.deptId ?? detail.dept_id),
-        receiverId: nid(detail.receiverId ?? detail.receiver_id),
-        orgId: order?.orgId ?? nid(detail.orgId ?? detail.org_id),
+        warehouseId: String(detail.warehouseId ?? detail.warehouse_id ?? ''),
+        deptId: String(nid(detail.deptId ?? detail.dept_id)),
+        receiverId: String(nid(detail.receiverId ?? detail.receiver_id)),
+        orgId: String(order?.orgId ?? nid(detail.orgId ?? detail.org_id)),
         customerName: order?.customerName ?? detail.customerName ?? '',
         orderNo: order?.orderNo ?? detail.orderNo ?? '',
         sourceLocked: Boolean(order?.sourceLocked ?? detail.sourceLocked),
       });
-      form.value.details = (form.value.details ?? []).map((line: any) => ({
-        ...line,
-        stockKey: stockKeyOf(line, form.value.warehouseId),
-      }));
+      form.value.details = (form.value.details ?? []).map((line: any) => {
+        const orderLine = (order?.details ?? []).find(
+          (item: any) =>
+            String(item.goodsId) === String(line.goodsId) &&
+            String(item.skuId) === String(line.skuId),
+        );
+        const orderQty = Number(line.orderQty ?? orderLine?.quantity ?? 0);
+        const currentQty = Number(line.quantity ?? 0);
+        const confirmedTotal = Number(orderLine?.confirmedOutputQty ?? 0);
+        const historicalQty = Math.max(
+          0,
+          confirmedTotal - (Number(detail.confirmStatus) === 1 ? currentQty : 0),
+        );
+        return {
+          ...line,
+          orderQty,
+          historicalQty,
+          remainingQty: Math.max(0, orderQty - historicalQty),
+          price: line.price == null ? Number(orderLine?.price ?? 0) : Number(line.price),
+          unitType: line.unitType || orderLine?.unitType || 0,
+          stockKey: stockKeyOf(line, form.value.warehouseId),
+        };
+      });
       await enrichGoodsInfo(form.value.details, order?.details ?? []);
       await loadOrgOptions(form.value.orgId);
+      await loadStocks();
     }
   }
 });
@@ -270,7 +306,9 @@ onMounted(async () => {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="销售订单" required>
+        <el-input v-if="isView" :model-value="form.orderNo || form.orderId || '—'" readonly />
         <RemoteSelect
+          v-else
           v-model="form.orderId"
           :fetch="searchSalesOrderOptions"
           :current-label="form.orderNo"
@@ -283,12 +321,13 @@ onMounted(async () => {
         <el-input :model-value="form.customerName || '—'" readonly />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select
-          v-model="form.warehouseId"
-          filterable
-          :disabled="mode !== 'create' || !form.orgId || Boolean(form.sourceLocked)"
-        >
-          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select v-model="form.warehouseId" filterable disabled>
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="出库类型">

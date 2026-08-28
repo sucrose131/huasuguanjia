@@ -26,7 +26,14 @@ async function load() {
     const doc = props.outDoc;
     const [plan, stockData] = (await Promise.all([
       api.get(`/production/plans/${doc.planId}`),
-      api.get('/inventory/stocks', { params: { warehouseId: doc.warehouseId, pageSize: 200 } }),
+      api.get('/inventory/stocks', {
+        params: {
+          orgId: doc.orgId,
+          warehouseId: doc.warehouseId,
+          inStockOnly: true,
+          pageSize: 200,
+        },
+      }),
     ])) as any[];
     allStocks.value = stockData.items ?? [];
     rows.value = (plan.details ?? []).map((item: B) => {

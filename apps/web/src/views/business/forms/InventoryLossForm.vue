@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -38,10 +39,7 @@ const totalQuantity = computed(() =>
   ),
 );
 const totalAmount = computed(() =>
-  (form.value.details ?? []).reduce(
-    (sum: number, line: any) => sum + Number(line.amount ?? 0),
-    0,
-  ),
+  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.amount ?? 0), 0),
 );
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
@@ -151,11 +149,9 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { warehouseId: form.value.warehouseId, orgId: form.value.orgId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 function lineBatchChanged(line: any) {
@@ -275,9 +271,7 @@ onMounted(async () => {
     });
     if (!(form.value.details ?? []).length) form.value.details = [blankLine()];
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/losses/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/losses/${form.value.id}`).catch(() => null);
     if (detail) {
       Object.assign(form.value, detail);
       form.value.documentType =
@@ -435,7 +429,10 @@ onMounted(async () => {
       <el-table-column label="当前库存" width="95">
         <template #default="s">{{ Number(s.row.inventoryQty ?? 0).toLocaleString() }}</template>
       </el-table-column>
-      <el-table-column :label="Number(form.businessKind) === 1 ? '报亏数量' : '报损数量'" width="145">
+      <el-table-column
+        :label="Number(form.businessKind) === 1 ? '报亏数量' : '报损数量'"
+        width="145"
+      >
         <template #default="s">
           <el-input-number
             v-model="s.row.quantity"
@@ -482,23 +479,30 @@ onMounted(async () => {
           </el-select>
         </template>
       </el-table-column>
-      <el-table-column v-if="!isView && !generatedDamageLocked" label="操作" width="70" fixed="right">
+      <el-table-column
+        v-if="!isView && !generatedDamageLocked"
+        label="操作"
+        width="70"
+        fixed="right"
+      >
         <template #default="s">
           <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
-    <el-button
-      v-if="!isView && !generatedDamageLocked"
-      class="add-line"
-      plain
-      @click="addLine"
-    >
+    <el-button v-if="!isView && !generatedDamageLocked" class="add-line" plain @click="addLine">
       ＋ 添加明细
     </el-button>
     <div class="modal-totals">
-      <span>合计数量 <strong>{{ totalQuantity.toLocaleString('zh-CN', { maximumFractionDigits: 4 }) }}</strong></span>
-      <span>合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span>
+      <span
+        >合计数量
+        <strong>{{
+          totalQuantity.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+        }}</strong></span
+      >
+      <span
+        >合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span
+      >
     </div>
 
     <div v-if="!isView" class="form-actions">

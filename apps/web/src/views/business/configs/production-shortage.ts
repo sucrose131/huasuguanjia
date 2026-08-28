@@ -31,6 +31,28 @@ export const productionShortageConfig: BusinessDocumentConfig = {
   rowActions: [
     { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
     {
+      key: 'view-plan',
+      label: '查看生产计划',
+      primary: false,
+      show: (row) => Number(row.planId) > 0,
+      handler: (row, ctx) =>
+        ctx.navigate('/production/plans', {
+          documentId: String(row.planId),
+          view: '1',
+        }),
+    },
+    {
+      key: 'view-purchase-application',
+      label: '查看采购申请',
+      primary: false,
+      show: (row) => Number(row.purchaseId) > 0,
+      handler: (row, ctx) =>
+        ctx.navigate('/purchase/applications', {
+          documentId: String(row.purchaseId),
+          view: '1',
+        }),
+    },
+    {
       key: 'terminate',
       label: '终止生产',
       permission: 'production:plans:terminate',

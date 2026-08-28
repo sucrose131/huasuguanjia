@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -117,11 +118,9 @@ async function loadStocks() {
     options.stocks = [];
     return;
   }
-  options.stocks = (await api
-    .get('/inventory/stock-options', {
-      params: { warehouseId: form.value.warehouseId, orgId: form.value.orgId },
-    })
-    .catch(() => [])) as any[];
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 function addLine() {
@@ -198,9 +197,7 @@ onMounted(async () => {
     });
     if (!(form.value.details ?? []).length) form.value.details = [blankLine()];
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/overflows/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/overflows/${form.value.id}`).catch(() => null);
     if (detail) {
       Object.assign(form.value, detail);
       form.value.documentType =
@@ -287,7 +284,12 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="日期">
-        <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.date"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="经办人">
         <el-input :model-value="form.operatorName" disabled />

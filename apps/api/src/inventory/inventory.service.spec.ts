@@ -30,6 +30,55 @@ describe('inventory quantity alert status filter', () => {
   });
 });
 
+describe('inventory stock option scope', () => {
+  function serviceWith(prisma: Record<string, any>, masterData: Record<string, any>) {
+    return new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      masterData as never,
+      {} as never,
+    );
+  }
+
+  it('returns no options when organization or warehouse is missing', async () => {
+    const findMany = vi.fn();
+    const service = serviceWith(
+      { hspsi_inventory_batch_total: { findMany } },
+      { assertWarehouse: vi.fn() },
+    );
+
+    await expect(service.stockOptions({})).resolves.toEqual([]);
+    await expect(service.stockOptions({ orgId: '1' })).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('queries only positive inventory inside the selected organization and warehouse', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const assertWarehouse = vi.fn().mockResolvedValue({ warehouse_id: 20n, org_id: 10n });
+    const service = serviceWith(
+      {
+        hspsi_inventory_batch_total: { findMany },
+        hspsi_goods_info: { findMany: vi.fn().mockResolvedValue([]) },
+        hspsi_goods_info_sku: { findMany: vi.fn().mockResolvedValue([]) },
+        hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue([]) },
+        hspsi_basic_organization: { findMany: vi.fn().mockResolvedValue([]) },
+        hspsi_basic_unit: { findMany: vi.fn().mockResolvedValue([]) },
+        hspsi_goods_info_category: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      { assertWarehouse },
+    );
+
+    await expect(service.stockOptions({ orgId: '10', warehouseId: '20' })).resolves.toEqual([]);
+    expect(assertWarehouse).toHaveBeenCalledWith(10n, 20n);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { org_id: 10n, warehouse_id: 20n, inventory_qty: { gt: 0 } },
+      orderBy: [{ goods_id: 'asc' }, { batch_no: 'asc' }],
+    });
+  });
+});
+
 describe('inventory check quantity branches', () => {
   it('keeps shortage and damage as independent branches', () => {
     const result = classifyInventoryCheckQuantities(10, 8, 2);
@@ -859,10 +908,7 @@ describe('inventory stocks keyword search (BUG-NEW-01)', () => {
     const { service, prisma } = stocksService();
     await service.stocks({ keyword: '墨水', page: '1', pageSize: '20' });
     const where = prisma.hspsi_inventory_batch_total.findMany.mock.calls[0]![0].where;
-    expect(where.OR).toEqual([
-      { goods_id: { in: [] } },
-      { sku_id: { in: [] } },
-    ]);
+    expect(where.OR).toEqual([{ goods_id: { in: [] } }, { sku_id: { in: [] } }]);
   });
 
   it('skips keyword matching entirely when no keyword is given', async () => {

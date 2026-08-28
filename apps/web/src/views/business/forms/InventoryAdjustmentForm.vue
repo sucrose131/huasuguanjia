@@ -206,9 +206,7 @@ onMounted(async () => {
       form.value.details = [blankLine()];
     }
   } else if (form.value.id) {
-    const detail: any = await api
-      .get(`/inventory/adjustments/${form.value.id}`)
-      .catch(() => null);
+    const detail: any = await api.get(`/inventory/adjustments/${form.value.id}`).catch(() => null);
     if (detail) Object.assign(form.value, detail);
     form.value.details = (form.value.details ?? []).map((line: any) => ({
       ...line,
