@@ -4,17 +4,24 @@ coverage/
 .vite/
 .cache/
 .pnpm-store/
-.DS_Store
+*.DS_Store
+._*
 .env
 .env.*.local
 apps/api/prisma/migrations/*/migration_lock.toml
 *.log
+apps/api/logs/
 
-docs/
+docs/*
+!docs/README.md
+!docs/global/
+!docs/global/**
+!docs/daily/
+!docs/daily/**
+!docs/用户操作指引/
+!docs/用户操作指引/**
 CLAUDE.md
 HANDOFF.md
-database/
-!database/
 database/*
 !database/migrations/
 !database/migrations/*.sql
@@ -23,3 +30,8 @@ database/*
 .nvmrc
 .tmp/
 .env.docker
+.idea/
+.vscode/
+*.tsbuildinfo
+apps/api/tsconfig.tsbuildinfo
+.claude/

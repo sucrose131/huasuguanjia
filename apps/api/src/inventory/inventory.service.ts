@@ -2,6 +2,11 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
+import { BusinessNumberService } from '../business-number/business-number.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
+import { BusinessReferenceService } from '../database/business-reference.service';
 import { InventoryLine, InventoryPostingService } from './inventory-posting.service';
 import { INVENTORY_BUSINESS_MODE } from './inventory-dictionary';
 import {
@@ -10,6 +15,7 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
+  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
@@ -25,6 +31,9 @@ export class InventoryService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
+    @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
   ) {}
   private page(query: Body) {
     return {
@@ -41,10 +50,6 @@ export class InventoryService {
       throw new BadRequestException(`${label}必须为${allowZero ? '非负' : '正'}整数`);
     }
     return quantity;
-  }
-  private no(prefix: string, id: bigint) {
-    const date = new Date();
-    return `${prefix}${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}${String(id).slice(-4).padStart(4, '0')}`;
   }
   private lines(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
@@ -122,9 +127,11 @@ export class InventoryService {
         select: { sku_id: true },
       }),
     ]);
+    // 纯数字关键字同时精确匹配 sku_id（SKU 编号即 sku_id 主键，不在 spec_models 文本中）
+    const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
     return {
       goodsIds: goods.map((item) => item.goods_id),
-      skuIds: skus.map((item) => item.sku_id),
+      skuIds: [...skus.map((item) => item.sku_id), ...(numericSkuId ? [numericSkuId] : [])],
     };
   }
 
@@ -214,9 +221,13 @@ export class InventoryService {
           select: { sku_id: true },
         }),
       ]);
+      const skuIds = skus.map((item) => item.sku_id);
+      // keyword 为数字时同时精确匹配 sku_id（如直接输入 SKU 编号）
+      const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
       where.OR = [
         { goods_id: { in: goods.map((item) => item.goods_id) } },
-        { sku_id: { in: skus.map((item) => item.sku_id) } },
+        { sku_id: { in: skuIds } },
+        ...(numericSkuId ? [{ sku_id: numericSkuId }] : []),
       ];
     }
     const [records, total, summaryRows] = await Promise.all([
@@ -292,6 +303,173 @@ export class InventoryService {
     };
   }
 
+  async requisitionHistory(query: Body) {
+    const { page, pageSize } = this.page(query);
+    const outputWhere: Prisma.hspsi_draw_approve_outputWhereInput = {
+      comfirm_status: 1,
+      deleted_at: null,
+    };
+    if (query.orgId) outputWhere.org_id = BigInt(query.orgId);
+    if (query.departmentId) outputWhere.dept_id = BigInt(query.departmentId);
+    if (query.receiverId) outputWhere.receiver_id = BigInt(query.receiverId);
+    if (query.startDate || query.endDate) {
+      outputWhere.output_date = {};
+      if (query.startDate)
+        outputWhere.output_date.gte = new Date(`${query.startDate}T00:00:00+08:00`);
+      if (query.endDate) {
+        const end = new Date(`${query.endDate}T00:00:00+08:00`);
+        if (Number.isNaN(end.getTime())) throw new BadRequestException('结束日期无效');
+        end.setDate(end.getDate() + 1);
+        outputWhere.output_date.lt = end;
+      }
+    }
+    const outputs = await this.prisma.hspsi_draw_approve_output.findMany({
+      where: outputWhere,
+      orderBy: [{ output_date: 'desc' }, { draw_output_id: 'desc' }],
+    });
+    if (!outputs.length)
+      return {
+        items: [],
+        total: 0,
+        page,
+        pageSize,
+        summary: { issuedQty: 0, returnedQty: 0, holdingQty: 0, holdingLines: 0 },
+      };
+    const outputIds = outputs.map((item) => item.draw_output_id);
+    const detailWhere: Prisma.hspsi_draw_approve_output_detailWhereInput = {
+      draw_output_id: { in: outputIds },
+    };
+    if (query.batchNo) detailWhere.batch_no = { contains: String(query.batchNo).trim() };
+    const keywordIds = await this.inventoryKeywordIds(query.keyword);
+    if (keywordIds)
+      detailWhere.OR = [
+        { goods_id: { in: keywordIds.goodsIds } },
+        { sku_id: { in: keywordIds.skuIds } },
+      ];
+    const details = await this.prisma.hspsi_draw_approve_output_detail.findMany({
+      where: detailWhere,
+      orderBy: { output_detail_id: 'desc' },
+    });
+    const detailOutputIds = [...new Set(details.map((item) => item.draw_output_id))];
+    const returnHeads = detailOutputIds.length
+      ? await this.prisma.hspsi_draw_approve_output_exit.findMany({
+          where: {
+            draw_output_id: { in: detailOutputIds },
+            comfirm_status: 1,
+            deleted_at: null,
+          },
+          select: { draw_exit_id: true },
+        })
+      : [];
+    const returnDetails = returnHeads.length
+      ? await this.prisma.hspsi_draw_approve_output_exit_detail.findMany({
+          where: { draw_exit_id: { in: returnHeads.map((item) => item.draw_exit_id) } },
+        })
+      : [];
+    const returnedByLine = new Map<string, number>();
+    for (const line of returnDetails) {
+      const key = String(line.draw_output_detail_id);
+      returnedByLine.set(key, (returnedByLine.get(key) ?? 0) + Number(line.exit_qty));
+    }
+    const outputMap = new Map(outputs.map((item) => [String(item.draw_output_id), item]));
+    let computed = details.map((line) => {
+      const output = outputMap.get(String(line.draw_output_id))!;
+      const issuedQty = Number(line.fact_draw_qty);
+      const returnedQty = Math.min(
+        issuedQty,
+        returnedByLine.get(String(line.output_detail_id)) ?? 0,
+      );
+      const remainingQty = Math.max(0, issuedQty - returnedQty);
+      return { line, output, issuedQty, returnedQty, remainingQty };
+    });
+    const holdingStatus = String(query.holdingStatus ?? 'all');
+    if (holdingStatus === 'holding')
+      computed = computed.filter((item) => item.line.is_returnable === 1 && item.remainingQty > 0);
+    else if (holdingStatus === 'returned')
+      computed = computed.filter(
+        (item) => item.line.is_returnable === 1 && item.remainingQty === 0,
+      );
+    const total = computed.length;
+    const summary = computed.reduce(
+      (result, item) => ({
+        issuedQty: result.issuedQty + item.issuedQty,
+        returnedQty: result.returnedQty + item.returnedQty,
+        holdingQty: result.holdingQty + (item.line.is_returnable === 1 ? item.remainingQty : 0),
+        holdingLines:
+          result.holdingLines + (item.line.is_returnable === 1 && item.remainingQty > 0 ? 1 : 0),
+      }),
+      { issuedQty: 0, returnedQty: 0, holdingQty: 0, holdingLines: 0 },
+    );
+    const records = computed.slice((page - 1) * pageSize, page * pageSize);
+    const applications = await this.prisma.hspsi_draw_approve.findMany({
+      where: {
+        draw_id: { in: [...new Set(records.map((item) => item.output.draw_id))] },
+      },
+      select: { draw_id: true, draw_no: true },
+    });
+    const applicationNo = new Map(applications.map((item) => [String(item.draw_id), item.draw_no]));
+    const referenceInput = records.map(({ line, output }) => ({
+      goodsId: line.goods_id,
+      skuId: line.sku_id,
+      warehouseId: output.warehouse_id,
+      orgId: output.org_id,
+    }));
+    const [refs, departments, receivers, units] = await Promise.all([
+      this.names(referenceInput),
+      this.prisma.hspsi_basic_dept.findMany({
+        where: { dept_id: { in: [...new Set(records.map((item) => item.output.dept_id))] } },
+        select: { dept_id: true, name: true },
+      }),
+      this.prisma.hspsi_basic_staff.findMany({
+        where: {
+          id: { in: [...new Set(records.map((item) => item.output.receiver_id))] },
+          deleted_at: null,
+        },
+        select: { id: true, name: true },
+      }),
+      this.prisma.hspsi_basic_unit.findMany({
+        where: { id: { in: [...new Set(records.map((item) => BigInt(item.line.unit_type)))] } },
+      }),
+    ]);
+    return {
+      items: records.map(({ line, output, issuedQty, returnedQty, remainingQty }) => ({
+        id: line.output_detail_id,
+        outputId: output.draw_output_id,
+        outputNo: output.draw_output_no,
+        applicationId: output.draw_id,
+        applicationNo: applicationNo.get(String(output.draw_id)) ?? '',
+        outputDate: output.output_date,
+        orgId: output.org_id,
+        orgName: refs.orgs.find((item) => item.org_id === output.org_id)?.name ?? '',
+        warehouseId: output.warehouse_id,
+        warehouseName:
+          refs.warehouses.find((item) => item.warehouse_id === output.warehouse_id)?.name ?? '',
+        departmentId: output.dept_id,
+        departmentName: departments.find((item) => item.dept_id === output.dept_id)?.name ?? '',
+        receiverId: output.receiver_id,
+        receiverName: receivers.find((item) => item.id === output.receiver_id)?.name ?? '',
+        goodsId: line.goods_id,
+        goodsCode: refs.goods.find((item) => item.goods_id === line.goods_id)?.query_code ?? '',
+        goodsName: refs.goods.find((item) => item.goods_id === line.goods_id)?.goods_name ?? '',
+        skuId: line.sku_id,
+        skuSpec: refs.skus.find((item) => item.sku_id === line.sku_id)?.spec_models ?? '',
+        batchNo: line.batch_no,
+        unitType: line.unit_type,
+        unitName: units.find((item) => item.id === BigInt(line.unit_type))?.name ?? '',
+        issuedQty,
+        returnedQty,
+        remainingQty,
+        returnable: line.is_returnable === 1,
+        holdingStatusName:
+          line.is_returnable !== 1 ? '无需归还' : remainingQty > 0 ? '持有中' : '已退清',
+      })),
+      total,
+      page,
+      pageSize,
+      summary,
+    };
+  }
+
   async ledger(query: Body) {
     const { page, pageSize } = this.page(query);
     const where: Prisma.hspsi_inventory_total_detailWhereInput = {};
@@ -299,7 +477,7 @@ export class InventoryService {
     if (query.goodsId) where.goods_id = BigInt(query.goodsId);
     if (query.skuId) where.sku_id = BigInt(query.skuId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.batchNo !== undefined) where.batch_no = String(query.batchNo);
+    if (query.batchNo) where.batch_no = String(query.batchNo);
     if (query.inventoryMode) where.inventory_mode = Number(query.inventoryMode);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_total_detail.findMany({
@@ -364,9 +542,16 @@ export class InventoryService {
   }
 
   async stockOptions(query: Body) {
-    const where: Prisma.hspsi_inventory_batch_totalWhereInput = { inventory_qty: { gt: 0 } };
-    if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.orgId) where.org_id = BigInt(query.orgId);
+    // 该接口只服务于已确定组织和仓库的业务表单，禁止无条件返回全系统库存。
+    if (!query.orgId || !query.warehouseId) return [];
+    const orgId = BigInt(query.orgId),
+      warehouseId = BigInt(query.warehouseId);
+    await this.masterData.assertWarehouse(orgId, warehouseId);
+    const where: Prisma.hspsi_inventory_batch_totalWhereInput = {
+      org_id: orgId,
+      warehouse_id: warehouseId,
+      inventory_qty: { gt: 0 },
+    };
     const rows = await this.prisma.hspsi_inventory_batch_total.findMany({
       where,
       orderBy: [{ goods_id: 'asc' }, { batch_no: 'asc' }],
@@ -546,6 +731,41 @@ export class InventoryService {
         },
       }),
     ]);
+    const mappedDetails = details.map((line) => {
+      const goods = refs.goods.find((record) => record.goods_id === line.goods_id);
+      const sku = refs.skus.find((record) => record.sku_id === line.sku_id);
+      const stock = stocks.find(
+        (record) =>
+          record.goods_id === line.goods_id &&
+          record.sku_id === line.sku_id &&
+          record.batch_no === line.batch_no,
+      );
+      const posting = postings.find(
+        (record) =>
+          record.goods_id === line.goods_id &&
+          record.sku_id === line.sku_id &&
+          record.batch_no === line.batch_no,
+      );
+      return {
+        id: line.id,
+        goodsId: line.goods_id,
+        goodsCode: goods?.query_code,
+        goodsName: goods?.goods_name,
+        skuId: line.sku_id,
+        skuSpec: sku?.spec_models,
+        batchNo: line.batch_no,
+        unitType: line.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(line.unit_type))?.name,
+        warehouseId: item.warehouse_id,
+        warehouseName: refs.warehouses.find((record) => record.warehouse_id === item.warehouse_id)
+          ?.name,
+        inventoryQty: posting
+          ? Number(posting.after_qty) - Number(posting.operation_qty)
+          : Number(stock?.inventory_qty ?? 0),
+        quantity: line.transfer_qty,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.transfer_id,
@@ -559,45 +779,17 @@ export class InventoryService {
       receiveBy: item.receive_by,
       transferDate: item.transfer_date,
       approveStatus: item.approve_status,
-      details: details.map((line) => {
-        const goods = refs.goods.find((record) => record.goods_id === line.goods_id);
-        const sku = refs.skus.find((record) => record.sku_id === line.sku_id);
-        const stock = stocks.find(
-          (record) =>
-            record.goods_id === line.goods_id &&
-            record.sku_id === line.sku_id &&
-            record.batch_no === line.batch_no,
-        );
-        const posting = postings.find(
-          (record) =>
-            record.goods_id === line.goods_id &&
-            record.sku_id === line.sku_id &&
-            record.batch_no === line.batch_no,
-        );
-        return {
-          id: line.id,
-          goodsId: line.goods_id,
-          goodsCode: goods?.query_code,
-          goodsName: goods?.goods_name,
-          skuId: line.sku_id,
-          skuSpec: sku?.spec_models,
-          batchNo: line.batch_no,
-          unitType: line.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(line.unit_type))?.name,
-          warehouseId: item.warehouse_id,
-          warehouseName: refs.warehouses.find((record) => record.warehouse_id === item.warehouse_id)
-            ?.name,
-          inventoryQty: posting
-            ? Number(posting.after_qty) - Number(posting.operation_qty)
-            : Number(stock?.inventory_qty ?? 0),
-          quantity: line.transfer_qty,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async saveTransfer(id: string | null, body: Body, userId: string, submit: boolean) {
     const lines = this.lines(body.details);
     await this.validateTransferWarehouses(body);
+    await this.masterData.assertGoodsLines(
+      body.orgId,
+      body.warehouseId,
+      lines.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+    );
     const validUsers = await this.prisma.hspsi_sys_user.count({
       where: {
         id: { in: [BigInt(body.sendBy ?? 0), BigInt(body.receiveBy ?? 0)] },
@@ -629,21 +821,19 @@ export class InventoryService {
         updated_by: BigInt(userId),
         updated_at: new Date(),
       };
+      const newTransferNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_TRANSFER);
       const header = id
         ? await tx.hspsi_inventory_transfer.update({ where: { transfer_id: BigInt(id) }, data })
         : await tx.hspsi_inventory_transfer.create({
             data: {
               ...data,
-              transfer_no: `TMP${Date.now()}`,
+              transfer_no: newTransferNo,
               created_by: BigInt(userId),
               created_at: new Date(),
             },
           });
-      if (!id)
-        await tx.hspsi_inventory_transfer.update({
-          where: { transfer_id: header.transfer_id },
-          data: { transfer_no: this.no('IT', header.transfer_id) },
-        });
       await tx.hspsi_inventory_transfer_detail.deleteMany({
         where: { transfer_id: header.transfer_id },
       });
@@ -680,66 +870,96 @@ export class InventoryService {
     return { id, message: '删除成功' };
   }
   async approveTransfer(id: string, approved: boolean, comment: string, userId: string) {
-    const item = await this.transfer(id);
-    if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
+    return this.prisma.$transaction((tx) =>
+      this.applyTransferApproval(tx, BigInt(id), approved, comment, userId, false),
+    );
+  }
+
+  private async applyTransferApproval(
+    tx: Prisma.TransactionClient,
+    transferId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(transferId);
+    await tx.$queryRaw`SELECT transfer_id FROM hspsi_inventory_transfer WHERE transfer_id=${transferId} FOR UPDATE`;
+    const item = await tx.hspsi_inventory_transfer.findFirst({
+      where: { transfer_id: transferId, deleted_at: null },
+    });
+    if (!item || item.status !== 1 || item.approve_status !== 0)
       throw new BadRequestException('仅待审批调拨单可操作');
-    await this.validateTransferWarehouses(item);
-    await this.prisma.$transaction(async (tx) => {
-      if (approved) {
-        const lines: InventoryLine[] = item.details.map((d: Body) => ({
-          goodsId: d.goodsId,
-          skuId: d.skuId,
-          batchNo: d.batchNo,
-          unitType: d.unitType,
-          quantity: String(d.quantity),
-        }));
-        await this.posting.post(
-          {
-            orgId: item.org_id,
-            warehouseId: item.warehouse_id,
-            direction: -1,
-            operationType: 2,
-            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
-            sourceId: item.transfer_id,
-            sourceType: 'inventory_transfer',
-            sourceNo: item.transfer_no,
-            operationBy: userId,
-            idempotencyKey: `transfer:${id}:out`,
-            remark: '库存调拨出库',
-            lines,
-          },
-          tx,
-        );
-        await this.posting.post(
-          {
-            orgId: item.to_org_id,
-            warehouseId: item.to_warehouse_id,
-            direction: 1,
-            operationType: 1,
-            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
-            sourceId: item.transfer_id,
-            sourceType: 'inventory_transfer',
-            sourceNo: item.transfer_no,
-            operationBy: userId,
-            idempotencyKey: `transfer:${id}:in`,
-            remark: '库存调拨入库',
-            lines,
-          },
-          tx,
-        );
-      }
-      await tx.hspsi_inventory_transfer.update({
-        where: { transfer_id: item.transfer_id },
-        data: {
-          status: approved ? 2 : 0,
-          approve_status: approved ? 1 : 2,
-          approve_comment: comment,
-          approve_by: BigInt(userId),
-          approve_date: new Date(),
-          send_date: approved ? new Date() : null,
-          receive_date: approved ? new Date() : null,
+    if (!fromOa) {
+      const active = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'inventory_transfer',
+          business_id: transferId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
         },
       });
+      if (active) throw new BadRequestException('该调拨单正在OA审批，不能在本系统审批');
+    }
+    const details = await tx.hspsi_inventory_transfer_detail.findMany({
+      where: { transfer_id: transferId },
+    });
+    if (!details.length) throw new BadRequestException('调拨单没有商品明细');
+    const actor = fromOa ? String(item.created_by) : userId;
+    if (approved) {
+      const lines: InventoryLine[] = details.map((d) => ({
+        goodsId: d.goods_id,
+        skuId: d.sku_id,
+        batchNo: d.batch_no,
+        unitType: d.unit_type,
+        quantity: String(d.transfer_qty),
+      }));
+      await this.posting.post(
+        {
+          orgId: item.org_id,
+          warehouseId: item.warehouse_id,
+          direction: -1,
+          operationType: 2,
+          inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
+          sourceId: item.transfer_id,
+          sourceType: 'inventory_transfer',
+          sourceNo: item.transfer_no,
+          operationBy: actor,
+          idempotencyKey: `transfer:${id}:out`,
+          remark: '库存调拨出库',
+          lines,
+        },
+        tx,
+      );
+      await this.posting.post(
+        {
+          orgId: item.to_org_id,
+          warehouseId: item.to_warehouse_id,
+          direction: 1,
+          operationType: 1,
+          inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_TRANSFER,
+          sourceId: item.transfer_id,
+          sourceType: 'inventory_transfer',
+          sourceNo: item.transfer_no,
+          operationBy: actor,
+          idempotencyKey: `transfer:${id}:in`,
+          remark: '库存调拨入库',
+          lines,
+        },
+        tx,
+      );
+    }
+    await tx.hspsi_inventory_transfer.update({
+      where: { transfer_id: item.transfer_id },
+      data: {
+        status: approved ? 2 : 0,
+        approve_status: approved ? 1 : 2,
+        approve_comment: comment,
+        approve_by: fromOa ? 0n : BigInt(userId),
+        approve_date: new Date(),
+        send_date: approved ? new Date() : null,
+        receive_date: approved ? new Date() : null,
+      },
     });
     return { id, message: approved ? '调拨审批通过，双边库存已过账' : '调拨已驳回' };
   }
@@ -828,6 +1048,32 @@ export class InventoryService {
       this.prisma.hspsi_basic_unit.findMany(),
       this.dictionary('inventory_adjust_type'),
     ]);
+    const mappedDetails = details.map((d) => ({
+      id: d.detail_id,
+      goodsId: d.goods_id,
+      goodsCode: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.query_code,
+      goodsName: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.goods_name,
+      skuId: d.sku_id,
+      skuSpec: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.spec_models,
+      warehouseId: d.warehouse_id,
+      warehouseName: refs.warehouses.find((warehouse) => warehouse.warehouse_id === d.warehouse_id)
+        ?.name,
+      batchNo: d.batch_no,
+      unitType: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0,
+      unitName: units.find(
+        (unit) =>
+          unit.id === BigInt(refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0),
+      )?.name,
+      adjustType: d.adjust_type,
+      adjustTypeName: types.get(String(d.adjust_type)),
+      beforeQty: d.before_qty,
+      quantity: d.adjust_qty,
+      afterQty:
+        Number(d.before_qty) +
+        (Number(d.adjust_type) === 1 ? Number(d.adjust_qty) : -Number(d.adjust_qty)),
+      remark: d.remark,
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.adjust_id,
@@ -835,32 +1081,7 @@ export class InventoryService {
       reason: item.adjust_reason,
       applicantDate: item.applicant_date,
       approveStatus: item.approve_status,
-      details: details.map((d) => ({
-        id: d.detail_id,
-        goodsId: d.goods_id,
-        goodsCode: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.query_code,
-        goodsName: refs.goods.find((goods) => goods.goods_id === d.goods_id)?.goods_name,
-        skuId: d.sku_id,
-        skuSpec: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.spec_models,
-        warehouseId: d.warehouse_id,
-        warehouseName: refs.warehouses.find(
-          (warehouse) => warehouse.warehouse_id === d.warehouse_id,
-        )?.name,
-        batchNo: d.batch_no,
-        unitType: refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0,
-        unitName: units.find(
-          (unit) =>
-            unit.id === BigInt(refs.skus.find((sku) => sku.sku_id === d.sku_id)?.unit_type ?? 0),
-        )?.name,
-        adjustType: d.adjust_type,
-        adjustTypeName: types.get(String(d.adjust_type)),
-        beforeQty: d.before_qty,
-        quantity: d.adjust_qty,
-        afterQty:
-          Number(d.before_qty) +
-          (Number(d.adjust_type) === 1 ? Number(d.adjust_qty) : -Number(d.adjust_qty)),
-        remark: d.remark,
-      })),
+      details: enrichedDetails,
     };
   }
   async saveAdjustment(id: string | null, body: Body, userId: string, submit: boolean) {
@@ -871,6 +1092,9 @@ export class InventoryService {
         throw new BadRequestException('当前调整单不能编辑');
     }
     const result = await this.prisma.$transaction(async (tx) => {
+      const newAdjustmentNo = id
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_ADJUSTMENT);
       const header = id
         ? await tx.hspsi_inventory_adjust.update({
             where: { adjust_id: BigInt(id) },
@@ -885,7 +1109,7 @@ export class InventoryService {
           })
         : await tx.hspsi_inventory_adjust.create({
             data: {
-              adjust_no: `TMP${Date.now()}`,
+              adjust_no: newAdjustmentNo,
               adjust_reason: String(body.reason),
               applicant_date: new Date(body.applicantDate ?? Date.now()),
               status: submit ? 1 : 0,
@@ -895,11 +1119,6 @@ export class InventoryService {
               updated_by: BigInt(userId),
             },
           });
-      if (!id)
-        await tx.hspsi_inventory_adjust.update({
-          where: { adjust_id: header.adjust_id },
-          data: { adjust_no: this.no('IA', header.adjust_id) },
-        });
       await tx.hspsi_inventory_adjust_detail.deleteMany({ where: { adjust_id: header.adjust_id } });
       for (const l of lines) {
         const stock = await tx.hspsi_inventory_batch_total.findUnique({
@@ -950,57 +1169,289 @@ export class InventoryService {
     return { id, message: '已提交审批' };
   }
   async approveAdjustment(id: string, approved: boolean, comment: string, userId: string) {
-    const item = await this.adjustment(id);
-    if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
+    return this.prisma.$transaction((tx) =>
+      this.applyAdjustmentApproval(tx, BigInt(id), approved, comment, userId, false),
+    );
+  }
+
+  private async applyAdjustmentApproval(
+    tx: Prisma.TransactionClient,
+    adjustId: bigint,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa: boolean,
+  ) {
+    const id = String(adjustId);
+    await tx.$queryRaw`SELECT adjust_id FROM hspsi_inventory_adjust WHERE adjust_id=${adjustId} FOR UPDATE`;
+    const item = await tx.hspsi_inventory_adjust.findFirst({
+      where: { adjust_id: adjustId, deleted_at: null },
+    });
+    if (!item || item.status !== 1 || item.approve_status !== 0)
       throw new BadRequestException('仅待审批调整单可操作');
-    await this.prisma.$transaction(async (tx) => {
-      if (approved)
-        for (const l of item.details) {
-          const wh = await tx.hspsi_basic_warehouse.findUniqueOrThrow({
-            where: { warehouse_id: BigInt(l.warehouseId) },
-          });
-          await this.posting.post(
-            {
-              orgId: wh.org_id,
-              warehouseId: l.warehouseId,
-              direction: Number(l.adjustType) === 1 ? 1 : -1,
-              operationType: Number(l.adjustType) === 1 ? 1 : 2,
-              inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_ADJUSTMENT,
-              sourceId: item.adjust_id,
-              sourceType: 'inventory_adjust',
-              sourceNo: item.adjust_no,
-              operationBy: userId,
-              idempotencyKey: `adjust:${id}:${l.id}`,
-              remark: item.adjust_reason,
-              lines: [
-                {
-                  goodsId: l.goodsId,
-                  skuId: l.skuId,
-                  batchNo: l.batchNo,
-                  quantity: String(l.quantity),
-                },
-              ],
-            },
-            tx,
-          );
-        }
-      await tx.hspsi_inventory_adjust.update({
-        where: { adjust_id: item.adjust_id },
+    if (!fromOa) {
+      const active = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'inventory_adjust',
+          business_id: adjustId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+      });
+      if (active) throw new BadRequestException('该调整单正在OA审批，不能在本系统审批');
+    }
+    const details = await tx.hspsi_inventory_adjust_detail.findMany({
+      where: { adjust_id: adjustId },
+    });
+    const actor = fromOa ? String(item.created_by) : userId;
+    if (approved)
+      for (const l of details) {
+        const wh = await tx.hspsi_basic_warehouse.findUniqueOrThrow({
+          where: { warehouse_id: l.warehouse_id },
+        });
+        await this.posting.post(
+          {
+            orgId: wh.org_id,
+            warehouseId: l.warehouse_id,
+            direction: l.adjust_type === 1 ? 1 : -1,
+            operationType: l.adjust_type === 1 ? 1 : 2,
+            inventoryMode: INVENTORY_BUSINESS_MODE.INVENTORY_ADJUSTMENT,
+            sourceId: item.adjust_id,
+            sourceType: 'inventory_adjust',
+            sourceNo: item.adjust_no,
+            operationBy: actor,
+            idempotencyKey: `adjust:${id}:${l.detail_id}`,
+            remark: item.adjust_reason,
+            lines: [
+              {
+                goodsId: l.goods_id,
+                skuId: l.sku_id,
+                batchNo: l.batch_no,
+                quantity: String(l.adjust_qty),
+              },
+            ],
+          },
+          tx,
+        );
+      }
+    await tx.hspsi_inventory_adjust.update({
+      where: { adjust_id: item.adjust_id },
+      data: {
+        status: approved ? 1 : 0,
+        approve_status: approved ? 1 : 2,
+        approve_comment: comment,
+        approve_by: fromOa ? 0n : BigInt(userId),
+        approve_date: new Date(),
+      },
+    });
+    return { id, message: approved ? '调整审批通过，库存已过账' : '调整已驳回，可修改后重新提交' };
+  }
+
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: {
+          in: [
+            'inventory_transfer',
+            'inventory_adjust',
+            'inventory_check',
+            'inventory_loss',
+            'inventory_loss_output',
+            'inventory_overflow',
+          ],
+        },
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的库存OA审批实例');
+    if (!['inventory_transfer', 'inventory_adjust'].includes(instance.business_type)) {
+      return this.handleComplexOaApproval(instance, payload, rawPayload, logId);
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const passed = payload.procStatus === 'PASSED';
+      const expected = passed ? 1 : 2;
+      const document =
+        current.business_type === 'inventory_transfer'
+          ? await tx.hspsi_inventory_transfer.findFirst({
+              where: { transfer_id: current.business_id, deleted_at: null },
+            })
+          : await tx.hspsi_inventory_adjust.findFirst({
+              where: { adjust_id: current.business_id, deleted_at: null },
+            });
+      if (!document) throw new NotFoundException('OA审批对应的库存单据不存在');
+      const duplicate =
+        current.proc_status === payload.procStatus && document.approve_status === expected;
+      if (!duplicate) {
+        const comment = this.oaComment(payload.procStatus);
+        if (current.business_type === 'inventory_transfer')
+          await this.applyTransferApproval(tx, current.business_id, passed, comment, '0', true);
+        else
+          await this.applyAdjustmentApproval(tx, current.business_id, passed, comment, '0', true);
+      }
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
         data: {
-          status: approved ? 1 : 0,
-          approve_status: approved ? 1 : 2,
-          approve_comment: comment,
-          approve_by: BigInt(userId),
-          approve_date: new Date(),
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '库存审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        businessType: current.business_type,
+        businessId: current.business_id,
+        procStatus: payload.procStatus,
+      };
+    });
+  }
+
+  private oaComment(status: ApprovalCallbackPayload['procStatus']) {
+    return {
+      PASSED: 'OA审批通过',
+      REJECTED: 'OA审批驳回',
+      CANCELED: 'OA审批取消',
+      DELETED: 'OA审批流程删除',
+    }[status];
+  }
+
+  private async handleComplexOaApproval(
+    instance: any,
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    logId: bigint,
+  ) {
+    const passed = payload.procStatus === 'PASSED',
+      expected = passed ? 1 : 2,
+      id = instance.business_id as bigint;
+    const document: any =
+      instance.business_type === 'inventory_check'
+        ? await this.prisma.hspsi_inventory_check.findFirst({
+            where: { check_id: id, deleted_at: null },
+          })
+        : instance.business_type === 'inventory_loss'
+          ? await this.prisma.hspsi_inventory_loss.findFirst({
+              where: { loss_id: id, deleted_at: null },
+            })
+          : instance.business_type === 'inventory_loss_output'
+            ? await this.prisma.hspsi_inventory_loss_output.findFirst({
+                where: { loss_id: id, deleted_at: null },
+              })
+            : await this.prisma.hspsi_inventory_overflow.findFirst({
+                where: { overflow_id: id, deleted_at: null },
+              });
+    if (!document) throw new NotFoundException('OA审批对应的库存单据不存在');
+    const duplicate =
+      instance.proc_status === payload.procStatus && document.approve_status === expected;
+    let businessResult: any = {};
+    if (!duplicate) {
+      const actor = String(document.created_by),
+        comment = this.oaComment(payload.procStatus);
+      businessResult =
+        instance.business_type === 'inventory_check'
+          ? await this.approveCheck(String(id), passed, comment, actor, true)
+          : instance.business_type === 'inventory_loss_output'
+            ? await this.approveLossOutput(String(id), passed, comment, actor, true)
+            : await this.approveDocument(
+                instance.business_type === 'inventory_loss' ? 'loss' : 'overflow',
+                String(id),
+                passed,
+                comment,
+                actor,
+                true,
+              );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: instance.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: logId },
+        data: {
+          instance_id: instance.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '库存审批结果已处理',
+          account_set_id: instance.account_set_id,
         },
       });
     });
-    return { id, message: approved ? '调整审批通过，库存已过账' : '调整已驳回，可修改后重新提交' };
+    return {
+      processed: true,
+      duplicate,
+      businessType: instance.business_type,
+      businessId: id,
+      procStatus: payload.procStatus,
+      ...businessResult,
+    };
+  }
+
+  private async assertNoActiveOa(businessType: string, businessId: bigint, message: string) {
+    const repository = this.prisma.hspsi_oa_approval_instance;
+    if (!repository) return;
+    const active = await repository.findFirst({
+      where: {
+        business_type: businessType,
+        business_id: businessId,
+        proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+        deleted_at: null,
+      },
+      select: { id: true },
+    });
+    if (active) throw new BadRequestException(message);
   }
 
   async checks(query: Body) {
     const { page, pageSize } = this.page(query);
     const where: Prisma.hspsi_inventory_checkWhereInput = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_check.findMany({
@@ -1230,6 +1681,38 @@ export class InventoryService {
         },
       }),
     ]);
+    const mappedDetails = details.map((detail) => {
+      const damaged = Number(detail.damaged_qty) > 0;
+      const difference = Number(detail.different_qty);
+      const quantityResult = difference < 0 ? -1 : difference > 0 ? 1 : 0;
+      const resultNames = [
+        difference < 0 ? '盘亏' : difference > 0 ? '盘盈' : '',
+        damaged ? '损坏' : '',
+      ].filter(Boolean);
+      return {
+        id: detail.check_detail_id,
+        goodsId: detail.goods_id,
+        goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
+        goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
+        skuId: detail.sku_id,
+        skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
+        inventoryQty: detail.inventory_qty,
+        checkQty: detail.check_qty,
+        damagedQty: detail.damaged_qty,
+        differentQty: detail.different_qty,
+        unitPrice: detail.unit_price,
+        differentAmount: detail.different_amount,
+        result: damaged ? 2 : quantityResult,
+        quantityResult,
+        damagedResult: damaged ? 1 : 0,
+        resultName: resultNames.join(' + ') || '正常',
+        remark: detail.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item.check_id,
@@ -1263,40 +1746,11 @@ export class InventoryService {
           approveStatus: overflow.approve_status,
         })),
       ],
-      details: details.map((detail) => {
-        const damaged = Number(detail.damaged_qty) > 0;
-        const difference = Number(detail.different_qty);
-        const quantityResult = difference < 0 ? -1 : difference > 0 ? 1 : 0;
-        const resultNames = [
-          difference < 0 ? '盘亏' : difference > 0 ? '盘盈' : '',
-          damaged ? '损坏' : '',
-        ].filter(Boolean);
-        return {
-          id: detail.check_detail_id,
-          goodsId: detail.goods_id,
-          goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
-          goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
-          skuId: detail.sku_id,
-          skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
-          batchNo: detail.batch_no,
-          unitType: detail.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
-          inventoryQty: detail.inventory_qty,
-          checkQty: detail.check_qty,
-          damagedQty: detail.damaged_qty,
-          differentQty: detail.different_qty,
-          unitPrice: detail.unit_price,
-          differentAmount: detail.different_amount,
-          result: damaged ? 2 : quantityResult,
-          quantityResult,
-          damagedResult: damaged ? 1 : 0,
-          resultName: resultNames.join(' + ') || '正常',
-          remark: detail.remark,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async createCheck(body: Body, userId: string) {
+    await this.masterData.assertWarehouse(body.orgId, body.warehouseId);
     const stocks = await this.prisma.hspsi_inventory_batch_total.findMany({
       where: {
         org_id: BigInt(body.orgId),
@@ -1305,10 +1759,16 @@ export class InventoryService {
       },
     });
     if (!stocks.length) throw new BadRequestException('所选仓库当前没有可盘点库存');
+    await this.masterData.assertGoodsLines(
+      body.orgId,
+      body.warehouseId,
+      stocks.map((line) => ({ goodsId: line.goods_id, skuId: line.sku_id })),
+    );
     const id = await this.prisma.$transaction(async (tx) => {
+      const checkNo = await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_CHECK);
       const header = await tx.hspsi_inventory_check.create({
         data: {
-          check_no: `TMP${Date.now()}`,
+          check_no: checkNo,
           check_type: Number(body.checkType),
           check_date: new Date(body.checkDate ?? Date.now()),
           check_state: 3,
@@ -1322,10 +1782,6 @@ export class InventoryService {
           created_by: BigInt(userId),
           updated_by: BigInt(userId),
         },
-      });
-      await tx.hspsi_inventory_check.update({
-        where: { check_id: header.check_id },
-        data: { check_no: this.no('IC', header.check_id) },
       });
       await tx.hspsi_inventory_check_detail.createMany({
         data: stocks.map((s) => ({
@@ -1420,10 +1876,22 @@ export class InventoryService {
     });
     return { id, message: '删除成功' };
   }
-  async approveCheck(id: string, approved: boolean, comment: string, userId: string) {
+  async approveCheck(
+    id: string,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa = false,
+  ) {
     const item = await this.check(id);
     if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
       throw new BadRequestException('仅待审批盘点单可操作');
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        'inventory_check',
+        BigInt(id),
+        '该盘点单正在OA审批，不能在本系统审批',
+      );
     const generated: Array<{ type: string; id: bigint; no: string }> = [];
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT check_id FROM hspsi_inventory_check WHERE check_id=${BigInt(id)} FOR UPDATE`;
@@ -1436,9 +1904,12 @@ export class InventoryService {
         const { negative, positive, damaged } = partitionInventoryCheckDetails(item.details);
 
         if (negative.length) {
+          const shortageOutputNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT,
+          );
           const shortageOutput = await tx.hspsi_inventory_loss_output.create({
             data: {
-              loss_no: `TMP${Date.now()}`,
+              loss_no: shortageOutputNo,
               loss_type: 1,
               loss_reson: `盘点 ${item.check_no} 数量盘亏`,
               org_id: item.org_id,
@@ -1463,11 +1934,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const shortageOutputNo = this.no('ILO', shortageOutput.loss_id);
-          await tx.hspsi_inventory_loss_output.update({
-            where: { loss_id: shortageOutput.loss_id },
-            data: { loss_no: shortageOutputNo },
           });
           await tx.hspsi_inventory_loss_output_detail.createMany({
             data: negative.map((detail: Body) => ({
@@ -1501,9 +1967,12 @@ export class InventoryService {
         }
 
         for (const [detail] of splitInventoryDamageDetails(damaged)) {
+          const damageNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_DAMAGE_OUTPUT,
+          );
           const damage = await tx.hspsi_inventory_loss.create({
             data: {
-              loss_no: `TMP${Date.now()}`,
+              loss_no: damageNo,
               business_kind: 2,
               loss_type: 1,
               loss_reson: `盘点 ${item.check_no} 批次 ${String(detail.batchNo ?? '')} 物料损坏`,
@@ -1521,11 +1990,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const damageNo = this.no('ILD', damage.loss_id);
-          await tx.hspsi_inventory_loss.update({
-            where: { loss_id: damage.loss_id },
-            data: { loss_no: damageNo },
           });
           await tx.hspsi_inventory_loss_detail.create({
             data: {
@@ -1555,9 +2019,12 @@ export class InventoryService {
         }
 
         if (positive.length) {
+          const overflowNo = await this.businessNumber.generate(
+            BUSINESS_PREFIX.INVENTORY_OVERFLOW_INPUT,
+          );
           const overflow = await tx.hspsi_inventory_overflow.create({
             data: {
-              overflow_no: `TMP${Date.now()}`,
+              overflow_no: overflowNo,
               overflow_type: 1,
               overflow_reson: `盘点 ${item.check_no} 数量盘盈`,
               org_id: item.org_id,
@@ -1581,11 +2048,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const overflowNo = this.no('IO', overflow.overflow_id);
-          await tx.hspsi_inventory_overflow.update({
-            where: { overflow_id: overflow.overflow_id },
-            data: { overflow_no: overflowNo },
           });
           await tx.hspsi_inventory_overflow_detail.createMany({
             data: positive.map((detail: Body) => ({
@@ -1652,6 +2114,7 @@ export class InventoryService {
           : this.prisma.hspsi_inventory_overflow;
     const key = type === 'overflow' ? 'overflow_id' : 'loss_id';
     const where: Body = { deleted_at: null };
+    if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (type === 'loss') where.business_kind = Number(query.businessKind ?? 2);
     if (type === 'overflow' && query.onlyInputs) Object.assign(where, { input_no: { not: null } });
@@ -1716,6 +2179,17 @@ export class InventoryService {
       this.dictionary('inventory_loss_disposal'),
     ]);
     const onlyInputs = type === 'overflow' && !!query.onlyInputs;
+    const purchaseReturns =
+      type === 'loss' && rows.length
+        ? await this.prisma.hspsi_purchase_order_input_exit.findMany({
+            where: {
+              source_document_type: 'inventory_loss',
+              source_document_id: { in: rows.map((row: Body) => BigInt(row.loss_id)) },
+              deleted_at: null,
+            },
+            select: { po_exit_id: true, po_exit_no: true, source_document_id: true },
+          })
+        : [];
     const items = rows.map((item: Body) => {
       const sourceLoss = sourceLosses.find((loss) => loss.loss_id === item.source_loss_id);
       const directSourceId = BigInt(item.source_check_id ?? 0);
@@ -1766,6 +2240,12 @@ export class InventoryService {
         sourceCheckNo: checks.find((check) => check.check_id === sourceCheckId)?.check_no,
         sourceLossId: item.source_loss_id,
         sourceLossNo: sourceLoss?.loss_no,
+        purchaseReturns: purchaseReturns
+          .filter((purchaseReturn) => purchaseReturn.source_document_id === BigInt(item.loss_id))
+          .map((purchaseReturn) => ({
+            id: purchaseReturn.po_exit_id,
+            returnNo: purchaseReturn.po_exit_no,
+          })),
         createdBy: item.created_by,
         createdByName: users.get(String(item.created_by)),
         createdAt: item.created_at,
@@ -1838,6 +2318,37 @@ export class InventoryService {
         : null,
     ]);
     const businessKind = type === 'loss' ? Number(item.business_kind) : 0;
+    const mappedDetails = details.map((detail: Body) => {
+      const stock = stocks.find(
+        (row) =>
+          row.goods_id === detail.goods_id &&
+          row.sku_id === detail.sku_id &&
+          row.batch_no === (detail.batch_no ?? ''),
+      );
+      const quantity = Number(type === 'overflow' ? detail.overflow_qty : detail.loss_qty);
+      const amount = Number(type === 'overflow' ? detail.overflow_amount : detail.loss_amount);
+      return {
+        id: detail.id ?? detail.loss_detail_id,
+        goodsId: detail.goods_id,
+        goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
+        goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
+        skuId: detail.sku_id,
+        skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
+        inventoryQty: stock?.inventory_qty ?? 0,
+        unitPrice: quantity
+          ? amount / quantity
+          : stock && Number(stock.inventory_qty)
+            ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
+            : 0,
+        quantity,
+        amount,
+        sourceReceiptDetailId: detail.source_receipt_detail_id ?? 0,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...item,
       id: item[key],
@@ -1860,40 +2371,51 @@ export class InventoryService {
       inputStatus: item.input_status,
       inputBy: item.input_by,
       inputDate: item.input_date,
-      details: details.map((detail: Body) => {
-        const stock = stocks.find(
-          (row) =>
-            row.goods_id === detail.goods_id &&
-            row.sku_id === detail.sku_id &&
-            row.batch_no === (detail.batch_no ?? ''),
-        );
-        const quantity = Number(type === 'overflow' ? detail.overflow_qty : detail.loss_qty);
-        const amount = Number(type === 'overflow' ? detail.overflow_amount : detail.loss_amount);
-        return {
-          id: detail.id ?? detail.loss_detail_id,
-          goodsId: detail.goods_id,
-          goodsCode: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.query_code,
-          goodsName: refs.goods.find((goods) => goods.goods_id === detail.goods_id)?.goods_name,
-          skuId: detail.sku_id,
-          skuSpec: refs.skus.find((sku) => sku.sku_id === detail.sku_id)?.spec_models,
-          batchNo: detail.batch_no,
-          unitType: detail.unit_type,
-          unitName: units.find((unit) => unit.id === BigInt(detail.unit_type))?.name,
-          inventoryQty: stock?.inventory_qty ?? 0,
-          unitPrice: quantity
-            ? amount / quantity
-            : stock && Number(stock.inventory_qty)
-              ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
-              : 0,
-          quantity,
-          amount,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
 
   loss(id: string) {
     return this.document('loss', id);
+  }
+
+  async lossPurchaseSourceOptions(query: Body) {
+    const orgId = BigInt(query.orgId);
+    const warehouseId = BigInt(query.warehouseId);
+    const details = await this.prisma.hspsi_purchase_order_input_detail.findMany({
+      where: {
+        goods_id: BigInt(query.goodsId),
+        sku_id: BigInt(query.skuId),
+        batch_no: String(query.batchNo ?? '').trim(),
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!details.length) return [];
+    const receipts = await this.prisma.hspsi_purchase_order_input.findMany({
+      where: {
+        po_input_id: { in: details.map((detail) => detail.po_input_id) },
+        org_id: orgId,
+        warehouse_id: warehouseId,
+        comfirm_status: 1,
+        deleted_at: null,
+      },
+    });
+    const receiptMap = new Map(receipts.map((receipt) => [String(receipt.po_input_id), receipt]));
+    return details
+      .filter((detail) => receiptMap.has(String(detail.po_input_id)))
+      .map((detail) => {
+        const receipt = receiptMap.get(String(detail.po_input_id))!;
+        return {
+          value: detail.id,
+          label: `${receipt.po_input_no} · 入库${detail.input_qty}`,
+          receiptId: receipt.po_input_id,
+          receiptNo: receipt.po_input_no,
+          orderId: receipt.po_id,
+          inputQuantity: detail.input_qty,
+          inputPosition: detail.input_position,
+        };
+      });
   }
   lossOutput(id: string) {
     return this.document('loss-output', id);
@@ -1956,7 +2478,10 @@ export class InventoryService {
         throw new BadRequestException('明细数量必须为正整数');
       if (requiresAvailable && quantity > Number(stock.inventory_qty))
         throw new BadRequestException(`批次 ${batchNo || '无批号'} 处理数量超过当前库存`);
-      const amount = Number(line.amount ?? quantity * Number(line.unitPrice ?? 0));
+      const unitCost = Number(stock.inventory_qty)
+        ? Number(stock.inventory_amount) / Number(stock.inventory_qty)
+        : 0;
+      const amount = quantity * unitCost;
       if (!Number.isFinite(amount) || amount < 0)
         throw new BadRequestException('明细金额不能为负数');
       return { goodsId, skuId, batchNo, unitType: stock.unit_type, quantity, amount };
@@ -2047,6 +2572,11 @@ export class InventoryService {
       inputLines,
       type === 'loss' && !generatedDamage,
     );
+    await this.masterData.assertGoodsLines(
+      orgId,
+      warehouseId,
+      lines.map((line) => ({ goodsId: line.goodsId, skuId: line.skuId })),
+    );
     const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
     const amount = lines.reduce((sum, line) => sum + line.amount, 0);
     const sourceCheckId = BigInt(body.sourceCheckId ?? old?.sourceCheckId ?? 0);
@@ -2082,6 +2612,46 @@ export class InventoryService {
     const goWhereInput = body.goWhere !== undefined ? body.goWhere : old?.goWhere;
     const goWhere =
       type === 'loss' && businessKind === 2 ? parseInventoryLossDisposal(goWhereInput, submit) : -1;
+    const purchaseSourceIds = lines.map((_, index) =>
+      BigInt(
+        inputLines[index]?.sourceReceiptDetailId ??
+          inputLines[index]?.source_receipt_detail_id ??
+          0,
+      ),
+    );
+    if (type === 'loss' && businessKind === 2 && goWhere === 2) {
+      if (purchaseSourceIds.some((sourceId) => sourceId <= 0n)) {
+        throw new BadRequestException('退货报损的每条明细都必须选择原采购入库来源');
+      }
+      const sourceDetails = await this.prisma.hspsi_purchase_order_input_detail.findMany({
+        where: { id: { in: purchaseSourceIds }, deleted_at: null },
+      });
+      const sourceReceipts = await this.prisma.hspsi_purchase_order_input.findMany({
+        where: {
+          po_input_id: { in: sourceDetails.map((source) => source.po_input_id) },
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          comfirm_status: 1,
+          deleted_at: null,
+        },
+      });
+      const receiptIds = new Set(sourceReceipts.map((receipt) => String(receipt.po_input_id)));
+      lines.forEach((line, index) => {
+        const source = sourceDetails.find((detail) => detail.id === purchaseSourceIds[index]);
+        if (
+          !source ||
+          !receiptIds.has(String(source.po_input_id)) ||
+          source.goods_id !== line.goodsId ||
+          source.sku_id !== line.skuId ||
+          source.batch_no !== line.batchNo
+        ) {
+          throw new BadRequestException('所选采购入库来源与报损商品、SKU、批号或仓库不一致');
+        }
+        if (line.quantity > Number(source.input_qty)) {
+          throw new BadRequestException('报损退货数量不能超过所选采购入库明细数量');
+        }
+      });
+    }
     if (!String(body.reason ?? '').trim()) throw new BadRequestException('请填写单据原因');
     const data: Body = {
       org_id: orgId,
@@ -2133,6 +2703,15 @@ export class InventoryService {
               });
         if (duplicate) throw new BadRequestException('该盘点单已经生成同类差异单据');
       }
+      const newBusinessNo = id
+        ? ''
+        : await this.businessNumber.generate(
+            type === 'overflow'
+              ? BUSINESS_PREFIX.INVENTORY_OVERFLOW_INPUT
+              : businessKind === 1
+                ? BUSINESS_PREFIX.INVENTORY_SHORTAGE
+                : BUSINESS_PREFIX.INVENTORY_DAMAGE_OUTPUT,
+          );
       const header =
         type === 'loss'
           ? id
@@ -2140,7 +2719,7 @@ export class InventoryService {
             : await tx.hspsi_inventory_loss.create({
                 data: {
                   ...data,
-                  loss_no: `TMP${Date.now()}`,
+                  loss_no: newBusinessNo,
                   created_by: BigInt(userId),
                   created_at: new Date(),
                 },
@@ -2150,25 +2729,13 @@ export class InventoryService {
             : await tx.hspsi_inventory_overflow.create({
                 data: {
                   ...data,
-                  overflow_no: `TMP${Date.now()}`,
+                  overflow_no: newBusinessNo,
                   created_by: BigInt(userId),
                   created_at: new Date(),
                 },
               });
       const recordKey = type === 'loss' ? (header as Body).loss_id : (header as Body).overflow_id;
       if (!id) {
-        const prefix = type === 'overflow' ? 'IO' : businessKind === 1 ? 'ILS' : 'ILD';
-        const businessNo = this.no(prefix, recordKey);
-        if (type === 'loss')
-          await tx.hspsi_inventory_loss.update({
-            where: { loss_id: recordKey },
-            data: { loss_no: businessNo },
-          });
-        else
-          await tx.hspsi_inventory_overflow.update({
-            where: { overflow_id: recordKey },
-            data: { overflow_no: businessNo },
-          });
         if (sourceCheckId > 0n) {
           const sourceCheck = await tx.hspsi_inventory_check.findUnique({
             where: { check_id: sourceCheckId },
@@ -2186,7 +2753,7 @@ export class InventoryService {
                       ? 'inventory_shortage'
                       : 'inventory_loss',
                 downstreamId: recordKey,
-                downstreamNo: businessNo,
+                downstreamNo: newBusinessNo,
                 relationKind: 'generated',
                 createdBy: userId,
               },
@@ -2198,7 +2765,7 @@ export class InventoryService {
       if (type === 'loss') {
         await tx.hspsi_inventory_loss_detail.deleteMany({ where: { loss_id: recordKey } });
         await tx.hspsi_inventory_loss_detail.createMany({
-          data: lines.map((line) => ({
+          data: lines.map((line, index) => ({
             loss_id: recordKey,
             goods_id: line.goodsId,
             sku_id: line.skuId,
@@ -2206,6 +2773,7 @@ export class InventoryService {
             unit_type: line.unitType,
             loss_qty: Number(line.quantity),
             loss_amount: this.dec(line.amount),
+            source_receipt_detail_id: goWhere === 2 ? purchaseSourceIds[index] : 0n,
           })),
         });
       } else {
@@ -2312,17 +2880,15 @@ export class InventoryService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newOutputNo = outputId
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT);
       const header = outputId
         ? await tx.hspsi_inventory_loss_output.update({ where: { loss_id: outputId }, data })
         : await tx.hspsi_inventory_loss_output.create({
-            data: { ...data, loss_no: `TMP${Date.now()}`, created_by: BigInt(userId) },
+            data: { ...data, loss_no: newOutputNo, created_by: BigInt(userId) },
           });
-      const outputNo = outputId ? header.loss_no : this.no('ILO', header.loss_id);
-      if (!outputId)
-        await tx.hspsi_inventory_loss_output.update({
-          where: { loss_id: header.loss_id },
-          data: { loss_no: outputNo },
-        });
+      const outputNo = header.loss_no;
       await tx.hspsi_inventory_loss_output_detail.deleteMany({
         where: { loss_id: header.loss_id },
       });
@@ -2355,8 +2921,20 @@ export class InventoryService {
     return { id: recordId, message: '报亏出库单已按来源报亏单生成' };
   }
 
-  async approveLossOutput(id: string, approved: boolean, comment: string, userId: string) {
+  async approveLossOutput(
+    id: string,
+    approved: boolean,
+    comment: string,
+    userId: string,
+    fromOa = false,
+  ) {
     const documentId = BigInt(id);
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        'inventory_loss_output',
+        documentId,
+        '该盘亏出库单正在OA审批，不能在本系统审批',
+      );
     let inventoryPosted = false;
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT loss_id FROM hspsi_inventory_loss_output WHERE loss_id=${documentId} FOR UPDATE`;
@@ -2543,19 +3121,27 @@ export class InventoryService {
     approved: boolean,
     comment: string,
     userId: string,
+    fromOa = false,
   ) {
     if (type === 'loss-output') throw new BadRequestException('报亏出库请使用确认出库操作');
     const item: Body = await this.document(type, id);
     if (Number(item.status) !== 1 || Number(item.approveStatus) !== 0)
       throw new BadRequestException('仅待审批单据可操作');
+    if (!fromOa)
+      await this.assertNoActiveOa(
+        type === 'loss' ? 'inventory_loss' : 'inventory_overflow',
+        BigInt(id),
+        '该库存单据正在OA审批，不能在本系统审批',
+      );
     const businessKind = type === 'loss' ? Number(item.businessKind) : 0;
     if (type === 'loss' && businessKind !== 2)
       throw new BadRequestException('中间报亏单已停用，报亏出库只能由库存盘点直接生成');
     if (type === 'overflow' && BigInt(item.sourceCheckId ?? 0) <= 0n) {
       throw new BadRequestException('报盈入库单必须来源于库存盘点，历史非盘点记录仅供查看');
     }
-    let damageDisposal: -1 | 0 | 1 = -1;
+    let damageDisposal: -1 | 0 | 1 | 2 = -1;
     let discountOrderId: bigint | null = null;
+    const purchaseReturnIds: bigint[] = [];
     let lossOutputId: bigint | null = null;
     let overflowInputNo: string | null = null;
     await this.prisma.$transaction(async (tx) => {
@@ -2585,9 +3171,12 @@ export class InventoryService {
           where: { source_loss_id: BigInt(id), deleted_at: null },
         });
         if (existing) throw new BadRequestException('该报亏单已经生成报亏出库单');
+        const outputNo = await this.businessNumber.generate(
+          BUSINESS_PREFIX.INVENTORY_SHORTAGE_OUTPUT,
+        );
         const output = await tx.hspsi_inventory_loss_output.create({
           data: {
-            loss_no: `TMP${Date.now()}`,
+            loss_no: outputNo,
             loss_type: Number(item.documentType || 1),
             loss_reson: item.reason,
             org_id: item.org_id,
@@ -2607,11 +3196,6 @@ export class InventoryService {
             created_by: BigInt(userId),
             updated_by: BigInt(userId),
           },
-        });
-        const outputNo = this.no('ILO', output.loss_id);
-        await tx.hspsi_inventory_loss_output.update({
-          where: { loss_id: output.loss_id },
-          data: { loss_no: outputNo },
         });
         await tx.hspsi_inventory_loss_output_detail.createMany({
           data: item.details.map((line: Body) => ({
@@ -2732,11 +3316,12 @@ export class InventoryService {
             (sum: number, line: Body) => sum + Number(line.amount ?? 0),
             0,
           );
+          const orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.DISCOUNT_SALES_ORDER);
           const order = await tx.hspsi_sale_order.create({
             data: {
               org_id: item.org_id,
               warehouse_id: item.warehouse_id,
-              so_no: `TMP${Date.now()}`,
+              so_no: orderNo,
               so_type: 1,
               so_source: 4,
               so_source_id: BigInt(id),
@@ -2764,11 +3349,6 @@ export class InventoryService {
               created_by: BigInt(userId),
               updated_by: BigInt(userId),
             },
-          });
-          const orderNo = this.no('DS', order.so_id);
-          await tx.hspsi_sale_order.update({
-            where: { so_id: order.so_id },
-            data: { so_no: orderNo },
           });
           const groupedOrderLines = new Map<
             string,
@@ -2817,6 +3397,122 @@ export class InventoryService {
             tx,
           );
           discountOrderId = order.so_id;
+        }
+      }
+
+      if (approved && type === 'loss' && businessKind === 2 && damageDisposal === 2) {
+        const lossDetails = await tx.hspsi_inventory_loss_detail.findMany({
+          where: { loss_id: BigInt(id) },
+          orderBy: { loss_detail_id: 'asc' },
+        });
+        if (
+          !lossDetails.length ||
+          lossDetails.some((detail) => detail.source_receipt_detail_id <= 0n)
+        ) {
+          throw new BadRequestException('报损退货明细缺少原采购入库来源');
+        }
+        const sourceDetails = await tx.hspsi_purchase_order_input_detail.findMany({
+          where: {
+            id: { in: lossDetails.map((detail) => detail.source_receipt_detail_id) },
+            deleted_at: null,
+          },
+        });
+        const grouped = new Map<bigint, typeof lossDetails>();
+        for (const detail of lossDetails) {
+          const source = sourceDetails.find(
+            (sourceDetail) => sourceDetail.id === detail.source_receipt_detail_id,
+          );
+          if (
+            !source ||
+            source.goods_id !== detail.goods_id ||
+            source.sku_id !== detail.sku_id ||
+            source.batch_no !== detail.batch_no
+          ) {
+            throw new BadRequestException('报损退货的采购来源与商品、SKU或批号不一致');
+          }
+          const current = grouped.get(source.po_input_id) ?? [];
+          current.push(detail);
+          grouped.set(source.po_input_id, current);
+        }
+        for (const [receiptId, groupLines] of grouped) {
+          const receipt = await tx.hspsi_purchase_order_input.findFirst({
+            where: {
+              po_input_id: receiptId,
+              org_id: locked.org_id,
+              warehouse_id: locked.warehouse_id,
+              comfirm_status: 1,
+              deleted_at: null,
+            },
+          });
+          if (!receipt) throw new BadRequestException('原采购入库单不存在、未确认或仓库不一致');
+          const generationKey = `inventory-loss-return:${id}:${receiptId}`;
+          const existing = await tx.hspsi_purchase_order_input_exit.findUnique({
+            where: { generation_key: generationKey },
+          });
+          if (existing) {
+            if (existing.deleted_at) throw new BadRequestException('自动生成的采购退货单已被删除');
+            purchaseReturnIds.push(existing.po_exit_id);
+            continue;
+          }
+          const returnNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RETURN);
+          const purchaseReturn = await tx.hspsi_purchase_order_input_exit.create({
+            data: {
+              po_exit_no: returnNo,
+              po_input_id: receipt.po_input_id,
+              po_id: receipt.po_id,
+              generation_key: generationKey,
+              auto_created: 1,
+              source_document_type: 'inventory_loss',
+              source_document_id: BigInt(id),
+              exit_reson: String((locked as Body).loss_reson || '报损退货'),
+              exit_date: new Date(),
+              exit_type: 1,
+              status: false,
+              approve_status: 0,
+              approve_by: 0n,
+              remark: `由报损出库单${(locked as Body).loss_no}自动生成；确认采购退货时执行唯一一次库存扣减`,
+              created_by: BigInt(userId),
+              updated_by: BigInt(userId),
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+          });
+          await tx.hspsi_purchase_order_input_exit_detail.createMany({
+            data: groupLines.map((detail) => {
+              const source = sourceDetails.find(
+                (sourceDetail) => sourceDetail.id === detail.source_receipt_detail_id,
+              )!;
+              return {
+                po_exit_id: purchaseReturn.po_exit_id,
+                po_input_id: receipt.po_input_id,
+                po_id: receipt.po_id,
+                goods_id: detail.goods_id,
+                sku_id: detail.sku_id,
+                batch_no: detail.batch_no,
+                unit_type: BigInt(detail.unit_type),
+                po_qty: source.po_qty,
+                input_qty: source.input_qty,
+                exit_qty: detail.loss_qty,
+                remark: `来源报损明细${detail.loss_detail_id}`,
+                created_at: new Date(),
+                updated_at: new Date(),
+              };
+            }),
+          });
+          await this.documentTrace.link(
+            {
+              upstreamType: 'inventory_loss',
+              upstreamId: BigInt(id),
+              upstreamNo: (locked as Body).loss_no,
+              downstreamType: 'purchase_return',
+              downstreamId: purchaseReturn.po_exit_id,
+              downstreamNo: returnNo,
+              relationKind: 'damage_return',
+              createdBy: userId,
+            },
+            tx,
+          );
+          purchaseReturnIds.push(purchaseReturn.po_exit_id);
         }
       }
 
@@ -2899,8 +3595,10 @@ export class InventoryService {
           ? '报亏单审批通过，已生成并确认报亏出库单，库存已扣减'
           : discountOrderId
             ? '报损审批通过，已生成折价销售单；本次未扣库存'
-            : '报损审批通过，已按报废去向扣减库存';
-    return { id, lossOutputId, overflowInputNo, discountOrderId, message };
+            : purchaseReturnIds.length
+              ? `报损审批通过，已生成${purchaseReturnIds.length}张采购退货草稿；本次未扣库存`
+              : '报损审批通过，已按报废去向扣减库存';
+    return { id, lossOutputId, overflowInputNo, discountOrderId, purchaseReturnIds, message };
   }
 
   async confirmOverflowInput(id: string, comment: string, userId: string) {
@@ -3022,7 +3720,7 @@ export class InventoryService {
         orgId: s.org_id,
       })),
     );
-    const items = stocks.map((s) => {
+    const allItems = stocks.map((s) => {
       const c = configs.find(
         (i) =>
           i.warehouse_id === s.warehouse_id && i.goods_id === s.goods_id && i.sku_id === s.sku_id,
@@ -3048,6 +3746,7 @@ export class InventoryService {
         warning: fact < safe,
       };
     });
+    const items = filterQuantityAlertsByStatus(allItems, query.status);
     const warehouseCounts = Object.fromEntries(
       [...new Set(items.map((item) => String(item.warehouseId)))].map((warehouseId) => [
         warehouseId,

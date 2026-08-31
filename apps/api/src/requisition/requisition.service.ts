@@ -1,13 +1,27 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BusinessReferenceService } from '../database/business-reference.service';
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
+import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
+import { BusinessNumberService } from '../business-number/business-number.service';
 import {
   InventoryPostingService,
   type InventoryLine,
 } from '../inventory/inventory-posting.service';
+import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
+import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
+import { Attachment, AttachmentsService } from '../attachments/attachments.service';
+import { BusinessMasterDataService } from '../database/business-master-data.service';
+import { TodoService } from '../database/todo.service';
+import type { AuthUser } from '../auth/auth.types';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
@@ -26,7 +40,25 @@ export class RequisitionService {
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,
     @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
     @Inject(DocumentTraceService) private readonly documentTrace: DocumentTraceService,
+    @Inject(BusinessNumberService) private readonly businessNumber: BusinessNumberService,
+    @Inject(RequisitionOaApprovalService)
+    private readonly oaApproval: RequisitionOaApprovalService,
+    @Inject(AttachmentsService)
+    private readonly attachmentsService: AttachmentsService,
+    @Inject(BusinessMasterDataService) private readonly masterData: BusinessMasterDataService,
+    @Inject(TodoService) private readonly todoService: TodoService,
   ) {}
+
+  private attachmentItems(value: unknown): Attachment[] {
+    if (Array.isArray(value)) return value as Attachment[];
+    if (typeof value !== 'string') return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as Attachment[]) : [];
+    } catch {
+      return [];
+    }
+  }
 
   private decimal(value: unknown) {
     return new Prisma.Decimal(String(value ?? 0));
@@ -37,14 +69,6 @@ export class RequisitionService {
       page: Math.max(1, Number(query.page) || 1),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize) || 20)),
     };
-  }
-
-  private documentNo(prefix: string, id: bigint) {
-    const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
-    const head = `${prefix}${date}`;
-    const capacity = 20 - head.length;
-    const encoded = id.toString(36).toUpperCase();
-    return `${head}${encoded.slice(-capacity).padStart(Math.min(4, capacity), '0')}`;
   }
 
   private positiveQuantity(value: unknown, label = '数量') {
@@ -76,6 +100,14 @@ export class RequisitionService {
     return value as Body[];
   }
 
+  private directOutputGenerationKey(value: unknown) {
+    const requestKey = String(value ?? '').trim();
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestKey)) {
+      throw new BadRequestException('直接领用出库请求标识无效');
+    }
+    return `direct-requisition-output:${requestKey}`;
+  }
+
   private async validateApplicationReferences(
     tx: Db,
     values: {
@@ -85,6 +117,7 @@ export class RequisitionService {
       applicantId: bigint;
       drawType: number;
     },
+    allowEmptyApplicant = false,
   ) {
     const [organization, department, warehouse, applicant, drawTypeCategory] = await Promise.all([
       tx.hspsi_basic_organization.findFirst({
@@ -115,10 +148,13 @@ export class RequisitionService {
       }),
     ]);
     if (!organization) throw new BadRequestException('所属组织不存在或未正常运营');
-    if (!department) throw new BadRequestException('领用部门不属于所选组织或已停用');
+    // 草稿且找不到OA员工身份时（allowEmptyApplicant），领用人/部门允许为空，仅保存草稿
+    if (values.deptId > 0n && !department)
+      throw new BadRequestException('领用部门不属于所选组织或已停用');
     if (!warehouse)
       throw new BadRequestException('领用仓库仅限所选组织下已启用的行政类、健服类仓库');
-    if (!applicant) throw new BadRequestException('领用人必须选择已启用的基础员工');
+    if (values.applicantId > 0n && !applicant)
+      throw new BadRequestException('领用人必须选择已启用的基础员工');
 
     const [membership, drawType] = await Promise.all([
       tx.hspsi_basic_staff_organizations.findFirst({
@@ -143,7 +179,8 @@ export class RequisitionService {
           })
         : null,
     ]);
-    if (!membership) throw new BadRequestException('领用人不属于所选组织或领用部门');
+    if (values.applicantId > 0n && !membership)
+      throw new BadRequestException('领用人不属于所选组织或领用部门');
     if (!drawType) throw new BadRequestException('领用类型未在数据字典中配置');
   }
 
@@ -204,8 +241,9 @@ export class RequisitionService {
     }));
   }
 
-  async applicationFormOptions(orgIdValue: string) {
+  async applicationFormOptions(orgIdValue: string, deptIdValue?: string) {
     const orgId = this.bigint(orgIdValue, '所属组织');
+    const deptId = deptIdValue && String(deptIdValue).trim() !== '' ? this.bigint(deptIdValue, '领用部门') : null;
     const departments = await this.prisma.hspsi_basic_dept.findMany({
       where: { org_id: orgId, status: 1, deleted_at: null },
       orderBy: [{ sort: 'asc' }, { dept_id: 'asc' }],
@@ -215,10 +253,17 @@ export class RequisitionService {
     const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
       where: {
         deleted_at: null,
-        OR: [
-          { org_type: 1, org_id: orgId },
-          { org_type: 2, org_id: { in: departmentIds } },
-        ],
+        // 指定部门时按该部门筛人（org_type=2），并保留组织直属人员（org_type=1）兜底；
+        // 未指定部门时返回组织直属 + 全部部门成员（原口径）。
+        OR: deptId
+          ? [
+              { org_type: 2, org_id: deptId },
+              { org_type: 1, org_id: orgId },
+            ]
+          : [
+              { org_type: 1, org_id: orgId },
+              { org_type: 2, org_id: { in: departmentIds } },
+            ],
       },
       select: { staff_id: true },
     });
@@ -255,6 +300,20 @@ export class RequisitionService {
         raw: item,
       })),
     };
+  }
+
+  async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
+    if (!orgIdValue || !warehouseIdValue) return [];
+    return this.masterData.goodsOptions(
+      BigInt(String(orgIdValue)),
+      BigInt(String(warehouseIdValue)),
+    );
+  }
+
+  /** 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库 */
+  async allGoodsOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
 
   private aggregatePostingLines(
@@ -306,9 +365,14 @@ export class RequisitionService {
     );
   }
 
-  private async confirmedOutputUsage(db: Db, drawId: bigint) {
+  private async confirmedOutputUsage(db: Db, drawId: bigint, excludeOutputId?: bigint) {
     const heads = await db.hspsi_draw_approve_output.findMany({
-      where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
+      where: {
+        draw_id: drawId,
+        comfirm_status: 1,
+        deleted_at: null,
+        ...(excludeOutputId ? { draw_output_id: { not: excludeOutputId } } : {}),
+      },
       select: { draw_output_id: true },
     });
     const details = heads.length
@@ -367,6 +431,21 @@ export class RequisitionService {
     });
   }
 
+  private oaStatusName(status: string) {
+    return (
+      {
+        PENDING_PUSH: '待提交OA',
+        PUSH_FAILED: 'OA提交失败',
+        RUNNING: 'OA审批中',
+        BACKTOSTART: 'OA退回发起人',
+        PASSED: 'OA已通过',
+        REJECTED: 'OA已驳回',
+        CANCELED: 'OA已取消',
+        DELETED: 'OA已删除',
+      }[status] ?? ''
+    );
+  }
+
   async applications(query: Body) {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_draw_approveWhereInput = { deleted_at: null };
@@ -393,9 +472,25 @@ export class RequisitionService {
         })
       : [];
     const generatedMap = new Map(generated.map((item) => [String(item.draw_id), item]));
+    const oaInstances = records.length
+      ? await this.prisma.hspsi_oa_approval_instance.findMany({
+          where: {
+            business_type: 'requisition_application',
+            business_id: { in: records.map((item) => item.draw_id) },
+            deleted_at: null,
+          },
+          orderBy: { id: 'desc' },
+        })
+      : [];
+    const oaMap = new Map<string, (typeof oaInstances)[number]>();
+    for (const instance of oaInstances) {
+      if (!oaMap.has(String(instance.business_id)))
+        oaMap.set(String(instance.business_id), instance);
+    }
     const referencedItems = await this.references.enrich(
       records.map((item) => {
         const output = generatedMap.get(String(item.draw_id));
+        const oa = oaMap.get(String(item.draw_id));
         return {
           ...item,
           id: item.draw_id,
@@ -419,6 +514,12 @@ export class RequisitionService {
           autoOutputId: output?.draw_output_id ?? null,
           autoOutputNo: output?.draw_output_no ?? '',
           autoOutputConfirmStatus: output?.comfirm_status ?? null,
+          reverseGenerated:
+            output?.generation_key?.startsWith('direct-requisition-output:') ?? false,
+          oaStatus: oa?.proc_status ?? '',
+          oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
+          oaProcessId: oa?.proc_inst_id ?? '',
+          oaBusKey: oa?.bus_key ?? '',
           createdBy: item.created_by,
           updatedBy: item.updated_by,
           createdAt: item.created_at,
@@ -440,7 +541,7 @@ export class RequisitionService {
       where: { draw_id: BigInt(id), deleted_at: null },
     });
     if (!item) throw new NotFoundException('领用申请不存在');
-    const [details, usage, autoOutput] = await Promise.all([
+    const [details, usage, autoOutput, oa] = await Promise.all([
       this.prisma.hspsi_draw_approve_detail.findMany({
         where: { draw_id: item.draw_id },
         orderBy: { draw_detail_id: 'asc' },
@@ -450,7 +551,33 @@ export class RequisitionService {
         where: { draw_id: item.draw_id, generation_key: { not: null }, deleted_at: null },
         orderBy: { draw_output_id: 'desc' },
       }),
+      this.prisma.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'requisition_application',
+          business_id: item.draw_id,
+          deleted_at: null,
+        },
+        orderBy: { id: 'desc' },
+      }),
     ]);
+    const mappedDetails = details.map((detail) => {
+      const historicalQty =
+        (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
+        (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
+      return {
+        id: detail.draw_detail_id,
+        goodsId: detail.goods_id,
+        skuId: detail.sku_id,
+        batchNo: detail.batch_no,
+        unitType: detail.unit_type,
+        quantity: detail.draw_qty,
+        returnable: detail.is_returnable === 1,
+        historicalQty,
+        remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
+        remark: detail.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     const [enriched] = await this.enrichRequisitionStaff([
       {
         ...item,
@@ -476,29 +603,108 @@ export class RequisitionService {
         autoOutputId: autoOutput?.draw_output_id ?? null,
         autoOutputNo: autoOutput?.draw_output_no ?? '',
         autoOutputConfirmStatus: autoOutput?.comfirm_status ?? null,
-        details: details.map((detail) => {
-          const historicalQty =
-            (usage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
-            (usage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
-          return {
-            id: detail.draw_detail_id,
-            goodsId: detail.goods_id,
-            skuId: detail.sku_id,
-            batchNo: detail.batch_no,
-            unitType: detail.unit_type,
-            quantity: detail.draw_qty,
-            returnable: detail.is_returnable === 1,
-            historicalQty,
-            remainingQty: Math.max(0, Number(detail.draw_qty) - historicalQty),
-            remark: detail.remark,
-          };
-        }),
+        reverseGenerated:
+          autoOutput?.generation_key?.startsWith('direct-requisition-output:') ?? false,
+        oaStatus: oa?.proc_status ?? '',
+        oaStatusName: this.oaStatusName(oa?.proc_status ?? ''),
+        oaProcessId: oa?.proc_inst_id ?? '',
+        oaBusKey: oa?.bus_key ?? '',
+        details: enrichedDetails,
       },
     ]);
     return enriched!;
   }
 
-  async saveApplication(id: string | null, body: Body, userId: string, submit: boolean) {
+  /**
+   * 按单据组织（账套）解析登录用户的 OA 员工身份。
+   * 账套由组织决定；(user_id, account_set_id) 经身份表唯一确定员工。
+   * 找不到（用户不属于该组织账套）返回 null。
+   */
+  private async resolveApplicantIdentity(db: Db, userId: string, orgId: bigint) {
+    const organization = await db.hspsi_basic_organization.findFirst({
+      where: { org_id: orgId, operation_status: 1, deleted_at: null },
+      select: { account_set_id: true },
+    });
+    if (!organization?.account_set_id) return null;
+    const identity = await db.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) return null;
+    const staff = await db.hspsi_basic_staff.findFirst({
+      where: {
+        id: identity.staff_id,
+        account_set_id: organization.account_set_id,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, name: true, outer_ref_id: true, out_staff_id: true },
+    });
+    if (!staff) return null;
+    const primary = await db.hspsi_basic_staff_organizations.findFirst({
+      where: {
+        staff_id: staff.id,
+        account_set_id: organization.account_set_id,
+        type: 1,
+        deleted_at: null,
+      },
+      orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
+      select: { org_id: true, org_type: true },
+    });
+    return { ...staff, accountSetId: organization.account_set_id, primary };
+  }
+
+  /**
+   * 前端选组织后解析当前登录用户的 OA 员工身份（含主部门），用于自动填充领用人/部门。
+   */
+  async currentApplicant(userId: string, orgIdValue?: string) {
+    if (!orgIdValue) return { found: false };
+    const orgId = this.bigint(orgIdValue, '所属组织');
+    const applicant = await this.resolveApplicantIdentity(this.prisma, userId, orgId);
+    if (!applicant) return { found: false };
+    let deptId = '';
+    let deptName = '';
+    let deptOuterRefId = '';
+    if (applicant.primary?.org_type === 2) {
+      const dept = await this.prisma.hspsi_basic_dept.findFirst({
+        where: { dept_id: applicant.primary.org_id, deleted_at: null },
+        select: { dept_id: true, name: true, outer_ref_id: true },
+      });
+      if (dept) {
+        deptId = String(dept.dept_id);
+        deptName = dept.name;
+        deptOuterRefId = dept.outer_ref_id;
+      }
+    } else if (applicant.primary) {
+      const organization = await this.prisma.hspsi_basic_organization.findFirst({
+        where: { org_id: applicant.primary.org_id, deleted_at: null },
+        select: { name: true, outer_ref_id: true },
+      });
+      if (organization) {
+        deptName = organization.name;
+        deptOuterRefId = organization.outer_ref_id;
+      }
+    }
+    return {
+      found: true,
+      staffId: String(applicant.id),
+      name: applicant.name,
+      accountSetId: String(applicant.accountSetId),
+      outerRefId: applicant.outer_ref_id,
+      outStaffId: applicant.out_staff_id,
+      deptId,
+      deptName,
+      deptOuterRefId,
+    };
+  }
+
+  async saveApplication(
+    id: string | null,
+    body: Body,
+    userId: string,
+    submit: boolean,
+    fixedOrgId?: string | null,
+  ) {
     const lines = this.detailLines(body.details).map((line) => ({
       goodsId: this.bigint(line.goodsId, '商品'),
       skuId: this.bigint(line.skuId, 'SKU'),
@@ -509,144 +715,301 @@ export class RequisitionService {
       remark: String(line.remark ?? ''),
     }));
 
-    const drawId = await this.prisma.$transaction(async (tx) => {
-      const requestedId = id ? this.bigint(id, '领用申请') : null;
-      if (requestedId !== null)
-        await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', requestedId);
-      const current =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve.findFirst({
-              where: { draw_id: requestedId, deleted_at: null },
-            })
-          : null;
-      if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
-      if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+    const submittedSignature =
+      body.signatureContent !== undefined ? String(body.signatureContent ?? '').trim() : '';
+    const uploadedSignature = submittedSignature
+      ? await this.attachmentsService.uploadSignatureDataUrlForIntegration(
+          'requisition_application',
+          submittedSignature,
+          userId,
+        )
+      : null;
 
-      const currentDetails =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve_detail.findMany({
-              where: { draw_id: requestedId },
-              orderBy: { draw_detail_id: 'asc' },
-            })
-          : [];
-      if (requestedId !== null) {
-        const confirmed = await this.confirmedOutputUsage(tx, requestedId);
-        for (const line of lines) {
-          const source = currentDetails.find(
-            (detail) => detail.goods_id === line.goodsId && detail.sku_id === line.skuId,
-          );
-          if (!source) continue;
-          const used =
-            (confirmed.get(`detail:${source.draw_detail_id}`) ?? 0) +
-            (confirmed.get(`legacy:${line.goodsId}:${line.skuId}`) ?? 0);
-          if (line.quantity < used)
-            throw new BadRequestException('申请数量不得低于累计已确认出库数量');
+    let drawId: bigint;
+    try {
+      drawId = await this.prisma.$transaction(async (tx) => {
+        const requestedId = id ? this.bigint(id, '领用申请') : null;
+        if (requestedId !== null)
+          await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', requestedId);
+        const current =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve.findFirst({
+                where: { draw_id: requestedId, deleted_at: null },
+              })
+            : null;
+        if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
+        if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+        if (current && current.created_by !== BigInt(userId))
+          throw new ForbiddenException('个人无权修改他人发起的领用申请');
+        if (requestedId !== null) {
+          const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+            where: {
+              business_type: 'requisition_application',
+              business_id: requestedId,
+              proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+              deleted_at: null,
+            },
+            select: { id: true },
+          });
+          if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可修改');
         }
-      }
 
-      const applicantId = this.bigint(body.applicantId ?? current?.applicant_id, '领用人');
-      const signatureContent =
-        body.signatureContent !== undefined
-          ? String(body.signatureContent ?? '').trim()
-          : String(current?.signature_content ?? '').trim();
-      const signatureAttachment =
-        body.signatureAttachment !== undefined
-          ? String(body.signatureAttachment ?? '').trim()
-          : String(current?.signature_attachment ?? '').trim();
-      const hasSignature = Boolean(signatureContent || signatureAttachment);
-      if (submit && !hasSignature)
-        throw new BadRequestException('提交申请前必须完成领用人签字确认');
-      const previousSignedBy = current?.signed_by ?? 0n;
-      const signedBy = hasSignature
-        ? this.bigint(
-            body.signedBy ?? (previousSignedBy > 0n ? previousSignedBy : applicantId),
-            '签署人',
-          )
-        : 0n;
-      if (hasSignature && signedBy !== applicantId) {
-        throw new BadRequestException('签署人必须与领用人一致');
-      }
-      const signedAt = hasSignature
-        ? new Date(body.signedAt ?? current?.signed_at ?? Date.now())
-        : null;
-      if (signedAt && Number.isNaN(signedAt.getTime()))
-        throw new BadRequestException('签署时间无效');
+        const currentDetails =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve_detail.findMany({
+                where: { draw_id: requestedId },
+                orderBy: { draw_detail_id: 'asc' },
+              })
+            : [];
+        if (requestedId !== null) {
+          const confirmed = await this.confirmedOutputUsage(tx, requestedId);
+          for (const line of lines) {
+            const source = currentDetails.find(
+              (detail) => detail.goods_id === line.goodsId && detail.sku_id === line.skuId,
+            );
+            if (!source) continue;
+            const used =
+              (confirmed.get(`detail:${source.draw_detail_id}`) ?? 0) +
+              (confirmed.get(`legacy:${line.goodsId}:${line.skuId}`) ?? 0);
+            if (line.quantity < used)
+              throw new BadRequestException('申请数量不得低于累计已确认出库数量');
+          }
+        }
 
-      const orgId = this.bigint(body.orgId ?? current?.org_id, '所属组织');
-      const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
-      const deptId = this.bigint(body.deptId ?? current?.dept_id, '领用部门');
-      const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
-      const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
-      if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
-      if (drawType === 1 && lines.some((line) => line.returnable === 1)) {
-        throw new BadRequestException('直接领用的明细必须选择“无需归还”');
-      }
-      if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
-        throw new BadRequestException('借用的明细必须选择“可归还”');
-      }
-      await this.validateApplicationReferences(tx, {
-        orgId,
-        warehouseId,
-        deptId,
-        applicantId,
-        drawType,
+        // 后端兜底：账套由单据组织决定，提交人按(登录用户, 组织账套)解析身份，
+        // 不信任前端/主身份 staff_id（多账套用户可能跨账套错配）。
+        if (!fixedOrgId)
+          throw new ForbiddenException('当前账号未关联固定所属组织，不能发起领用申请');
+        const orgId = this.bigint(fixedOrgId, '所属组织');
+        if (body.orgId != null && String(body.orgId) !== String(fixedOrgId))
+          throw new ForbiddenException('个人只能在自己的固定所属组织发起领用申请');
+        if (current && current.org_id !== orgId)
+          throw new ForbiddenException('领用申请的所属组织与已保存单据不一致，不允许变更组织');
+        const applicant = await this.resolveApplicantIdentity(tx, userId, orgId);
+        if (submit && !applicant) {
+          throw new BadRequestException('当前账号未关联该组织的OA员工，无法提交审批');
+        }
+        const applicantId = applicant?.id ?? 0n;
+        const currentAttachments = this.attachmentItems(current?.attachments);
+        const signatureWasExplicitlyCleared =
+          body.signatureContent !== undefined &&
+          !submittedSignature &&
+          body.signatureAttachment !== undefined &&
+          !String(body.signatureAttachment ?? '').trim();
+        const attachments = uploadedSignature
+          ? [
+              ...currentAttachments.filter((item) => item.category !== 'signature'),
+              uploadedSignature,
+            ]
+          : signatureWasExplicitlyCleared
+            ? currentAttachments.filter((item) => item.category !== 'signature')
+            : currentAttachments;
+        const signatureAttachment = uploadedSignature
+          ? uploadedSignature.id
+          : signatureWasExplicitlyCleared
+            ? ''
+            : String(current?.signature_attachment ?? '').trim();
+        const hasHistoricalSignature = Boolean(current?.signature_content);
+        const hasSignature = Boolean(
+          uploadedSignature ||
+          signatureAttachment ||
+          (!signatureWasExplicitlyCleared && hasHistoricalSignature),
+        );
+        if (submit && !hasSignature)
+          throw new BadRequestException('提交申请前必须完成领用人签字确认');
+        const previousSignedBy = current?.signed_by ?? 0n;
+        const signedBy = hasSignature
+          ? this.bigint(
+              body.signedBy ?? (previousSignedBy > 0n ? previousSignedBy : applicantId),
+              '签署人',
+            )
+          : 0n;
+        if (hasSignature && signedBy !== applicantId) {
+          throw new BadRequestException('签署人必须与领用人一致');
+        }
+        const signedAt = hasSignature
+          ? new Date(body.signedAt ?? current?.signed_at ?? Date.now())
+          : null;
+        if (signedAt && Number.isNaN(signedAt.getTime()))
+          throw new BadRequestException('签署时间无效');
+
+        const warehouseId = this.bigint(body.warehouseId ?? current?.warehouse_id, '领用仓库');
+        const deptIdRaw = body.deptId ?? current?.dept_id;
+        const deptId = deptIdRaw ? this.bigint(deptIdRaw, '领用部门') : 0n;
+        const drawType = Number(body.drawType ?? current?.draw_type ?? 0);
+        const reason = String(body.reason ?? current?.draw_reason ?? '').trim();
+        if (submit && !reason) throw new BadRequestException('提交申请前必须填写申请原因');
+        if (drawType === 1 && lines.some((line) => line.returnable === 1)) {
+          throw new BadRequestException('直接领用的明细必须选择“无需归还”');
+        }
+        if (drawType === 2 && lines.some((line) => line.returnable === 0)) {
+          throw new BadRequestException('借用的明细必须选择“可归还”');
+        }
+        await this.validateApplicationReferences(
+          tx,
+          {
+            orgId,
+            warehouseId,
+            deptId,
+            applicantId,
+            drawType,
+          },
+          !submit && !applicant,
+        );
+        await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
+
+        const total = lines.reduce((sum, line) => sum + line.quantity, 0);
+        const data = {
+          draw_qty: total,
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          dept_id: deptId,
+          applicant_id: applicantId,
+          draw_type: drawType,
+          draw_date: new Date(body.date ?? current?.draw_date ?? Date.now()),
+          draw_reason: reason,
+          attachments,
+          signature_content:
+            uploadedSignature || signatureWasExplicitlyCleared
+              ? null
+              : (current?.signature_content ?? null),
+          signature_attachment: signatureAttachment,
+          signed_by: signedBy,
+          signed_at: signedAt,
+          status: submit ? 1 : 0,
+          approve_status: 0,
+          approve_comment: '',
+          approve_by: 0n,
+          approve_date: null,
+          remark: String(body.remark ?? current?.remark ?? ''),
+          updated_by: BigInt(userId),
+        };
+        const newApplicationNo =
+          requestedId === null
+            ? await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION)
+            : '';
+        const header =
+          requestedId !== null
+            ? await tx.hspsi_draw_approve.update({ where: { draw_id: requestedId }, data })
+            : await tx.hspsi_draw_approve.create({
+                data: {
+                  ...data,
+                  draw_no: newApplicationNo,
+                  fact_draw_qty: 0,
+                  created_by: BigInt(userId),
+                },
+              });
+        await tx.hspsi_draw_approve_detail.deleteMany({ where: { draw_id: header.draw_id } });
+        await tx.hspsi_draw_approve_detail.createMany({
+          data: lines.map((line) => ({
+            draw_id: header.draw_id,
+            goods_id: line.goodsId,
+            sku_id: line.skuId,
+            batch_no: line.batchNo,
+            unit_type: line.unitType,
+            draw_qty: line.quantity,
+            is_returnable: line.returnable,
+            remark: line.remark,
+          })),
+        });
+        return header.draw_id;
       });
-
-      const total = lines.reduce((sum, line) => sum + line.quantity, 0);
-      const data = {
-        draw_qty: total,
-        org_id: orgId,
-        warehouse_id: warehouseId,
-        dept_id: deptId,
-        applicant_id: applicantId,
-        draw_type: drawType,
-        draw_date: new Date(body.date ?? current?.draw_date ?? Date.now()),
-        draw_reason: reason,
-        signature_content: signatureContent || null,
-        signature_attachment: signatureAttachment,
-        signed_by: signedBy,
-        signed_at: signedAt,
-        status: submit ? 1 : 0,
-        approve_status: 0,
-        approve_comment: '',
-        approve_by: 0n,
-        approve_date: null,
-        remark: String(body.remark ?? current?.remark ?? ''),
-        updated_by: BigInt(userId),
-      };
-      const header =
-        requestedId !== null
-          ? await tx.hspsi_draw_approve.update({ where: { draw_id: requestedId }, data })
-          : await tx.hspsi_draw_approve.create({
-              data: {
-                ...data,
-                draw_no: `TMP${Date.now()}`,
-                fact_draw_qty: 0,
-                created_by: BigInt(userId),
-              },
-            });
-      if (requestedId === null) {
-        await tx.hspsi_draw_approve.update({
-          where: { draw_id: header.draw_id },
-          data: { draw_no: this.documentNo('DR', header.draw_id) },
+    } catch (error) {
+      if (uploadedSignature) {
+        await this.attachmentsService.discardUncommittedObjectForIntegration(
+          uploadedSignature.objectKey,
+        );
+      }
+      throw error;
+    }
+    if (!submit) return { id: drawId, message: '草稿已保存' };
+    // 非「借用」类型的领用申请不走 OA 审批：单据保留在系统内待审批，
+    // 并给所属组织下有领用审批权限的用户写入待办提醒。
+    const submitted = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+      select: { draw_type: true, draw_no: true, org_id: true },
+    });
+    if (submitted && Number(submitted.draw_type) !== 2) {
+      const approvers = await this.findRequisitionApprovers(this.prisma, submitted.org_id);
+      for (const approverId of approvers) {
+        await this.todoService.create({
+          userId: approverId,
+          organizationId: Number(submitted.org_id),
+          title: submitted.draw_no,
+          content: '有新的领用申请待审批',
+          businessType: 'draw_approve',
+          businessId: Number(drawId),
+          actorUserId: userId,
         });
       }
-      await tx.hspsi_draw_approve_detail.deleteMany({ where: { draw_id: header.draw_id } });
-      await tx.hspsi_draw_approve_detail.createMany({
-        data: lines.map((line) => ({
-          draw_id: header.draw_id,
-          goods_id: line.goodsId,
-          sku_id: line.skuId,
-          batch_no: line.batchNo,
-          unit_type: line.unitType,
-          draw_qty: line.quantity,
-          is_returnable: line.returnable,
-          remark: line.remark,
-        })),
-      });
-      return header.draw_id;
+      return { id: drawId, message: '申请已提交，等待系统内审批' };
+    }
+    const oa = await this.oaApproval.submit(drawId, userId);
+    return {
+      id: drawId,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `领用申请已保存，但提交OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '申请已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
+  }
+
+  /**
+   * 查找所属组织下对领用申请有审批操作权限的用户（无论角色）：
+   * 授权组织覆盖该 org_id，且拥有领用申请审核权限（菜单 code
+   * requisitions:applications:approve，含 admin 超级权限）。
+   */
+  private async findRequisitionApprovers(db: Db, orgId: bigint): Promise<number[]> {
+    const authorized = await db.hspsi_sys_user_authorized_org.findMany({
+      where: { org_id: orgId },
+      select: { user_id: true },
     });
-    return { id: drawId, message: submit ? '申请已提交' : '草稿已保存' };
+    const candidateIds = [...new Set(authorized.map((item) => Number(item.user_id)))];
+    if (!candidateIds.length) return [];
+    const userRoles = await db.hspsi_sys_user_role.findMany({
+      where: { user_id: { in: candidateIds } },
+    });
+    const roleIds = [...new Set(userRoles.map((item) => Number(item.role_id)))];
+    const roles = roleIds.length
+      ? await db.hspsi_sys_role.findMany({
+          where: { id: { in: roleIds.map((id) => BigInt(id)) }, status: 1, deleted_at: null },
+          select: { id: true, code: true },
+        })
+      : [];
+    const adminRoleIds = new Set(
+      roles.filter((role) => role.code === 'admin').map((role) => Number(role.id)),
+    );
+    const roleMenus = roleIds.length
+      ? await db.hspsi_sys_role_menu.findMany({
+          where: { role_id: { in: roleIds.map((id) => BigInt(id)) } },
+        })
+      : [];
+    const menuIds = [...new Set(roleMenus.map((item) => Number(item.menu_id)))];
+    const menus = menuIds.length
+      ? await db.hspsi_sys_menu.findMany({
+          where: { id: { in: menuIds }, deleted_at: null, status: 1 },
+          select: { id: true, code: true },
+        })
+      : [];
+    const approveMenuIds = new Set(
+      menus
+        .filter((menu) => menu.code === 'requisitions:applications:approve')
+        .map((menu) => menu.id),
+    );
+    const approvedRoleIds = new Set<number>();
+    adminRoleIds.forEach((id) => approvedRoleIds.add(id));
+    roleMenus.forEach((item) => {
+      if (approveMenuIds.has(Number(item.menu_id))) approvedRoleIds.add(Number(item.role_id));
+    });
+    return [
+      ...new Set(
+        userRoles
+          .filter((item) => approvedRoleIds.has(Number(item.role_id)))
+          .map((item) => Number(item.user_id)),
+      ),
+    ];
   }
 
   private async ensureAutomaticOutput(
@@ -658,6 +1021,17 @@ export class RequisitionService {
     const application = await tx.hspsi_draw_approve.findUniqueOrThrow({
       where: { draw_id: drawId },
     });
+    // 直接领用出库反向生成的申请单：出库单已存在（generation_key 为 direct-requisition-output: 前缀），
+    // 审批通过时直接复用，不得再自动生成第二张出库单。
+    const directOutput = await tx.hspsi_draw_approve_output.findFirst({
+      where: {
+        draw_id: drawId,
+        generation_key: { startsWith: 'direct-requisition-output:' },
+        deleted_at: null,
+      },
+      orderBy: { draw_output_id: 'desc' },
+    });
+    if (directOutput) return directOutput;
     const existing = await tx.hspsi_draw_approve_output.findUnique({
       where: { generation_key: generationKey },
     });
@@ -684,9 +1058,10 @@ export class RequisitionService {
       orderBy: { draw_detail_id: 'asc' },
     });
     if (!details.length) throw new BadRequestException('领用申请没有明细，不能生成出库单');
+    const outputNo = await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT);
     const header = await tx.hspsi_draw_approve_output.create({
       data: {
-        draw_output_no: `TMP${Date.now()}`,
+        draw_output_no: outputNo,
         draw_id: drawId,
         generation_key: generationKey,
         auto_created: 1,
@@ -704,11 +1079,6 @@ export class RequisitionService {
         created_by: BigInt(userId),
         updated_by: BigInt(userId),
       },
-    });
-    const outputNo = this.documentNo('DRO', header.draw_output_id);
-    await tx.hspsi_draw_approve_output.update({
-      where: { draw_output_id: header.draw_output_id },
-      data: { draw_output_no: outputNo },
     });
     await tx.hspsi_draw_approve_output_detail.createMany({
       data: details.map((detail) => ({
@@ -740,6 +1110,68 @@ export class RequisitionService {
     return { ...header, draw_output_no: outputNo };
   }
 
+  /**
+   * 领用申请审批通过后的待办同步：
+   * - 关闭该申请原有的「待审批」待办（写给审批人的，审批已处理即失效）；
+   * - 给领用人（applicant）+ 出库执行人（权限码 requisitions:outputs:confirm 配置化解析）下发待办。
+   * 幂等由 TodoService.create / completeByBusiness 保证，可在系统审批与 OA 回调两处共用。
+   */
+  private async syncApprovedRequisitionTodos(
+    tx: Prisma.TransactionClient,
+    application: {
+      draw_id: bigint;
+      draw_no: string;
+      org_id: bigint;
+      applicant_id: bigint;
+    },
+    actorUserId: string,
+  ) {
+    await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
+    // 领用人：applicant_id 为 basic_staff.id，需先映射到 hspsi_sys_user.id
+    const applicantUser =
+      application.applicant_id > 0n
+        ? await tx.hspsi_sys_user.findFirst({
+            where: { staff_id: application.applicant_id, status: 1, deleted_at: null },
+            select: { id: true },
+          })
+        : null;
+    const applicantUserId = applicantUser ? Number(applicantUser.id) : 0;
+    if (applicantUserId > 0) {
+      await this.todoService.create(
+        {
+          userId: applicantUserId,
+          organizationId: Number(application.org_id),
+          title: application.draw_no,
+          content: '领用申请已审批通过，可前往仓库办理领用',
+          businessType: 'draw_approve_output',
+          businessId: Number(application.draw_id),
+          actorUserId,
+        },
+        tx,
+      );
+    }
+    const executors = await this.todoService.resolveRecipients(
+      'requisitions:outputs:confirm',
+      Number(application.org_id),
+      tx,
+    );
+    for (const executorId of executors) {
+      if (executorId === applicantUserId) continue;
+      await this.todoService.create(
+        {
+          userId: executorId,
+          organizationId: Number(application.org_id),
+          title: application.draw_no,
+          content: '领用申请已审批通过，请办理领用出库',
+          businessType: 'draw_approve_output',
+          businessId: Number(application.draw_id),
+          actorUserId,
+        },
+        tx,
+      );
+    }
+  }
+
   async approve(id: string, approved: boolean, comment: string, userId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
       const drawId = BigInt(id);
@@ -748,6 +1180,57 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
+      const activeOa = await tx.hspsi_oa_approval_instance.findFirst({
+        where: {
+          business_type: 'requisition_application',
+          business_id: drawId,
+          proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+          deleted_at: null,
+        },
+        select: { id: true },
+      });
+      if (activeOa) throw new BadRequestException('该申请正在OA审批，不能在本系统审批');
+
+      if (!approved) {
+        const directOutput = await tx.hspsi_draw_approve_output.findFirst({
+          where: {
+            draw_id: drawId,
+            generation_key: { startsWith: 'direct-requisition-output:' },
+            deleted_at: null,
+          },
+          orderBy: { draw_output_id: 'desc' },
+        });
+        if (directOutput && [1, 2].includes(application.approve_status)) {
+          if (directOutput.comfirm_status !== 1) {
+            throw new BadRequestException('直接领用出库尚未生效，不能执行否决处理');
+          }
+          if (application.approve_status !== 2) {
+            await tx.hspsi_draw_approve.update({
+              where: { draw_id: drawId },
+              data: {
+                approve_status: 2,
+                approve_comment: comment,
+                approve_by: BigInt(userId),
+                approve_date: new Date(),
+                status: 0,
+                updated_by: BigInt(userId),
+              },
+            });
+          }
+          const returnDocument = await this.ensureRejectedDirectOutputReturn(
+            tx,
+            application,
+            directOutput,
+            userId,
+          );
+          return {
+            outputId: directOutput.draw_output_id,
+            returnId: returnDocument?.draw_exit_id ?? null,
+            alreadyApproved: application.approve_status === 2,
+            rejectedDirectOutput: true,
+          };
+        }
+      }
 
       if (application.approve_status === 1 && approved) {
         const output = await this.ensureAutomaticOutput(tx, drawId, userId);
@@ -775,19 +1258,233 @@ export class RequisitionService {
           updated_by: BigInt(userId),
         },
       });
-      if (!approved) return { outputId: null, alreadyApproved: false };
+      if (!approved) {
+        await this.todoService.completeByBusiness('draw_approve', Number(drawId), tx);
+        return {
+          outputId: null,
+          returnId: null,
+          alreadyApproved: false,
+          rejectedDirectOutput: false,
+        };
+      }
       const output = await this.ensureAutomaticOutput(tx, drawId, userId);
-      return { outputId: output.draw_output_id, alreadyApproved: false };
+      await this.syncApprovedRequisitionTodos(tx, application, userId);
+      return {
+        outputId: output.draw_output_id,
+        returnId: null,
+        alreadyApproved: false,
+        rejectedDirectOutput: false,
+      };
     });
     return {
       id,
       outputId: result.outputId,
+      returnId: result.returnId ?? null,
       message: approved
         ? result.alreadyApproved
           ? '申请已审批，领用出库草稿已存在'
           : '审批通过，已自动生成领用出库草稿'
-        : '已驳回',
+        : result.rejectedDirectOutput
+          ? result.alreadyApproved
+            ? '申请已否决，领用退回草稿已存在'
+            : '申请已否决，已生效出库保持不变，并已生成领用退回草稿'
+          : '已驳回',
     };
+  }
+
+  async handleOaApprovalResult(
+    payload: ApprovalCallbackPayload,
+    rawPayload: unknown,
+    callbackLogId: bigint,
+  ) {
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'requisition_application',
+        bus_key: payload.busKey,
+        proc_inst_id: payload.procInstId,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
+    });
+    if (!instance) throw new NotFoundException('未找到对应的领用OA审批实例');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT id FROM hspsi_oa_approval_instance WHERE id = ? FOR UPDATE',
+        instance.id,
+      );
+      await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', instance.business_id);
+      const current = await tx.hspsi_oa_approval_instance.findUniqueOrThrow({
+        where: { id: instance.id },
+      });
+      const application = await tx.hspsi_draw_approve.findFirst({
+        where: { draw_id: current.business_id, deleted_at: null },
+      });
+      if (!application) throw new NotFoundException('OA审批对应的领用申请不存在');
+
+      const expectedApproveStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const duplicate =
+        current.proc_status === payload.procStatus &&
+        application.approve_status === expectedApproveStatus;
+      let outputId: bigint | null = null;
+      if (!duplicate) {
+        const approved = payload.procStatus === 'PASSED';
+        await tx.hspsi_draw_approve.update({
+          where: { draw_id: application.draw_id },
+          data: {
+            approve_status: approved ? 1 : 2,
+            approve_comment: this.oaApprovalComment(payload.procStatus),
+            approve_by: 0n,
+            approve_date: new Date(),
+            status: approved ? 1 : 0,
+            updated_by: 0n,
+          },
+        });
+        if (approved) {
+          const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
+          outputId = output.draw_output_id;
+          await this.syncApprovedRequisitionTodos(tx, application, '0');
+        } else {
+          // OA 驳回：若该申请已存在直接领用出库单（先出库后审批），自动生成待确认退回单追回物资
+          const directOutput = await tx.hspsi_draw_approve_output.findFirst({
+            where: {
+              draw_id: application.draw_id,
+              generation_key: { startsWith: 'direct-requisition-output:' },
+              deleted_at: null,
+            },
+            orderBy: { draw_output_id: 'desc' },
+          });
+          if (directOutput) {
+            await this.ensureRejectedDirectOutputReturn(tx, application, directOutput, '0');
+          }
+          await this.todoService.completeByBusiness('draw_approve', Number(application.draw_id), tx);
+        }
+      } else if (payload.procStatus === 'PASSED') {
+        const output = await this.ensureAutomaticOutput(tx, application.draw_id, '0');
+        outputId = output.draw_output_id;
+        await this.syncApprovedRequisitionTodos(tx, application, '0');
+      }
+
+      await tx.hspsi_oa_approval_instance.update({
+        where: { id: current.id },
+        data: {
+          proc_key: payload.procKey,
+          proc_status: payload.procStatus,
+          callback_count: { increment: 1 },
+          last_callback_at: new Date(),
+          updated_by: 0n,
+          updated_at: new Date(),
+        },
+      });
+      await tx.hspsi_oa_approval_callback_log.update({
+        where: { id: callbackLogId },
+        data: {
+          instance_id: current.id,
+          event_code: 'XFTOAFPS',
+          prj_cod: payload.prjCod,
+          proc_status: payload.procStatus,
+          bus_key: payload.busKey,
+          proc_inst_id: payload.procInstId,
+          proc_key: payload.procKey,
+          raw_payload: JSON.stringify(rawPayload),
+          processed: 1,
+          process_result: duplicate ? '重复回调，已幂等确认' : '领用审批结果已处理',
+          account_set_id: current.account_set_id,
+        },
+      });
+      return {
+        processed: true,
+        duplicate,
+        applicationId: application.draw_id,
+        outputId,
+        procStatus: payload.procStatus,
+      };
+    });
+  }
+
+  private oaApprovalComment(status: ApprovalCallbackPayload['procStatus']) {
+    return (
+      {
+        PASSED: 'OA审批通过',
+        REJECTED: 'OA审批驳回',
+        CANCELED: 'OA审批取消',
+        DELETED: 'OA审批流程删除',
+      }[status] ?? `OA审批状态：${status}`
+    );
+  }
+
+  private async ensureRejectedDirectOutputReturn(
+    tx: Prisma.TransactionClient,
+    application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
+    output: Prisma.hspsi_draw_approve_outputGetPayload<Record<string, never>>,
+    userId: string,
+  ) {
+    const existing = await tx.hspsi_draw_approve_output_exit.findFirst({
+      where: { draw_output_id: output.draw_output_id, deleted_at: null },
+      orderBy: { draw_exit_id: 'desc' },
+    });
+    if (existing) return existing;
+
+    const details = await tx.hspsi_draw_approve_output_detail.findMany({
+      where: { draw_output_id: output.draw_output_id },
+      orderBy: { output_detail_id: 'asc' },
+    });
+    const returnableDetails = details.filter(
+      (detail) => detail.is_returnable === 1 && Number(detail.fact_draw_qty) > 0,
+    );
+    if (!returnableDetails.length) {
+      throw new BadRequestException('直接领用出库没有可生成退回草稿的明细');
+    }
+    const returnNo = await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_RETURN);
+    const header = await tx.hspsi_draw_approve_output_exit.create({
+      data: {
+        draw_exit_no: returnNo,
+        draw_id: application.draw_id,
+        draw_output_id: output.draw_output_id,
+        exit_reson: '直接领用申请被否决，待办理退回',
+        exit_qty: returnableDetails.reduce((sum, detail) => sum + Number(detail.fact_draw_qty), 0),
+        org_id: output.org_id,
+        warehouse_id: output.warehouse_id,
+        dept_id: output.dept_id,
+        receiver_id: output.receiver_id,
+        return_date: new Date(),
+        status: 1,
+        comfirm_status: 0,
+        comfirm_by: 0n,
+        posting_version: 0,
+        remark: `由直接领用出库单${output.draw_output_no ?? ''}自动生成`,
+        created_by: BigInt(userId),
+        updated_by: BigInt(userId),
+      },
+    });
+    await tx.hspsi_draw_approve_output_exit_detail.createMany({
+      data: returnableDetails.map((detail) => ({
+        draw_exit_id: header.draw_exit_id,
+        draw_output_detail_id: detail.output_detail_id,
+        goods_id: detail.goods_id,
+        sku_id: detail.sku_id,
+        batch_no: detail.batch_no,
+        unit_type: detail.unit_type,
+        so_qty: detail.fact_draw_qty,
+        exit_qty: detail.fact_draw_qty,
+        storage_location: '',
+        remark: '',
+      })),
+    });
+    await this.documentTrace.link(
+      {
+        upstreamType: 'requisition_output',
+        upstreamId: output.draw_output_id,
+        upstreamNo: output.draw_output_no ?? '',
+        downstreamType: 'requisition_return',
+        downstreamId: header.draw_exit_id,
+        downstreamNo: returnNo,
+        relationKind: 'rejection_return',
+        createdBy: userId,
+      },
+      tx,
+    );
+    return header;
   }
 
   async deleteApplication(id: string, userId: string) {
@@ -798,18 +1495,30 @@ export class RequisitionService {
         where: { draw_id: drawId, deleted_at: null },
       });
       if (!application) throw new NotFoundException('领用申请不存在');
-      const [confirmedOutputs, confirmedReturns] = await Promise.all([
+      const [confirmedOutputs, confirmedReturns, activeOa] = await Promise.all([
         tx.hspsi_draw_approve_output.count({
           where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
         }),
         tx.hspsi_draw_approve_output_exit.count({
           where: { draw_id: drawId, comfirm_status: 1, deleted_at: null },
         }),
+        tx.hspsi_oa_approval_instance.findFirst({
+          where: {
+            business_type: 'requisition_application',
+            business_id: drawId,
+            proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+            deleted_at: null,
+          },
+          select: { id: true },
+        }),
       ]);
       if (confirmedOutputs || confirmedReturns) {
         throw new BadRequestException('申请已有确认出入库，不可删除');
       }
+      if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可删除');
       if (application.approve_status === 1) throw new BadRequestException('已审批申请不可删除');
+      if (application.created_by !== BigInt(userId))
+        throw new ForbiddenException('个人无权删除他人发起的领用申请');
       await tx.hspsi_draw_approve.update({
         where: { draw_id: drawId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
@@ -924,7 +1633,7 @@ export class RequisitionService {
       where: { draw_output_id: BigInt(id), deleted_at: null },
     });
     if (!item) throw new NotFoundException('领用出库单不存在');
-    const [details, application, returned] = await Promise.all([
+    const [details, application, applicationDetails, confirmedUsage, returned] = await Promise.all([
       this.prisma.hspsi_draw_approve_output_detail.findMany({
         where: { draw_output_id: item.draw_output_id },
         orderBy: { output_detail_id: 'asc' },
@@ -932,11 +1641,23 @@ export class RequisitionService {
       this.prisma.hspsi_draw_approve.findFirst({
         where: { draw_id: item.draw_id, deleted_at: null },
       }),
+      this.prisma.hspsi_draw_approve_detail.findMany({
+        where: { draw_id: item.draw_id },
+        orderBy: { draw_detail_id: 'asc' },
+      }),
+      this.confirmedOutputUsage(this.prisma, item.draw_id, item.draw_output_id),
       this.confirmedReturnUsage(this.prisma, item.draw_output_id),
     ]);
     if (!application) throw new BadRequestException('来源领用申请不存在或已删除');
     const mappedDetails = details.map((detail) => {
-      const historicalQty = returned.get(String(detail.output_detail_id)) ?? 0;
+      const source = applicationDetails.find(
+        (applicationDetail) => applicationDetail.draw_detail_id === detail.draw_detail_id,
+      );
+      const applicationQty = Number(source?.draw_qty ?? detail.draw_qty);
+      const historicalQty =
+        (confirmedUsage.get(`detail:${detail.draw_detail_id}`) ?? 0) +
+        (confirmedUsage.get(`legacy:${detail.goods_id}:${detail.sku_id}`) ?? 0);
+      const returnedQty = returned.get(String(detail.output_detail_id)) ?? 0;
       const returnable = detail.is_returnable === 1;
       return {
         id: detail.output_detail_id,
@@ -945,38 +1666,50 @@ export class RequisitionService {
         skuId: detail.sku_id,
         batchNo: detail.batch_no,
         unitType: detail.unit_type,
-        applicationQty: detail.draw_qty,
+        applicationQty,
         quantity: detail.fact_draw_qty,
         returnable,
         historicalQty,
-        remainingQty: returnable ? Math.max(0, Number(detail.fact_draw_qty) - historicalQty) : 0,
+        remainingQty: Math.max(0, applicationQty - historicalQty),
+        returnedQty,
+        returnableRemainingQty: returnable
+          ? Math.max(0, Number(detail.fact_draw_qty) - returnedQty)
+          : 0,
         remark: detail.remark,
       };
     });
-    const [enriched] = await this.enrichRequisitionStaff([
-      {
-        ...item,
-        id: item.draw_output_id,
-        outputNo: item.draw_output_no ?? '',
-        applicationId: item.draw_id,
-        applicationNo: application.draw_no,
-        applicantId: application.applicant_id,
-        orgId: item.org_id,
-        warehouseId: item.warehouse_id,
-        deptId: item.dept_id,
-        receiverId: item.receiver_id,
-        outDate: item.output_date,
-        autoCreated: item.auto_created === 1,
-        confirmStatus: item.comfirm_status,
-        confirmComment: item.comfirm_comment,
-        confirmBy: item.comfirm_by,
-        confirmDate: item.comfirm_date,
-        hasReturnableItems: mappedDetails.some(
-          (detail) => detail.returnable && detail.remainingQty > 0,
-        ),
-        details: mappedDetails,
-      },
-    ]);
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
+    const [enriched] = await this.enrichRequisitionStaff(
+      await this.references.enrich(
+        [
+          {
+            ...item,
+            id: item.draw_output_id,
+            outputNo: item.draw_output_no ?? '',
+            applicationId: item.draw_id,
+            applicationNo: application.draw_no,
+            applicantId: application.applicant_id,
+            orgId: item.org_id,
+            warehouseId: item.warehouse_id,
+            deptId: item.dept_id,
+            receiverId: item.receiver_id,
+            outDate: item.output_date,
+            autoCreated: item.auto_created === 1,
+            directOutput: item.generation_key?.startsWith('direct-requisition-output:') ?? false,
+            drawType: application.draw_type,
+            confirmStatus: item.comfirm_status,
+            confirmComment: item.comfirm_comment,
+            confirmBy: item.comfirm_by,
+            confirmDate: item.comfirm_date,
+            hasReturnableItems: mappedDetails.some(
+              (detail) => detail.returnable && detail.returnableRemainingQty > 0,
+            ),
+            details: enrichedDetails,
+          },
+        ],
+        { confirmStatus: 'requisition_confirm_status' },
+      ),
+    );
     return enriched!;
   }
 
@@ -1025,7 +1758,9 @@ export class RequisitionService {
     return { id, message: '删除成功' };
   }
 
-  async saveOutput(id: string | null, body: Body, userId: string) {
+  async saveOutput(id: string | null, body: Body, user: AuthUser) {
+    if (!id && body.directOutput === true) return this.saveDirectOutput(body, user);
+    const userId = user.id;
     const applicationId = this.bigint(body.applicationId, '来源领用申请');
     const explicitTargetId = id ? this.bigint(id, '领用出库单') : null;
     const automaticTarget =
@@ -1144,6 +1879,9 @@ export class RequisitionService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newOutputNo = current
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT);
       const header = current
         ? await tx.hspsi_draw_approve_output.update({
             where: { draw_output_id: current.draw_output_id },
@@ -1152,7 +1890,7 @@ export class RequisitionService {
         : await tx.hspsi_draw_approve_output.create({
             data: {
               ...data,
-              draw_output_no: `TMP${Date.now()}`,
+              draw_output_no: newOutputNo,
               generation_key: null,
               auto_created: 0,
               comfirm_status: 0,
@@ -1161,15 +1899,7 @@ export class RequisitionService {
               created_by: BigInt(userId),
             },
           });
-      if (!current) {
-        await tx.hspsi_draw_approve_output.update({
-          where: { draw_output_id: header.draw_output_id },
-          data: { draw_output_no: this.documentNo('DRO', header.draw_output_id) },
-        });
-      }
-      const outputNo = current
-        ? (header.draw_output_no ?? this.documentNo('DRO', header.draw_output_id))
-        : this.documentNo('DRO', header.draw_output_id);
+      const outputNo = header.draw_output_no;
       await tx.hspsi_draw_approve_output_detail.deleteMany({
         where: { draw_output_id: header.draw_output_id },
       });
@@ -1205,6 +1935,242 @@ export class RequisitionService {
     return { id: outputId, message: '领用出库单已保存' };
   }
 
+  private async saveDirectOutput(body: Body, user: AuthUser) {
+    const generationKey = this.directOutputGenerationKey(body.requestKey);
+    const drawType = Number(body.drawType ?? 0);
+    if (drawType !== 1 && drawType !== 2) throw new BadRequestException('领用类型无效');
+    const lines = this.detailLines(body.details).map((line) => {
+      const batchNo = String(line.batchNo ?? '').trim();
+      if (!batchNo) throw new BadRequestException('直接领用出库必须选择库存批次');
+      const drawQty = this.positiveQuantity(line.drawQty, '申请数量');
+      const quantity = this.positiveQuantity(line.quantity, '出库数量');
+      if (quantity > drawQty) throw new BadRequestException('出库数量不能超过申请数量');
+      const returnable = this.returnable(line.returnable);
+      if (drawType === 1 && returnable === 1) {
+        throw new BadRequestException('直接领用的明细必须选择“无需归还”');
+      }
+      if (drawType === 2 && returnable === 0) {
+        throw new BadRequestException('借用的明细必须选择“可归还”');
+      }
+      return {
+        goodsId: this.bigint(line.goodsId, '商品'),
+        skuId: this.bigint(line.skuId, 'SKU'),
+        batchNo,
+        unitType: Number(line.unitType ?? 0),
+        drawQty,
+        quantity,
+        returnable,
+        remark: String(line.remark ?? ''),
+      };
+    });
+    const orgId = this.bigint(body.orgId, '所属组织');
+    this.assertAuthorizedOrganization(user, orgId, '所属组织');
+    const warehouseId = this.bigint(body.warehouseId, '领用仓库');
+    const deptId = this.bigint(body.deptId, '领用部门');
+    const receiverId = this.bigint(body.receiverId, '领用接收人');
+    const userId = user.id;
+
+    // 领用人签字：必填；签署人默认=领用接收人（领用人）。签名 dataUrl 先上传 OSS，再进事务。
+    const submittedSignature = String(body.signatureContent ?? '').trim();
+    if (!submittedSignature && !String(body.signatureAttachment ?? '').trim()) {
+      throw new BadRequestException('直接领用出库必须完成领用人签字确认');
+    }
+    const uploadedSignature = submittedSignature
+      ? await this.attachmentsService.uploadSignatureDataUrlForIntegration(
+          'requisition_application',
+          submittedSignature,
+          userId,
+        )
+      : null;
+    const signedAt = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.hspsi_draw_approve_output.findUnique({
+        where: { generation_key: generationKey },
+      });
+      if (existing) {
+        if (existing.deleted_at) throw new BadRequestException('该直接出库请求对应单据已删除');
+        return {
+          outputId: existing.draw_output_id,
+          applicationId: existing.draw_id,
+          already: true,
+        };
+      }
+      await this.validateApplicationReferences(tx, {
+        orgId,
+        warehouseId,
+        deptId,
+        applicantId: receiverId,
+        drawType,
+      });
+      await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
+      const [applicationNo, outputNo] = await Promise.all([
+        this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_APPLICATION),
+        this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_OUTPUT),
+      ]);
+      const now = new Date();
+      const drawTotal = lines.reduce((sum, line) => sum + line.drawQty, 0);
+      const factTotal = lines.reduce((sum, line) => sum + line.quantity, 0);
+      const attachments = uploadedSignature
+        ? [...this.attachmentItems(undefined), uploadedSignature]
+        : [];
+      const approvedDirect = drawType === 1;
+      const application = await tx.hspsi_draw_approve.create({
+        data: {
+          draw_no: applicationNo,
+          draw_qty: drawTotal,
+          fact_draw_qty: factTotal,
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          dept_id: deptId,
+          applicant_id: receiverId,
+          draw_type: drawType,
+          draw_date: new Date(body.outDate ?? now),
+          draw_reason: String(body.reason ?? body.remark ?? '').trim() || '直接领用出库反向生成',
+          attachments,
+          signature_content: null,
+          signature_attachment: uploadedSignature?.id ?? '',
+          signed_by: receiverId,
+          signed_at: signedAt,
+          status: 1,
+          approve_status: approvedDirect ? 1 : 0,
+          approve_comment: approvedDirect ? '直接领用出库后由系统自动生成并标记通过' : '',
+          approve_by: approvedDirect ? BigInt(userId) : 0n,
+          approve_date: approvedDirect ? now : null,
+          remark: String(body.remark ?? ''),
+          created_by: BigInt(userId),
+          updated_by: BigInt(userId),
+        },
+      });
+      const applicationDetails = await Promise.all(
+        lines.map((line) =>
+          tx.hspsi_draw_approve_detail.create({
+            data: {
+              draw_id: application.draw_id,
+              goods_id: line.goodsId,
+              sku_id: line.skuId,
+              batch_no: line.batchNo,
+              unit_type: line.unitType,
+              draw_qty: line.drawQty,
+              is_returnable: line.returnable,
+              remark: line.remark,
+            },
+          }),
+        ),
+      );
+      const output = await tx.hspsi_draw_approve_output.create({
+        data: {
+          draw_output_no: outputNo,
+          draw_id: application.draw_id,
+          generation_key: generationKey,
+          auto_created: 0,
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          dept_id: deptId,
+          receiver_id: receiverId,
+          output_date: new Date(body.outDate ?? now),
+          status: 1,
+          comfirm_status: 0,
+          comfirm_by: 0n,
+          posting_version: 0,
+          remark: String(body.remark ?? ''),
+          created_by: BigInt(userId),
+          updated_by: BigInt(userId),
+        },
+      });
+      await tx.hspsi_draw_approve_output_detail.createMany({
+        data: lines.map((line, index) => ({
+          draw_output_id: output.draw_output_id,
+          draw_detail_id: applicationDetails[index]!.draw_detail_id,
+          goods_id: line.goodsId,
+          sku_id: line.skuId,
+          batch_no: line.batchNo,
+          unit_type: line.unitType,
+          draw_qty: line.drawQty,
+          fact_draw_qty: line.quantity,
+          is_returnable: line.returnable,
+          remark: line.remark,
+        })),
+      });
+      await this.posting.post(
+        {
+          orgId,
+          warehouseId,
+          direction: -1,
+          operationType: 2,
+          inventoryMode: INVENTORY_BUSINESS_MODE.REQUISITION_OR_PRODUCTION_OUTPUT,
+          sourceId: output.draw_output_id,
+          sourceType: 'requisition_output',
+          sourceNo: outputNo,
+          operationBy: userId,
+          idempotencyKey: `requisition-output:${output.draw_output_id}:confirm:v1`,
+          remark: String(body.remark ?? '').trim() || '直接领用出库',
+          lines: this.aggregatePostingLines(
+            orgId,
+            warehouseId,
+            lines.map((line) => ({
+              goodsId: line.goodsId,
+              skuId: line.skuId,
+              batchNo: line.batchNo,
+              unitType: line.unitType,
+              quantity: line.quantity,
+            })),
+          ),
+        },
+        tx,
+      );
+      await tx.hspsi_draw_approve_output.update({
+        where: { draw_output_id: output.draw_output_id },
+        data: {
+          comfirm_status: 1,
+          comfirm_comment: '直接领用出库保存后自动确认',
+          comfirm_by: BigInt(userId),
+          comfirm_date: now,
+          posting_version: 1,
+          updated_by: BigInt(userId),
+        },
+      });
+      await this.documentTrace.link(
+        {
+          upstreamType: 'requisition_output',
+          upstreamId: output.draw_output_id,
+          upstreamNo: outputNo,
+          downstreamType: 'requisition_application',
+          downstreamId: application.draw_id,
+          downstreamNo: applicationNo,
+          relationKind: 'reverse_generated',
+          createdBy: userId,
+        },
+        tx,
+      );
+      return {
+        outputId: output.draw_output_id,
+        applicationId: application.draw_id,
+        already: false,
+      };
+    });
+    // 借用：反向生成的申请单与正常借用一样走 OA 审核（幂等重放时不重复提交）
+    if (drawType === 2 && !result.already) {
+      const oa = await this.oaApproval.submit(result.applicationId, userId);
+      return {
+        id: result.outputId,
+        applicationId: result.applicationId,
+        message:
+          oa.procStatus === 'PUSH_FAILED'
+            ? `直接领用出库已完成，但提交OA失败：${oa.errorMessage ?? '请稍后重试'}`
+            : '直接领用出库已完成，借用申请已提交OA审批',
+        oaStatus: oa.procStatus,
+      };
+    }
+    return {
+      id: result.outputId,
+      applicationId: result.applicationId,
+      message: result.already
+        ? '直接领用出库已完成'
+        : '直接领用出库已完成，并已反向生成已通过的领用申请单',
+    };
+  }
+
   async confirmOutput(id: string, comment: string, userId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
       const outputId = BigInt(id);
@@ -1230,7 +2196,9 @@ export class RequisitionService {
       const usage = await this.confirmedOutputUsage(tx, output.draw_id);
       for (const detail of details) {
         if (!detail.batch_no.trim())
-          throw new BadRequestException('确认出库前必须填写全部物品批号');
+          throw new BadRequestException(
+            '确认出库前必须填写全部物品批号，请先编辑出库单并选择库存批次',
+          );
         const source = applicationDetails.find(
           (line) => line.draw_detail_id === detail.draw_detail_id,
         );
@@ -1365,6 +2333,68 @@ export class RequisitionService {
     );
   }
 
+  /**
+   * 直接领用出库专用：返回当前账号授权组织范围内全部领用类仓库。
+   * 每个仓库携带 orgId/deptId，前端据此反推组织、带出部门并筛选人员。
+   */
+  async directOutputOptions(user: AuthUser) {
+    const authorizedOrgIds = [
+      ...new Set(
+        [user.orgId, ...(user.authorizedOrganizations ?? []).map((org) => org.id)].filter(
+          (value): value is string => Boolean(value),
+        ),
+      ),
+    ].map(BigInt);
+    const [organizations, warehouses] = await Promise.all([
+      authorizedOrgIds.length
+        ? this.prisma.hspsi_basic_organization.findMany({
+            where: { org_id: { in: authorizedOrgIds }, operation_status: 1, deleted_at: null },
+            select: { org_id: true, name: true },
+          })
+        : [],
+      authorizedOrgIds.length
+        ? this.prisma.hspsi_basic_warehouse.findMany({
+            where: {
+              org_id: { in: authorizedOrgIds },
+              warehouse_type: { in: this.requisitionWarehouseTypes },
+              status: 1,
+              deleted_at: null,
+            },
+            orderBy: [{ sort: 'asc' }, { warehouse_id: 'asc' }],
+            select: {
+              warehouse_id: true,
+              name: true,
+              warehouse_type: true,
+              dept_id: true,
+              org_id: true,
+            },
+          })
+        : [],
+    ]);
+    const orgNames = new Map(organizations.map((org) => [String(org.org_id), org.name]));
+    return warehouses.map((warehouse) => ({
+      value: warehouse.warehouse_id,
+      label: orgNames.has(String(warehouse.org_id))
+        ? `${warehouse.name}（${orgNames.get(String(warehouse.org_id))}）`
+        : warehouse.name,
+      raw: {
+        warehouseType: warehouse.warehouse_type,
+        deptId: warehouse.dept_id,
+        orgId: warehouse.org_id,
+      },
+    }));
+  }
+
+  /** 后端最终权限校验：直接领用出库所选组织必须在当前账号授权组织范围内 */
+  private assertAuthorizedOrganization(user: AuthUser, orgId: bigint, label: string) {
+    if (user.isSuperAdmin) return;
+    const authorized = new Set(
+      [user.orgId, ...(user.authorizedOrganizations ?? []).map((org) => org.id)].filter(Boolean),
+    );
+    if (!authorized.has(String(orgId)))
+      throw new ForbiddenException(`${label}不在当前账号授权组织范围内`);
+  }
+
   async returns(query: Body) {
     const { page, pageSize } = this.paging(query);
     const where: Prisma.hspsi_draw_approve_output_exitWhereInput = { deleted_at: null };
@@ -1452,46 +2482,55 @@ export class RequisitionService {
           where: { draw_output_id: output.draw_output_id },
         })
       : [];
-    const [enriched] = await this.enrichRequisitionStaff([
-      {
-        ...item,
-        id: item.draw_exit_id,
-        returnNo: item.draw_exit_no ?? '',
-        applicationId: item.draw_id,
-        applicationNo: application?.draw_no ?? '',
-        applicantId: application?.applicant_id ?? 0,
-        outputId: item.draw_output_id,
-        outputNo: output?.draw_output_no ?? '',
-        orgId: item.org_id,
-        warehouseId: item.warehouse_id,
-        deptId: item.dept_id,
-        receiverId: item.receiver_id,
-        returnDate: item.return_date,
-        reason: item.exit_reson,
-        status: item.status,
-        confirmStatus: item.comfirm_status,
-        confirmComment: item.comfirm_comment,
-        confirmBy: item.comfirm_by,
-        confirmDate: item.comfirm_date,
-        details: details.map((detail) => {
-          const source = sourceDetails.find(
-            (sourceDetail) => sourceDetail.output_detail_id === detail.draw_output_detail_id,
-          );
-          return {
-            id: detail.exit_detail_id,
-            outputDetailId: detail.draw_output_detail_id,
-            goodsId: detail.goods_id,
-            skuId: detail.sku_id,
-            batchNo: detail.batch_no,
-            unitType: detail.unit_type,
-            issuedQty: detail.so_qty,
-            quantity: detail.exit_qty,
-            returnable: source?.is_returnable === 1,
-            remark: detail.remark,
-          };
-        }),
-      },
-    ]);
+    const [enriched] = await this.enrichRequisitionStaff(
+      await this.references.enrich(
+        [
+          {
+            ...item,
+            id: item.draw_exit_id,
+            returnNo: item.draw_exit_no ?? '',
+            applicationId: item.draw_id,
+            applicationNo: application?.draw_no ?? '',
+            applicantId: application?.applicant_id ?? 0,
+            outputId: item.draw_output_id,
+            outputNo: output?.draw_output_no ?? '',
+            orgId: item.org_id,
+            warehouseId: item.warehouse_id,
+            deptId: item.dept_id,
+            receiverId: item.receiver_id,
+            returnDate: item.return_date,
+            reason: item.exit_reson,
+            status: item.status,
+            confirmStatus: item.comfirm_status,
+            confirmComment: item.comfirm_comment,
+            confirmBy: item.comfirm_by,
+            confirmDate: item.comfirm_date,
+            details: details.map((detail) => {
+              const source = sourceDetails.find(
+                (sourceDetail) => sourceDetail.output_detail_id === detail.draw_output_detail_id,
+              );
+              return {
+                id: detail.exit_detail_id,
+                outputDetailId: detail.draw_output_detail_id,
+                goodsId: detail.goods_id,
+                skuId: detail.sku_id,
+                batchNo: detail.batch_no,
+                unitType: detail.unit_type,
+                issuedQty: detail.so_qty,
+                quantity: detail.exit_qty,
+                storageLocation: detail.storage_location,
+                returnable: source?.is_returnable === 1,
+                remark: detail.remark,
+              };
+            }),
+          },
+        ],
+        {
+          status: 'requisition_status',
+          confirmStatus: 'requisition_confirm_status',
+        },
+      ),
+    );
     return enriched!;
   }
 
@@ -1567,9 +2606,15 @@ export class RequisitionService {
           unitType: source.unit_type,
           issuedQuantity: Number(source.fact_draw_qty),
           quantity,
+          storageLocation: String(line.storageLocation ?? line.position ?? '')
+            .trim()
+            .slice(0, 100),
           remark: String(line.remark ?? ''),
         };
       });
+
+      const returnWarehouseId = this.bigint(body.warehouseId ?? output.warehouse_id, '退回仓库');
+      await this.masterData.assertGoodsLines(output.org_id, returnWarehouseId, lines, tx);
 
       const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
       const data = {
@@ -1578,7 +2623,7 @@ export class RequisitionService {
         exit_reson: String(body.reason).trim(),
         exit_qty: quantity,
         org_id: output.org_id,
-        warehouse_id: output.warehouse_id,
+        warehouse_id: returnWarehouseId,
         dept_id: output.dept_id,
         receiver_id: output.receiver_id,
         return_date: new Date(body.returnDate ?? Date.now()),
@@ -1586,6 +2631,9 @@ export class RequisitionService {
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
       };
+      const newReturnNo = current
+        ? ''
+        : await this.businessNumber.generate(BUSINESS_PREFIX.REQUISITION_RETURN);
       const header = current
         ? await tx.hspsi_draw_approve_output_exit.update({
             where: { draw_exit_id: current.draw_exit_id },
@@ -1594,22 +2642,14 @@ export class RequisitionService {
         : await tx.hspsi_draw_approve_output_exit.create({
             data: {
               ...data,
-              draw_exit_no: `TMP${Date.now()}`,
+              draw_exit_no: newReturnNo,
               comfirm_status: 0,
               comfirm_by: 0n,
               posting_version: 0,
               created_by: BigInt(userId),
             },
           });
-      if (!current) {
-        await tx.hspsi_draw_approve_output_exit.update({
-          where: { draw_exit_id: header.draw_exit_id },
-          data: { draw_exit_no: this.documentNo('DRR', header.draw_exit_id) },
-        });
-      }
-      const returnNo = current
-        ? (header.draw_exit_no ?? this.documentNo('DRR', header.draw_exit_id))
-        : this.documentNo('DRR', header.draw_exit_id);
+      const returnNo = header.draw_exit_no;
       await tx.hspsi_draw_approve_output_exit_detail.deleteMany({
         where: { draw_exit_id: header.draw_exit_id },
       });
@@ -1623,6 +2663,7 @@ export class RequisitionService {
           unit_type: line.unitType,
           so_qty: line.issuedQuantity,
           exit_qty: line.quantity,
+          storage_location: line.storageLocation,
           remark: line.remark,
         })),
       });

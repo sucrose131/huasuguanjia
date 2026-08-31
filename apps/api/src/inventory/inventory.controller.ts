@@ -16,11 +16,15 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
+import { InventoryOaApprovalService } from './inventory-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
 export class InventoryController {
-  constructor(@Inject(InventoryService) private readonly service: InventoryService) {}
+  constructor(
+    @Inject(InventoryService) private readonly service: InventoryService,
+    @Inject(InventoryOaApprovalService) private readonly oa: InventoryOaApprovalService,
+  ) {}
 
   @Get('users/options')
   @RequirePermissions('inventory')
@@ -40,11 +44,23 @@ export class InventoryController {
     return this.service.approvedLossOptions();
   }
 
+  @Get('losses/purchase-source-options')
+  @RequirePermissions('inventory')
+  lossPurchaseSourceOptions(@Query() query: any) {
+    return this.service.lossPurchaseSourceOptions(query);
+  }
+
   // ── stocks ──
   @Get('stocks')
   @RequirePermissions('inventory')
   stocks(@Query() q: any) {
     return this.service.stocks(q);
+  }
+
+  @Get('requisition-history')
+  @RequirePermissions('inventory')
+  requisitionHistory(@Query() q: any) {
+    return this.service.requisitionHistory(q);
   }
 
   @Get('ledger')
@@ -74,20 +90,23 @@ export class InventoryController {
 
   @Post('transfers')
   @RequirePermissions('inventory')
-  createTransfer(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveTransfer(null, b, u.id, !!b.submit);
+  async createTransfer(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveTransfer(null, b, u.id, !!b.submit);
+    return b.submit ? this.withOa(saved, await this.oa.submitTransfer(saved.id, u.id)) : saved;
   }
 
   @Patch('transfers/:id')
   @RequirePermissions('inventory')
-  updateTransfer(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveTransfer(id, b, u.id, !!b.submit);
+  async updateTransfer(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveTransfer(id, b, u.id, !!b.submit);
+    return b.submit ? this.withOa(saved, await this.oa.submitTransfer(saved.id, u.id)) : saved;
   }
 
   @Post('transfers/:id/submit')
   @RequirePermissions('inventory')
-  submitTransfer(@Param('id') id: string) {
-    return this.service.submitTransfer(id);
+  async submitTransfer(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.submitTransfer(id);
+    return this.withOa(saved, await this.oa.submitTransfer(BigInt(id), u.id));
   }
 
   @Post('transfers/:id/approve')
@@ -117,20 +136,23 @@ export class InventoryController {
 
   @Post('adjustments')
   @RequirePermissions('inventory')
-  createAdjustment(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveAdjustment(null, b, u.id, !!b.submit);
+  async createAdjustment(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveAdjustment(null, b, u.id, !!b.submit);
+    return b.submit ? this.withOa(saved, await this.oa.submitAdjustment(saved.id, u.id)) : saved;
   }
 
   @Patch('adjustments/:id')
   @RequirePermissions('inventory')
-  updateAdjustment(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveAdjustment(id, b, u.id, !!b.submit);
+  async updateAdjustment(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveAdjustment(id, b, u.id, !!b.submit);
+    return b.submit ? this.withOa(saved, await this.oa.submitAdjustment(saved.id, u.id)) : saved;
   }
 
   @Post('adjustments/:id/submit')
   @RequirePermissions('inventory')
-  submitAdjustment(@Param('id') id: string) {
-    return this.service.submitAdjustment(id);
+  async submitAdjustment(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.submitAdjustment(id);
+    return this.withOa(saved, await this.oa.submitAdjustment(BigInt(id), u.id));
   }
 
   @Delete('adjustments/:id')
@@ -143,6 +165,18 @@ export class InventoryController {
   @RequirePermissions('inventory')
   approveAdjustment(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
     return this.service.approveAdjustment(id, !!b.approved, String(b.comment ?? ''), u.id);
+  }
+
+  private withOa<T extends { id: bigint | string }>(saved: T, oa: any) {
+    return {
+      ...saved,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `单据已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '单据已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
 
   // ── checks ──
@@ -166,8 +200,9 @@ export class InventoryController {
 
   @Patch('checks/:id')
   @RequirePermissions('inventory')
-  saveCheck(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveCheck(id, b, u.id, !!b.submit);
+  async saveCheck(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveCheck(id, b, u.id, !!b.submit);
+    return b.submit ? this.withOa(saved, await this.oa.submitCheck(BigInt(id), u.id)) : saved;
   }
 
   @Delete('checks/:id')
@@ -197,20 +232,27 @@ export class InventoryController {
 
   @Post('losses')
   @RequirePermissions('inventory')
-  createLoss(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveDocument('loss', null, b, u.id, !!b.submit);
+  async createLoss(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveDocument('loss', null, b, u.id, !!b.submit);
+    return b.submit
+      ? this.withOa(saved, await this.oa.submitInventoryDocument('loss', saved.id, u.id))
+      : saved;
   }
 
   @Patch('losses/:id')
   @RequirePermissions('inventory')
-  updateLoss(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveDocument('loss', id, b, u.id, !!b.submit);
+  async updateLoss(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveDocument('loss', id, b, u.id, !!b.submit);
+    return b.submit
+      ? this.withOa(saved, await this.oa.submitInventoryDocument('loss', saved.id, u.id))
+      : saved;
   }
 
   @Post('losses/:id/submit')
   @RequirePermissions('inventory')
-  submitLoss(@Param('id') id: string) {
-    return this.service.submitDocument('loss', id);
+  async submitLoss(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.submitDocument('loss', id);
+    return this.withOa(saved, await this.oa.submitInventoryDocument('loss', BigInt(id), u.id));
   }
 
   @Delete('losses/:id')
@@ -302,14 +344,20 @@ export class InventoryController {
 
   @Post('overflows')
   @RequirePermissions('inventory')
-  createOverflow(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveDocument('overflow', null, b, u.id, !!b.submit);
+  async createOverflow(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveDocument('overflow', null, b, u.id, !!b.submit);
+    return b.submit
+      ? this.withOa(saved, await this.oa.submitInventoryDocument('overflow', saved.id, u.id))
+      : saved;
   }
 
   @Patch('overflows/:id')
   @RequirePermissions('inventory')
-  updateOverflow(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.service.saveDocument('overflow', id, b, u.id, !!b.submit);
+  async updateOverflow(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const saved = await this.service.saveDocument('overflow', id, b, u.id, !!b.submit);
+    return b.submit
+      ? this.withOa(saved, await this.oa.submitInventoryDocument('overflow', saved.id, u.id))
+      : saved;
   }
 
   @Post('overflows/:id/submit')

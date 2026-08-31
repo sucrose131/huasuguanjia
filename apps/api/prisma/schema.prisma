@@ -22,6 +22,8 @@ model hspsi_basic_customer {
   related_customer_id BigInt    @default(0)
   status              Int       @default(1) @db.TinyInt
   remark              String    @default("") @db.VarChar(255)
+  /// 用户身份描述 JSON：百岁加会员 / 省级合伙人 / 推广身份（不含外部 ID）
+  levels              Json?
   sort                Int       @default(0)
   created_by          BigInt    @default(0)
   updated_by          BigInt    @default(0)
@@ -37,15 +39,15 @@ model hspsi_basic_dept {
   dept_id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
   org_id         BigInt    @default(0)
   parent_id      BigInt    @default(0)
-  path           String    @default("") @db.VarChar(500)
+  path           String    @default("") @db.VarChar(255)
   name           String    @db.VarChar(100)
-  dept_no        String?   @db.VarChar(30)
+  dept_no        String    @default("") @db.VarChar(50)
   leader_id      BigInt    @default(0)
   sort           Int       @default(0)
   status         Int       @default(0) @db.TinyInt
   account_set_id BigInt    @default(0)
   app_id         String    @default("") @db.VarChar(50)
-  outer_ref_id   String    @default("") @db.VarChar(50)
+  outer_ref_id   String    @db.VarChar(50)
   created_by     BigInt    @default(0)
   updated_by     BigInt    @default(0)
   created_at     DateTime? @default(now()) @db.DateTime(0)
@@ -59,8 +61,8 @@ model hspsi_basic_dept {
 model hspsi_basic_organization {
   org_id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
   parent_id        BigInt    @default(0)
-  path             String    @default("") @db.VarChar(500)
-  org_no           String    @default("") @db.VarChar(30)
+  path             String    @default("") @db.VarChar(255)
+  org_no           String    @default("") @db.VarChar(50)
   name             String    @default("") @db.VarChar(100)
   org_level        Int       @default(0) @db.TinyInt
   short_name       String    @default("") @db.VarChar(50)
@@ -79,35 +81,6 @@ model hspsi_basic_organization {
   created_at       DateTime? @default(now()) @db.DateTime(0)
   updated_at       DateTime? @default(now()) @db.DateTime(0)
   deleted_at       DateTime? @db.DateTime(0)
-}
-
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
-model hspsi_basic_post {
-  id         BigInt    @id @default(autoincrement())
-  org_id     BigInt    @default(0)
-  name       String    @default("") @db.VarChar(255)
-  post_code  String    @default("") @db.VarChar(30)
-  status     Int       @default(1) @db.TinyInt
-  remark     String    @default("") @db.VarChar(255)
-  created_by BigInt    @default(0)
-  updated_by BigInt    @default(0)
-  created_at DateTime? @default(now()) @db.DateTime(0)
-  updated_at DateTime? @default(now()) @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
-}
-
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
-model hspsi_basic_post_scope {
-  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  post_id    BigInt    @default(0) @db.UnsignedBigInt
-  org_id     BigInt    @default(0) @db.UnsignedBigInt
-  created_by BigInt    @default(0)
-  updated_by BigInt    @default(0)
-  created_at DateTime? @default(now()) @db.DateTime(0)
-  updated_at DateTime? @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
-
-  @@unique([post_id, org_id], map: "uk_post_org")
 }
 
 model hspsi_basic_position {
@@ -268,6 +241,7 @@ model hspsi_draw_approve {
   created_at           DateTime? @default(now()) @db.DateTime(0)
   updated_at           DateTime? @default(now()) @db.DateTime(0)
   deleted_at           DateTime? @db.DateTime(0)
+  attachments          Json?
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -375,6 +349,7 @@ model hspsi_draw_approve_output_exit_detail {
   unit_type             Int       @default(0)
   so_qty                Int       @default(0)
   exit_qty              Int       @default(0)
+  storage_location      String    @default("") @db.VarChar(100)
   remark                String?   @default("") @db.VarChar(255)
   created_at            DateTime? @default(now()) @db.DateTime(0)
   updated_at            DateTime? @default(now()) @db.DateTime(0)
@@ -400,7 +375,7 @@ model hspsi_goods_info {
   const_price          Decimal   @default(0.00) @db.Decimal(10, 2)
   sale_price           Decimal   @default(0.00) @db.Decimal(10, 2)
   vendor_id            BigInt    @default(0)
-  warehouse_id         BigInt?
+  warehouse_id         BigInt    @default(0)
   status               Int       @default(0) @db.TinyInt
   sort                 Int       @default(0)
   remark               String    @default("") @db.VarChar(255)
@@ -477,6 +452,8 @@ model hspsi_goods_info_sku {
   created_at           DateTime? @default(now()) @db.DateTime(0)
   updated_at           DateTime? @default(now()) @db.DateTime(0)
   deleted_at           DateTime? @db.DateTime(0)
+
+  @@index([good_id], map: "idx_good_id")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -668,18 +645,20 @@ model hspsi_inventory_loss {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_inventory_loss_detail {
-  loss_detail_id BigInt    @id @default(autoincrement())
-  loss_id        BigInt    @default(0)
-  goods_id       BigInt    @default(0)
-  sku_id         BigInt    @default(0)
-  batch_no       String    @default("") @db.VarChar(50)
-  unit_type      Int       @default(0)
-  loss_qty       Int       @default(0)
-  loss_amount    Decimal   @default(0.00) @db.Decimal(10, 2)
-  created_at     DateTime? @default(now()) @db.DateTime(0)
-  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  loss_detail_id           BigInt    @id @default(autoincrement())
+  loss_id                  BigInt    @default(0)
+  goods_id                 BigInt    @default(0)
+  sku_id                   BigInt    @default(0)
+  batch_no                 String    @default("") @db.VarChar(50)
+  unit_type                Int       @default(0)
+  loss_qty                 Int       @default(0)
+  loss_amount              Decimal   @default(0.00) @db.Decimal(10, 2)
+  source_receipt_detail_id BigInt    @default(0)
+  created_at               DateTime? @default(now()) @db.DateTime(0)
+  updated_at               DateTime? @default(now()) @db.DateTime(0)
 
   @@index([loss_id], map: "idx_loss_id")
+  @@index([source_receipt_detail_id], map: "idx_inventory_loss_purchase_source")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -797,26 +776,6 @@ model hspsi_inventory_total {
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
-model hspsi_inventory_total_batch {
-  id               BigInt    @id @default(autoincrement())
-  goods_id         BigInt    @default(0)
-  sku_id           BigInt    @default(0)
-  batch_no         String    @default("") @db.VarChar(50)
-  unit_type        Int       @default(0)
-  input_qty        Int       @default(0)
-  output_qty       Int       @default(0)
-  inventory_qty    Int       @default(0)
-  inventory_amount Decimal   @default(0.00) @db.Decimal(12, 2)
-  org_id           BigInt    @default(0)
-  warehouse_id     BigInt    @default(0)
-  created_at       DateTime? @default(now()) @db.DateTime(0)
-  updated_at       DateTime? @default(now()) @db.DateTime(0)
-  deleted_at       DateTime? @db.DateTime(0)
-
-  @@unique([goods_id, sku_id, warehouse_id, batch_no], map: "uk_goods_batch")
-}
-
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_inventory_total_detail {
   id             BigInt    @id @default(autoincrement())
   goods_id       BigInt    @default(0)
@@ -844,6 +803,68 @@ model hspsi_inventory_total_detail {
   updated_at     DateTime? @default(now()) @db.DateTime(0)
 
   @@index([goods_id, sku_id], map: "idx_goods_sku")
+}
+
+/// 通用出入库单。创建成功即完成库存过账，不进入审批流程。
+model hspsi_inventory_general_order {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  business_no   String    @unique(map: "uk_inventory_general_business_no") @db.VarChar(24)
+  request_key   String    @unique(map: "uk_inventory_general_request_key") @db.VarChar(64)
+  direction     Int       @db.TinyInt
+  business_type String    @db.VarChar(32)
+  business_date DateTime  @db.DateTime(0)
+  org_id        BigInt    @default(0)
+  warehouse_id  BigInt    @default(0)
+  department_id BigInt    @default(0)
+  handler_id    BigInt    @default(0)
+  total_pieces  Int       @default(0)
+  total_amount  Decimal   @default(0.00) @db.Decimal(14, 2)
+  status        Int       @default(1) @db.TinyInt
+  remark        String    @default("") @db.VarChar(500)
+  created_by    BigInt    @default(0)
+  updated_by    BigInt    @default(0)
+  created_at    DateTime? @default(now()) @db.DateTime(0)
+  updated_at    DateTime? @default(now()) @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+
+  @@index([org_id, warehouse_id, business_date], map: "idx_general_order_scope_date")
+  @@index([business_type, status], map: "idx_general_order_type_status")
+}
+
+/// 通用出入库明细，固化单据单位、基础单位换算系数、基础件数及成本快照。
+model hspsi_inventory_general_order_detail {
+  id                  BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  order_id            BigInt    @default(0) @db.UnsignedBigInt
+  goods_id            BigInt    @default(0)
+  sku_id              BigInt    @default(0)
+  batch_no            String    @default("") @db.VarChar(50)
+  document_unit_type  Int       @default(0)
+  document_quantity   Int       @default(0)
+  pieces_unit_type    Int       @default(0)
+  pieces_per_unit     Int       @default(1)
+  pieces_quantity     Int       @default(0)
+  base_cost           Decimal   @default(0.0000) @db.Decimal(12, 4)
+  amount              Decimal   @default(0.00) @db.Decimal(14, 2)
+  custodian_id        BigInt    @default(0)
+  storage_location    String    @default("") @db.VarChar(255)
+  goods_code_snapshot String    @default("") @db.VarChar(30)
+  goods_name_snapshot String    @default("") @db.VarChar(100)
+  sku_spec_snapshot   String    @default("") @db.VarChar(200)
+  created_at          DateTime? @default(now()) @db.DateTime(0)
+  updated_at          DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([order_id], map: "idx_general_detail_order")
+  @@index([goods_id, sku_id], map: "idx_general_detail_goods_sku")
+}
+
+/// 可由系统管理员手动控制的库存功能开关。
+model hspsi_inventory_feature_config {
+  config_key String    @id @db.VarChar(64)
+  enabled    Int       @default(0) @db.TinyInt
+  remark     String    @default("") @db.VarChar(255)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -909,30 +930,32 @@ model hspsi_production_bom {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_production_bom_detail {
-  id          BigInt  @id @default(autoincrement())
-  bom_id      BigInt  @default(0)
-  goods_id    BigInt  @default(0)
-  sku_id      BigInt  @default(0)
-  require_qty Int     @default(0)
-  unit_type   Int     @default(0)
-  remark      String  @default("") @db.VarChar(255)
+  id          BigInt @id @default(autoincrement())
+  bom_id      BigInt @default(0)
+  goods_id    BigInt @default(0)
+  sku_id      BigInt @default(0)
+  require_qty Int    @default(0)
+  unit_type   Int    @default(0)
+  remark      String @default("") @db.VarChar(255)
 }
 
 model hspsi_production_material_out {
-  out_id       Int       @id @default(autoincrement())
-  out_no       String    @unique(map: "uk_production_material_out_no") @default("") @db.VarChar(30)
-  plan_id      BigInt?
-  warehouse_id Int?
-  org_id       Int?
-  out_date     DateTime? @db.DateTime(0)
-  out_type     Int       @default(1) @db.TinyInt
-  confirm_tag  Int       @default(0)
-  remark       String?   @db.VarChar(300)
-  created_by   Int?
-  created_date DateTime? @db.DateTime(0)
-  updated_by   Int?
-  updated_date DateTime? @db.DateTime(0)
-  deleted_at   DateTime? @db.DateTime(0)
+  out_id           Int       @id @default(autoincrement())
+  out_no           String    @unique(map: "uk_production_material_out_no") @default("") @db.VarChar(30)
+  plan_id          BigInt?
+  warehouse_id     Int?
+  org_id           Int?
+  out_date         DateTime? @db.DateTime(0)
+  out_type         Int       @default(1) @db.TinyInt
+  destination_type Int?      @db.TinyInt
+  confirm_tag      Int       @default(0)
+  remark           String?   @db.VarChar(300)
+  created_by       Int?
+  created_date     DateTime? @db.DateTime(0)
+  updated_by       Int?
+  updated_date     DateTime? @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+  attachments      Json?
 
   @@index([confirm_tag], map: "idx_material_out_confirm")
   @@index([plan_id], map: "idx_material_out_plan")
@@ -940,16 +963,68 @@ model hspsi_production_material_out {
 }
 
 model hspsi_production_material_out_detail {
-  serial_number Int      @id @default(autoincrement())
+  serial_number Int    @id @default(autoincrement())
   out_id        Int
   goods_id      Int?
   sku_id        Int?
   unit_type     Int?
   out_qty       Int?
-  batch_no      String   @default("") @db.VarChar(100)
-  remark        String   @default("") @db.VarChar(300)
+  batch_no      String @default("") @db.VarChar(100)
+  remark        String @default("") @db.VarChar(300)
 
   @@index([out_id], map: "idx_material_out_detail_out")
+}
+
+model hspsi_production_material_return {
+  return_id       BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  return_no       String    @unique(map: "uk_production_material_return_no") @db.VarChar(30)
+  request_key     String    @unique(map: "uk_production_material_return_request") @db.VarChar(64)
+  source_out_id   Int
+  plan_id         BigInt?
+  org_id          BigInt    @default(0)
+  warehouse_id    BigInt    @default(0)
+  return_date     DateTime  @db.DateTime(0)
+  total_qty       Int       @default(0)
+  status          Int       @default(0) @db.TinyInt
+  posting_version Int       @default(0)
+  attachments     Json?
+  return_reason   String    @default("") @db.VarChar(255)
+  remark          String    @default("") @db.VarChar(255)
+  completed_by    BigInt    @default(0)
+  completed_at    DateTime? @db.DateTime(0)
+  voided_by       BigInt    @default(0)
+  voided_at       DateTime? @db.DateTime(0)
+  reversal_reason String    @default("") @db.VarChar(255)
+  reversed_by     BigInt    @default(0)
+  reversed_at     DateTime? @db.DateTime(0)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime  @default(now()) @db.DateTime(0)
+  updated_at      DateTime  @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@index([org_id, warehouse_id, return_date], map: "idx_production_material_return_scope")
+  @@index([source_out_id, status], map: "idx_production_material_return_source")
+}
+
+model hspsi_production_material_return_detail {
+  detail_id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  return_id            BigInt   @db.UnsignedBigInt
+  source_out_detail_id Int
+  goods_id             BigInt   @default(0)
+  sku_id               BigInt   @default(0)
+  batch_no             String   @default("") @db.VarChar(100)
+  unit_type            Int      @default(0)
+  source_output_qty    Int      @default(0)
+  return_qty           Int      @default(0)
+  storage_location     String   @default("") @db.VarChar(255)
+  remark               String   @default("") @db.VarChar(255)
+  created_at           DateTime @default(now()) @db.DateTime(0)
+  updated_at           DateTime @default(now()) @db.DateTime(0)
+
+  @@unique([return_id, source_out_detail_id], map: "uk_production_material_return_line")
+  @@index([goods_id, sku_id, batch_no], map: "idx_production_material_return_detail_goods")
+  @@index([source_out_detail_id], map: "idx_production_material_return_detail_source")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -987,17 +1062,17 @@ model hspsi_production_plan {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_production_plan_detail {
-  id           BigInt  @id @default(autoincrement())
-  plan_id      BigInt  @default(0)
-  bom_id       BigInt  @default(0)
-  goods_id     BigInt  @default(0)
-  sku_id       BigInt  @default(0)
-  bom_unit_qty Int     @default(0)
-  standard_qty Int     @default(0)
-  require_qty  Int     @default(0)
-  plan_out_qty Int     @default(0)
-  unit_type    Int     @default(0)
-  remark       String  @default("") @db.VarChar(255)
+  id           BigInt @id @default(autoincrement())
+  plan_id      BigInt @default(0)
+  bom_id       BigInt @default(0)
+  goods_id     BigInt @default(0)
+  sku_id       BigInt @default(0)
+  bom_unit_qty Int    @default(0)
+  standard_qty Int    @default(0)
+  require_qty  Int    @default(0)
+  plan_out_qty Int    @default(0)
+  unit_type    Int    @default(0)
+  remark       String @default("") @db.VarChar(255)
 
   @@index([plan_id], map: "idx_plan_id")
 }
@@ -1124,22 +1199,26 @@ model hspsi_purchase_order {
   created_at        DateTime? @db.DateTime(0)
   updated_at        DateTime? @db.DateTime(0)
   deleted_at        DateTime? @db.DateTime(0)
+
+  @@index([pur_id], map: "idx_purchase_order_pur_id")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_purchase_order_detail {
-  id          BigInt  @id @default(autoincrement())
-  po_id       BigInt  @default(0)
-  goods_id    BigInt  @default(0)
-  sku_id      BigInt  @default(0)
-  qty         Int     @default(0)
-  actual_qty  Int     @default(0)
-  cancel_qty  Int     @default(0)
-  unit_type   Int     @default(0)
-  unit_price  Decimal @default(0.00) @db.Decimal(10, 2)
-  total_amout Decimal @default(0.00) @db.Decimal(10, 2)
-  remark      String  @db.VarChar(255)
+  id                           BigInt  @id @default(autoincrement())
+  po_id                        BigInt  @default(0)
+  source_application_detail_id BigInt?
+  goods_id                     BigInt  @default(0)
+  sku_id                       BigInt  @default(0)
+  qty                          Int     @default(0)
+  actual_qty                   Int     @default(0)
+  cancel_qty                   Int     @default(0)
+  unit_type                    Int     @default(0)
+  unit_price                   Decimal @default(0.00) @db.Decimal(10, 2)
+  total_amout                  Decimal @default(0.00) @db.Decimal(10, 2)
+  remark                       String  @db.VarChar(255)
 
+  @@unique([source_application_detail_id], map: "uk_purchase_order_source_application_detail")
   @@index([po_id], map: "idx_po_id")
 }
 
@@ -1192,26 +1271,32 @@ model hspsi_purchase_order_input_detail {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_purchase_order_input_exit {
-  po_exit_id      BigInt    @id @default(autoincrement())
-  po_exit_no      String    @unique(map: "uk_purchase_exit_no") @db.VarChar(30)
-  po_input_id     BigInt    @default(0)
-  po_id           BigInt    @default(0)
-  exit_reson      String    @default("") @db.VarChar(255)
-  exit_date       DateTime? @db.Date
-  exit_type       Int       @default(0) @db.TinyInt
-  status          Boolean   @default(false)
-  approve_by      BigInt    @default(0)
-  approve_status  Int       @default(0) @db.TinyInt
-  approve_comment String    @default("") @db.VarChar(255)
-  approve_date    DateTime? @db.DateTime(0)
-  remark          String    @default("") @db.VarChar(255)
-  created_by      BigInt    @default(0)
-  updated_by      BigInt    @default(0)
-  created_at      DateTime? @default(now()) @db.DateTime(0)
-  updated_at      DateTime? @default(now()) @db.DateTime(0)
-  deleted_at      DateTime? @db.DateTime(0)
+  po_exit_id           BigInt    @id @default(autoincrement())
+  po_exit_no           String    @unique(map: "uk_purchase_exit_no") @db.VarChar(30)
+  po_input_id          BigInt    @default(0)
+  po_id                BigInt    @default(0)
+  generation_key       String?   @unique(map: "uk_purchase_exit_generation_key") @db.VarChar(100)
+  auto_created         Int       @default(0) @db.TinyInt
+  source_document_type String?   @db.VarChar(32)
+  source_document_id   BigInt?
+  exit_reson           String    @default("") @db.VarChar(255)
+  exit_date            DateTime? @db.Date
+  exit_type            Int       @default(0) @db.TinyInt
+  status               Boolean   @default(false)
+  approve_by           BigInt    @default(0)
+  approve_status       Int       @default(0) @db.TinyInt
+  approve_comment      String    @default("") @db.VarChar(255)
+  approve_date         DateTime? @db.DateTime(0)
+  remark               String    @default("") @db.VarChar(255)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  created_at           DateTime? @default(now()) @db.DateTime(0)
+  updated_at           DateTime? @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+  attachments          Json?
 
   @@index([po_input_id], map: "idx_po_input_id")
+  @@index([source_document_type, source_document_id], map: "idx_purchase_exit_source_document")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1308,7 +1393,7 @@ model hspsi_sale_order {
   warehouse_id         BigInt    @default(0)
   so_no                String    @unique(map: "uk_so_no") @default("") @db.VarChar(20)
   so_type              Int       @db.TinyInt
-  so_source            Int       @db.TinyInt
+  so_source            BigInt
   so_source_id         BigInt
   business_source_type String    @default("") @db.VarChar(30)
   business_source_id   BigInt    @default(0)
@@ -1341,6 +1426,8 @@ model hspsi_sale_order {
   created_at           DateTime? @default(now()) @db.DateTime(0)
   updated_at           DateTime? @default(now()) @db.DateTime(0)
   deleted_at           DateTime? @db.DateTime(0)
+
+  @@index([business_source_no], map: "idx_business_source_no")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1397,16 +1484,16 @@ model hspsi_sale_order_exit {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sale_order_exit_detail {
-  id         BigInt  @id @default(autoincrement())
-  so_exit_id BigInt  @default(0)
-  so_id      BigInt  @default(0)
-  goods_id   BigInt  @default(0)
-  sku_id     BigInt  @default(0)
-  batch_no   String  @default("") @db.VarChar(50)
-  unit_type  Int     @default(0)
-  so_qty     Int     @default(0)
-  exit_qty   Int     @default(0)
-  remark     String  @default("") @db.VarChar(255)
+  id         BigInt @id @default(autoincrement())
+  so_exit_id BigInt @default(0)
+  so_id      BigInt @default(0)
+  goods_id   BigInt @default(0)
+  sku_id     BigInt @default(0)
+  batch_no   String @default("") @db.VarChar(50)
+  unit_type  Int    @default(0)
+  so_qty     Int    @default(0)
+  exit_qty   Int    @default(0)
+  remark     String @default("") @db.VarChar(255)
 
   @@index([so_exit_id], map: "idx_so_exit_id")
 }
@@ -1441,55 +1528,82 @@ model hspsi_sale_order_output {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sale_order_output_detail {
-  id           BigInt  @id @default(autoincrement())
-  so_output_id BigInt  @default(0)
-  so_id        BigInt  @default(0)
-  goods_id     BigInt  @default(0)
-  sku_id       BigInt  @default(0)
-  batch_no     String  @default("") @db.VarChar(50)
-  unit_type    Int     @default(0)
-  sale_qty     Int     @default(0)
-  output_qty   Int     @default(0)
+  id           BigInt @id @default(autoincrement())
+  so_output_id BigInt @default(0)
+  so_id        BigInt @default(0)
+  goods_id     BigInt @default(0)
+  sku_id       BigInt @default(0)
+  batch_no     String @default("") @db.VarChar(50)
+  unit_type    Int    @default(0)
+  sale_qty     Int    @default(0)
+  output_qty   Int    @default(0)
 
   @@index([so_output_id], map: "idx_so_output_id")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sale_order_service {
-  service_id         BigInt    @id @default(autoincrement())
-  service_no         String    @unique(map: "uk_sale_service_no") @default("") @db.VarChar(30)
-  so_id              BigInt    @default(0)
-  customer_id        Int       @default(0)
-  goods_id           Int       @default(0)
-  sku_id             Int       @default(0)
-  event_type         Int       @default(0) @db.TinyInt
-  event_content      String    @default("") @db.VarChar(255)
-  event_status       Int       @default(0) @db.TinyInt
-  handler_id         BigInt    @default(0)
-  event_date         DateTime? @db.DateTime(0)
-  remark             String    @default("") @db.VarChar(255)
-  next_document_type String    @default("") @db.VarChar(30)
-  next_document_id   BigInt    @default(0)
-  next_document_no   String    @default("") @db.VarChar(30)
-  created_by         BigInt    @default(0)
-  updated_by         BigInt    @default(0)
-  created_at         DateTime? @default(now()) @db.DateTime(0)
-  updated_at         DateTime? @default(now()) @db.DateTime(0)
-  deleted_at         DateTime? @db.DateTime(0)
+  service_id          BigInt    @id @default(autoincrement())
+  service_no          String    @unique(map: "uk_sale_service_no") @default("") @db.VarChar(30)
+  so_id               BigInt    @default(0)
+  customer_id         Int       @default(0)
+  goods_id            Int       @default(0)
+  sku_id              Int       @default(0)
+  event_type          Int       @default(0) @db.TinyInt
+  event_content       String    @default("") @db.VarChar(255)
+  event_status        Int       @default(0) @db.TinyInt
+  handler_id          BigInt    @default(0)
+  event_date          DateTime? @db.DateTime(0)
+  remark              String    @default("") @db.VarChar(255)
+  next_document_type  String    @default("") @db.VarChar(30)
+  next_document_id    BigInt    @default(0)
+  next_document_no    String    @default("") @db.VarChar(30)
+  created_by          BigInt    @default(0)
+  updated_by          BigInt    @default(0)
+  created_at          DateTime? @default(now()) @db.DateTime(0)
+  updated_at          DateTime? @default(now()) @db.DateTime(0)
+  deleted_at          DateTime? @db.DateTime(0)
+  source_system       String?   @db.VarChar(32)
+  external_request_id String?   @db.VarChar(100)
+  external_request_no String?   @db.VarChar(100)
+  external_payload    Json?
+  received_at         DateTime? @db.DateTime(0)
+  attachments         Json?
 
+  @@unique([source_system, external_request_id], map: "uk_sale_service_external_request")
   @@index([so_id], map: "idx_so_id")
 }
 
+model hspsi_sale_order_service_progress {
+  progress_id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  service_id           BigInt
+  progress_content     String    @db.Text
+  progress_status      Int       @default(0) @db.TinyInt
+  source_type          Int       @default(1) @db.TinyInt
+  source_system        String?   @db.VarChar(32)
+  external_progress_id String?   @db.VarChar(100)
+  handler_id           BigInt    @default(0)
+  occurred_at          DateTime  @db.DateTime(0)
+  created_by           BigInt    @default(0)
+  updated_by           BigInt    @default(0)
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+  updated_at           DateTime  @default(now()) @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+
+  @@unique([source_system, external_progress_id], map: "uk_service_external_progress")
+  @@index([service_id, occurred_at], map: "idx_service_progress_time")
+}
+
 model hspsi_sale_order_service_detail {
-  id               BigInt  @id @default(autoincrement())
-  service_id       BigInt  @default(0)
-  source_output_id BigInt  @default(0)
-  goods_id         BigInt  @default(0)
-  sku_id           BigInt  @default(0)
-  batch_no         String  @default("") @db.VarChar(50)
-  unit_type        Int     @default(0)
-  service_qty      Int     @default(0)
-  remark           String  @default("") @db.VarChar(255)
+  id               BigInt @id @default(autoincrement())
+  service_id       BigInt @default(0)
+  source_output_id BigInt @default(0)
+  goods_id         BigInt @default(0)
+  sku_id           BigInt @default(0)
+  batch_no         String @default("") @db.VarChar(50)
+  unit_type        Int    @default(0)
+  service_qty      Int    @default(0)
+  remark           String @default("") @db.VarChar(255)
 
   @@unique([service_id, source_output_id, goods_id, sku_id, batch_no], map: "uk_sale_service_detail_batch")
   @@index([service_id], map: "idx_sale_service_detail_service")
@@ -1575,7 +1689,7 @@ model hspsi_sys_menu {
   route      String?   @db.VarChar(200)
   component  String?   @db.VarChar(255)
   redirect   String?   @db.VarChar(255)
-  type       Int?      @default(1) @db.TinyInt
+  type       Int       @default(1) @db.TinyInt
   status     Int?      @default(1) @db.SmallInt
   sort       Int?      @default(0) @db.UnsignedInt
   remark     String?   @db.VarChar(255)
@@ -1654,16 +1768,15 @@ model hspsi_sys_oper_log {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sys_role {
-  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  name            String    @db.VarChar(50)
-  code            String    @unique(map: "uk_code") @db.VarChar(50)
-  status          Int?      @default(1) @db.TinyInt
-  data_scope_type Int       @default(1) @db.TinyInt
-  created_by      BigInt?   @default(0)
-  updated_by      BigInt?   @default(0)
-  created_at      DateTime? @default(now()) @db.DateTime(0)
-  updated_at      DateTime? @default(now()) @db.DateTime(0)
-  deleted_at      DateTime? @db.DateTime(0)
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @db.VarChar(50)
+  code       String    @unique(map: "uk_code") @db.VarChar(50)
+  status     Int?      @default(1) @db.TinyInt
+  created_by BigInt?   @default(0)
+  updated_by BigInt?   @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1682,9 +1795,9 @@ model hspsi_sys_todo {
   title           String    @default("") @db.VarChar(100)
   content         String    @default("") @db.VarChar(500)
   source_type     String?   @default("") @db.VarChar(32)
-  source_id       Int?      @default(0) @db.UnsignedInt
+  source_id       BigInt?   @default(0) @db.UnsignedBigInt
   business_type   String?   @default("") @db.VarChar(50)
-  business_id     Int?      @default(0) @db.UnsignedInt
+  business_id     BigInt?   @default(0) @db.UnsignedBigInt
   status          Int?      @default(0) @db.TinyInt
   completed_time  DateTime? @db.DateTime(0)
   created_by      Int?      @default(0) @db.UnsignedInt
@@ -1694,6 +1807,7 @@ model hspsi_sys_todo {
   deleted_at      DateTime? @db.DateTime(0)
 
   @@index([user_id, status], map: "idx_user_status")
+  @@index([source_type, business_id, status], map: "idx_todo_business_status")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1701,6 +1815,7 @@ model hspsi_sys_user {
   id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
   org_id     BigInt?   @db.UnsignedBigInt
   dept_id    BigInt?   @db.UnsignedBigInt
+  staff_id   BigInt?   @unique(map: "uk_user_staff_id")
   username   String    @unique(map: "uk_username") @db.VarChar(50)
   password   String    @db.VarChar(64)
   nickname   String?   @db.VarChar(50)
@@ -1716,12 +1831,58 @@ model hspsi_sys_user {
   @@index([org_id], map: "idx_org_id")
 }
 
+/// OA 同步后的用户授权组织结果；会话只能在此范围内切换当前组织。
+model hspsi_sys_user_authorized_org {
+  user_id    BigInt   @db.UnsignedBigInt
+  org_id     BigInt   @db.UnsignedBigInt
+  created_by BigInt   @default(0)
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  @@id([user_id, org_id])
+  @@index([org_id], map: "idx_user_authorized_org_org")
+}
+
+/// 一个进销存登录账号在不同OA账套中的员工身份；提交OA时按单据账套选择身份。
+model hspsi_sys_user_oa_staff {
+  user_id        BigInt   @db.UnsignedBigInt
+  staff_id       BigInt   @unique(map: "uk_user_oa_staff_staff")
+  account_set_id BigInt   @db.UnsignedBigInt
+  created_by     BigInt   @default(0)
+  created_at     DateTime @default(now()) @db.DateTime(0)
+
+  @@id([user_id, staff_id])
+  @@index([user_id, account_set_id], map: "idx_user_oa_staff_account")
+}
+
+/// 本地系统用户金额白名单；无记录即无权限，不参与 OA 同步。
+model hspsi_sys_user_amount_access {
+  user_id         BigInt   @id @db.UnsignedBigInt
+  can_view_amount Int      @default(0) @db.TinyInt
+  can_edit_amount Int      @default(0) @db.TinyInt
+  grant_reason    String   @default("") @db.VarChar(255)
+  created_by      BigInt   @default(0)
+  updated_by      BigInt   @default(0)
+  created_at      DateTime @default(now()) @db.DateTime(0)
+  updated_at      DateTime @default(now()) @db.DateTime(0)
+}
+
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model hspsi_sys_user_role {
   user_id Int @db.UnsignedInt
   role_id Int @db.UnsignedInt
 
   @@id([user_id, role_id])
+  @@unique([user_id], map: "uk_user_role_user_id")
+}
+
+/// OA 用户的本地角色人工覆盖标记；存在记录时，OA 同步不再覆盖该用户的角色集合。
+model hspsi_sys_user_role_override {
+  user_id    BigInt   @id @db.UnsignedBigInt
+  updated_by BigInt   @default(0)
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @db.DateTime(0)
+
+  @@index([updated_by], map: "idx_user_role_override_updated_by")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -1762,4 +1923,246 @@ model hspsi_business_document_relation {
   @@unique([upstream_type, upstream_id, downstream_type, downstream_id], name: "document_relation_key", map: "uk_business_document_relation")
   @@index([upstream_type, upstream_id, deleted_at], map: "idx_business_document_upstream")
   @@index([downstream_type, downstream_id, deleted_at], map: "idx_business_document_downstream")
+}
+
+/// 账套信息表，保存外部系统（如薪福通）调用的 app_id / app_secret 等凭证
+model hspsi_sys_account_set {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name             String    @default("") @db.VarChar(100)
+  app_id           String    @unique(map: "uk_app_id") @default("") @db.VarChar(100)
+  app_secret       String    @default("") @db.VarChar(255)
+  event_public_key String    @default("") @db.VarChar(255)
+  status           Int       @default(1) @db.TinyInt
+  remark           String    @default("") @db.VarChar(255)
+  created_by       BigInt    @default(0) @db.UnsignedBigInt
+  updated_by       BigInt    @default(0) @db.UnsignedBigInt
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+  updated_at       DateTime  @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_sku_conversion_rule {
+  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  source_goods_id BigInt    @db.UnsignedBigInt
+  source_sku_id   BigInt    @default(0) @db.UnsignedBigInt
+  target_goods_id BigInt    @db.UnsignedBigInt
+  target_sku_id   BigInt    @default(0) @db.UnsignedBigInt
+  quantity_ratio  Int       @default(1) @db.UnsignedInt
+  rule_type       Int       @default(1) @db.TinyInt
+  status          Int       @default(1) @db.TinyInt
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@unique([source_goods_id, source_sku_id, target_goods_id, target_sku_id], map: "uk_source_target")
+  @@index([target_goods_id, target_sku_id], map: "idx_target_goods_sku")
+}
+
+/// 外部平台销售订单映射（华溯之家等）
+model hspsi_sale_order_source_mapping {
+  id                 BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  source_id          BigInt    @default(0) @db.UnsignedBigInt
+  source_order_type  String    @default("") @db.VarChar(30)
+  source_order_id    String    @default("") @db.VarChar(32)
+  source_order_no    String    @default("") @db.VarChar(64)
+  so_id              BigInt    @default(0) @db.UnsignedBigInt
+  source_status      Int       @default(0)
+  source_updated_at  DateTime? @db.DateTime(0)
+  last_payload       String?   @db.MediumText
+  last_error_payload String?   @db.MediumText
+  sync_status        Int       @default(2) @db.TinyInt
+  last_sync_at       DateTime? @db.DateTime(0)
+  remark             String    @default("") @db.VarChar(255)
+  created_by         BigInt    @default(0)
+  updated_by         BigInt    @default(0)
+  created_at         DateTime? @default(now()) @db.DateTime(0)
+  updated_at         DateTime? @default(now()) @db.DateTime(0)
+  deleted_at         DateTime? @db.DateTime(0)
+
+  @@unique([source_id, source_order_type, source_order_id], map: "uk_sale_order_source")
+  @@index([so_id], map: "idx_sale_order_source_so")
+  @@index([source_id, source_order_type, source_order_no], map: "idx_sale_order_source_no")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_goods_source_mapping {
+  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  source_id       BigInt    @default(0) @db.UnsignedBigInt
+  source_type     String    @default("STANDARD") @db.VarChar(20)
+  source_goods_id String    @default("") @db.VarChar(32)
+  source_sku_id   String    @default("") @db.VarChar(32)
+  goods_id        BigInt    @default(0) @db.UnsignedBigInt
+  sku_id          BigInt    @default(0) @db.UnsignedBigInt
+  mapping_status  Int       @default(2) @db.TinyInt
+  last_sync_at    DateTime? @db.DateTime(0)
+  remark          String    @default("") @db.VarChar(255)
+  created_by      BigInt    @default(0)
+  updated_by      BigInt    @default(0)
+  created_at      DateTime? @default(now()) @db.DateTime(0)
+  updated_at      DateTime? @default(now()) @db.DateTime(0)
+  deleted_at      DateTime? @db.DateTime(0)
+
+  @@unique([source_id, source_type, source_goods_id, source_sku_id], map: "uk_source_goods_sku")
+  @@index([goods_id, sku_id], map: "idx_internal_goods_sku")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_data_source {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  code       String    @unique(map: "uk_code") @default("") @db.VarChar(50)
+  name       String    @default("") @db.VarChar(100)
+  status     Int       @default(1) @db.TinyInt
+  remark     String    @default("") @db.VarChar(255)
+  created_by BigInt    @default(0)
+  updated_by BigInt    @default(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  updated_at DateTime? @default(now()) @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_sys_organization_mapping {
+  id                 BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  source_id          BigInt    @default(0) @db.UnsignedBigInt
+  source_object_id   String    @default("") @db.VarChar(50)
+  source_object_name String    @default("") @db.VarChar(100)
+  org_id             BigInt    @default(0) @db.UnsignedBigInt
+  remark             String    @default("") @db.VarChar(255)
+  created_by         BigInt    @default(0)
+  updated_by         BigInt    @default(0)
+  created_at         DateTime? @default(now()) @db.DateTime(0)
+  updated_at         DateTime? @default(now()) @db.DateTime(0)
+  deleted_at         DateTime? @db.DateTime(0)
+
+  @@unique([source_id, source_object_id], map: "uk_source_object")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_oa_approval_callback_log {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  instance_id    BigInt    @default(0)
+  event_code     String    @default("") @db.VarChar(30)
+  prj_cod        String    @default("") @db.VarChar(50)
+  proc_status    String    @default("") @db.VarChar(20)
+  bus_key        String    @default("") @db.VarChar(100)
+  proc_inst_id   String    @default("") @db.VarChar(50)
+  proc_key       String    @default("") @db.VarChar(100)
+  raw_payload    String    @db.MediumText
+  processed      Int       @default(0) @db.TinyInt
+  process_result String    @default("") @db.VarChar(500)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([account_set_id], map: "idx_oa_acl_account_set_id")
+  @@index([proc_inst_id, proc_status], map: "idx_oa_acl_dedup")
+  @@index([instance_id], map: "idx_oa_acl_instance_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_oa_approval_instance {
+  id               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  business_type    String    @default("") @db.VarChar(50)
+  business_id      BigInt    @default(0)
+  form_key         String    @default("") @db.VarChar(100)
+  bus_key          String    @default("") @db.VarChar(100)
+  proc_inst_id     String    @default("") @db.VarChar(50)
+  proc_key         String    @default("") @db.VarChar(100)
+  proc_status      String    @default("") @db.VarChar(20)
+  submitted_by     BigInt    @default(0)
+  submitted_at     DateTime? @db.DateTime(0)
+  callback_count   Int       @default(0)
+  last_callback_at DateTime? @db.DateTime(0)
+  account_set_id   BigInt    @default(0) @db.UnsignedBigInt
+  created_by       BigInt    @default(0)
+  updated_by       BigInt    @default(0)
+  created_at       DateTime? @default(now()) @db.DateTime(0)
+  updated_at       DateTime? @default(now()) @db.DateTime(0)
+  deleted_at       DateTime? @db.DateTime(0)
+
+  @@index([account_set_id], map: "idx_oa_ai_account_set_id")
+  @@index([business_type, business_id], map: "idx_oa_ai_business")
+  @@index([proc_inst_id], map: "idx_oa_ai_proc_inst_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_oa_form_field_mapping {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  template_id    BigInt    @default(0)
+  business_type  String    @default("") @db.VarChar(50)
+  unique_name    String    @default("") @db.VarChar(50)
+  field_label    String    @default("") @db.VarChar(100)
+  component_type String    @default("") @db.VarChar(50)
+  local_field    String    @default("") @db.VarChar(100)
+  required       Int       @default(0) @db.TinyInt
+  sort_order     Int       @default(0)
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+
+  @@index([account_set_id], map: "idx_oa_ffm_account_set_id")
+  @@index([business_type], map: "idx_oa_ffm_business_type")
+  @@index([template_id], map: "idx_oa_ffm_template_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model hspsi_oa_form_template {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  form_id        String    @default("") @db.VarChar(50)
+  form_key       String    @default("") @db.VarChar(100)
+  form_name      String    @default("") @db.VarChar(100)
+  form_config    String    @db.MediumText
+  account_set_id BigInt    @default(0) @db.UnsignedBigInt
+  synced_at      DateTime? @db.DateTime(0)
+  status         Int       @default(1) @db.TinyInt
+  created_by     BigInt    @default(0)
+  updated_by     BigInt    @default(0)
+  created_at     DateTime? @default(now()) @db.DateTime(0)
+  updated_at     DateTime? @default(now()) @db.DateTime(0)
+  deleted_at     DateTime? @db.DateTime(0)
+
+  @@index([account_set_id], map: "idx_oa_ft_account_set_id")
+  @@index([form_key], map: "idx_oa_ft_form_key")
+}
+
+/// 系统定时任务定义：开关、Cron 与最近执行结果
+model hspsi_sys_scheduled_task {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  task_code    String    @default("") @db.VarChar(64)
+  task_name    String    @default("") @db.VarChar(100)
+  cron_expr    String    @default("0 1 * * *") @db.VarChar(64)
+  status       Int       @default(0) @db.TinyInt
+  last_run_at  DateTime? @db.DateTime(0)
+  last_status  Int?      @db.TinyInt
+  last_message String    @default("") @db.VarChar(500)
+  remark       String    @default("") @db.VarChar(255)
+  created_by   BigInt    @default(0)
+  updated_by   BigInt    @default(0)
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  updated_at   DateTime? @default(now()) @db.DateTime(0)
+  deleted_at   DateTime? @db.DateTime(0)
+
+  @@index([task_code], map: "idx_scheduled_task_code")
+  @@index([status, deleted_at], map: "idx_scheduled_task_status")
+}
+
+/// 定时任务执行历史：每次触发一行；失败时 message 为原始错误（截断 500）
+model hspsi_sys_scheduled_task_run {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  task_id      BigInt    @db.UnsignedBigInt
+  started_at   DateTime  @db.DateTime(0)
+  finished_at  DateTime? @db.DateTime(0)
+  duration_ms  Int?      @db.UnsignedInt
+  status       Int       @default(3) @db.TinyInt
+  message      String    @default("") @db.VarChar(500)
+  trigger_type Int       @default(0) @db.TinyInt
+  triggered_by BigInt    @default(0)
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+
+  @@index([task_id, id], map: "idx_scheduled_task_run_task")
 }

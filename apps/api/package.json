@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "node --watch --import tsx src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,8 +14,16 @@
     "bootstrap:admin": "tsx src/scripts/bootstrap-admin.ts",
     "seed:menus": "tsx src/scripts/seed-current-menus.ts",
     "backfill:purchase-refunds": "tsx src/scripts/backfill-purchase-refunds.ts",
+    "backfill:purchase-order-lifecycles": "tsx src/scripts/backfill-purchase-order-lifecycles.ts",
+    "backfill:oa-staff-users": "tsx src/scripts/backfill-oa-staff-login-users.ts",
     "verify:document-chain": "tsx src/scripts/verify-document-chain.ts",
-    "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts"
+    "verify:quantity-guards": "tsx src/scripts/verify-quantity-guards.ts",
+    "verify:organization-permissions": "tsx src/scripts/verify-organization-permissions.ts",
+    "verify:data-scopes": "tsx src/scripts/verify-data-scopes.ts",
+    "audit:inventory-pieces": "tsx src/scripts/audit-inventory-pieces.ts",
+    "audit:organization-permissions": "tsx src/scripts/audit-organization-permissions.ts",
+    "attachments:orphans": "tsx src/scripts/cleanup-oss-orphans.ts",
+    "attachments:orphans:clean": "tsx src/scripts/cleanup-oss-orphans.ts --execute"
   },
   "dependencies": {
     "@nestjs/common": "11.1.28",
@@ -23,17 +31,25 @@
     "@nestjs/core": "11.1.28",
     "@nestjs/jwt": "11.0.2",
     "@nestjs/platform-express": "11.1.28",
+    "@nestjs/schedule": "^6.1.3",
     "@nestjs/swagger": "11.4.6",
     "@prisma/client": "^5.22.0",
+    "ali-oss": "^6.23.0",
     "bcryptjs": "^3.0.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.4",
+    "cron-parser": "^5.8.1",
     "express": "5.2.1",
     "ioredis": "^5.6.1",
+    "pinyin-pro": "^3.28.2",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "sm-crypto": "^0.5.4",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
+    "@types/ali-oss": "^6.23.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "5.0.6",
     "@types/node": "^22.15.0",

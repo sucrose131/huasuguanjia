@@ -1,6 +1,19 @@
 import { BadRequestException } from '@nestjs/common';
 
+export const SALES_ORDER_TYPE = {
+  PHYSICAL: 1,
+  VIRTUAL: 2,
+  MIXED: 3,
+  NO_OUTPUT: 4,
+} as const;
+
 type Body = Record<string, any>;
+
+export function salesOrderOutputBlockedMessage(soType: number): string | null {
+  if (soType === SALES_ORDER_TYPE.VIRTUAL) return '虚拟订单不能创建实物出库';
+  if (soType === SALES_ORDER_TYPE.NO_OUTPUT) return '无需出库订单不能创建销售出库';
+  return null;
+}
 
 export type DiscountSourceLine = {
   goodsId: bigint;

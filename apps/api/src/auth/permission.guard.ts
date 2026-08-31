@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuthRequest } from './auth.types';
 import { PERMISSIONS_KEY } from './permissions.decorator';
+import { inferRequestPermissions, PUBLIC_READ } from './request-permission';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -20,10 +21,24 @@ export class PermissionGuard implements CanActivate {
         context.getClass(),
       ]) ?? [];
     if (!required.length) return true;
-    const permissions = context.switchToHttp().getRequest<AuthRequest>().user?.permissions ?? [];
+    const request = context.switchToHttp().getRequest<AuthRequest>();
+    const permissions = request.user?.permissions ?? [];
+    if (permissions.includes('*')) return true;
+    const granular = inferRequestPermissions(request);
+    // 主数据（商品/基础资料）读取：任意登录用户可读，仅需登录、不做权限校验。
+    if (granular.includes(PUBLIC_READ)) return true;
+    if (granular.length && granular.every((permission) => permissions.includes(permission)))
+      return true;
+    // 选项/辅助接口（无法映射到具体页面）使用显式装饰器权限，通常为模块目录 code（如 sales）。
+    // 拥有该模块下任一页面/操作权限（sales:orders 等）即视为具备访问下拉选项的能力，
+    // 避免新角色只分配了页面权限却没有目录 code 时，列表能打开但 options 报 403。
     if (
-      permissions.includes('*') ||
-      required.some((permission) => permissions.includes(permission))
+      !granular.length &&
+      required.some(
+        (permission) =>
+          permissions.includes(permission) ||
+          permissions.some((item) => item.startsWith(`${permission}:`)),
+      )
     )
       return true;
     throw new ForbiddenException('当前账号没有执行该操作的权限');

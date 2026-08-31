@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { dateText, moneyText } from '@/utils/format';
 import BatchMaterialTable from './BatchMaterialTable.vue';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
 type B = Record<string, any>;
 
@@ -25,7 +26,14 @@ async function load() {
     const doc = props.outDoc;
     const [plan, stockData] = (await Promise.all([
       api.get(`/production/plans/${doc.planId}`),
-      api.get('/inventory/stocks', { params: { warehouseId: doc.warehouseId, pageSize: 200 } }),
+      api.get('/inventory/stocks', {
+        params: {
+          orgId: doc.orgId,
+          warehouseId: doc.warehouseId,
+          inStockOnly: true,
+          pageSize: 200,
+        },
+      }),
     ])) as any[];
     allStocks.value = stockData.items ?? [];
     rows.value = (plan.details ?? []).map((item: B) => {
@@ -178,6 +186,11 @@ watch(visible, (v) => {
       </div>
       <div v-if="displayedError" class="eo-error">{{ displayedError }}</div>
       <BatchMaterialTable :rows="rows" :stocks="allStocks" :editable="true" mode="execute" />
+      <DocumentAttachments
+        v-if="outDoc.id"
+        document-type="production_material_output"
+        :document-id="outDoc.id"
+      />
     </template>
     <template #footer>
       <el-button @click="visible = false" :disabled="saving">关闭</el-button>

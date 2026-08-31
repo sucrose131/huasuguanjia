@@ -2,71 +2,29 @@ import { PrismaClient } from '@prisma/client';
 process.loadEnvFile?.('.env');
 const prisma = new PrismaClient();
 type MenuDefinition = readonly [name: string, code: string, route: string];
-type ReportSection = { name: string; code: string; children: readonly MenuDefinition[] };
-const reportSections: readonly ReportSection[] = [
-  {
-    name: '基础查询',
-    code: 'reports:directory:base',
-    children: [
-      ['商品资料查询表', 'reports:1:view', '/reports/products'],
-      ['供应商资料查询表', 'reports:2:view', '/reports/vendors'],
-      ['客户资料查询表', 'reports:3:view', '/reports/customers'],
-    ],
-  },
-  {
-    name: '采购报表',
-    code: 'reports:directory:purchase',
-    children: [
-      ['采购明细查询表', 'reports:4:view', '/reports/purchase-detail'],
-      ['采购统计分析表', 'reports:5:view', '/reports/purchase-summary'],
-    ],
-  },
-  {
-    name: '生产报表',
-    code: 'reports:directory:production',
-    children: [
-      ['生产明细查询表', 'reports:6:view', '/reports/production-detail'],
-      ['生产统计分析表', 'reports:7:view', '/reports/production-summary'],
-    ],
-  },
-  {
-    name: '销售报表',
-    code: 'reports:directory:sales',
-    children: [
-      ['销售明细查询表', 'reports:8:view', '/reports/sales-detail'],
-      ['折价处理明细表', 'reports:9:view', '/reports/discount-detail'],
-      ['销售统计分析表', 'reports:10:view', '/reports/sales-summary'],
-    ],
-  },
-  {
-    name: '领用报表',
-    code: 'reports:directory:requisition',
-    children: [
-      ['领用明细查询表', 'reports:11:view', '/reports/requisition-detail'],
-      ['领用统计分析表', 'reports:12:view', '/reports/requisition-summary'],
-    ],
-  },
-  {
-    name: '库存报表',
-    code: 'reports:directory:inventory',
-    children: [
-      ['入库明细查询表', 'reports:13:view', '/reports/inbound-detail'],
-      ['出库明细查询表', 'reports:14:view', '/reports/outbound-detail'],
-      ['报损明细查询表', 'reports:15:view', '/reports/loss-detail'],
-      ['报溢明细查询表', 'reports:16:view', '/reports/overflow-detail'],
-      ['库存汇总统计分析表', 'reports:17:view', '/reports/inventory-summary'],
-      ['盘点汇总统计分析表', 'reports:18:view', '/reports/check-summary'],
-      ['分批入库查询表', 'reports:19:view', '/reports/batch-inbound'],
-    ],
-  },
-  {
-    name: '财务报表',
-    code: 'reports:directory:finance',
-    children: [
-      ['采购付款查询表', 'reports:20:view', '/reports/purchase-payment'],
-      ['应付账款统计表', 'reports:21:view', '/reports/purchase-payable'],
-    ],
-  },
+// 报表中心页面直接平铺在「报表中心」目录下（不再使用「目录套目录」结构）
+const reportSections: readonly MenuDefinition[] = [
+  ['商品资料查询表', 'reports:1:view', '/reports/products'],
+  ['供应商资料查询表', 'reports:2:view', '/reports/vendors'],
+  ['客户资料查询表', 'reports:3:view', '/reports/customers'],
+  ['采购明细查询表', 'reports:4:view', '/reports/purchase-detail'],
+  ['采购统计分析表', 'reports:5:view', '/reports/purchase-summary'],
+  ['生产明细查询表', 'reports:6:view', '/reports/production-detail'],
+  ['生产统计分析表', 'reports:7:view', '/reports/production-summary'],
+  ['销售明细查询表', 'reports:8:view', '/reports/sales-detail'],
+  ['折价处理明细表', 'reports:9:view', '/reports/discount-detail'],
+  ['销售统计分析表', 'reports:10:view', '/reports/sales-summary'],
+  ['领用明细查询表', 'reports:11:view', '/reports/requisition-detail'],
+  ['领用统计分析表', 'reports:12:view', '/reports/requisition-summary'],
+  ['入库明细查询表', 'reports:13:view', '/reports/inbound-detail'],
+  ['出库明细查询表', 'reports:14:view', '/reports/outbound-detail'],
+  ['报损明细查询表', 'reports:15:view', '/reports/loss-detail'],
+  ['报溢明细查询表', 'reports:16:view', '/reports/overflow-detail'],
+  ['库存汇总统计分析表', 'reports:17:view', '/reports/inventory-summary'],
+  ['盘点汇总统计分析表', 'reports:18:view', '/reports/check-summary'],
+  ['分批入库查询表', 'reports:19:view', '/reports/batch-inbound'],
+  ['采购付款查询表', 'reports:20:view', '/reports/purchase-payment'],
+  ['应付账款统计表', 'reports:21:view', '/reports/purchase-payable'],
 ];
 const structure = [
   {
@@ -89,7 +47,10 @@ const structure = [
     children: [
       ['供应商', 'master-data:vendors', '/base/vendors'],
       ['客户', 'master-data:customers', '/base/customers'],
-      ['组织', 'master-data:organizations', '/base/organizations'],
+      ['公司', 'master-data:companies', '/base/organizations'],
+      ['部门', 'master-data:departments', '/base/departments'],
+      ['职位', 'master-data:positions', '/base/positions'],
+      ['员工', 'master-data:employees', '/base/employees'],
       ['仓库', 'master-data:warehouses', '/base/warehouses'],
       ['计量单位', 'master-data:units', '/base/units'],
     ],
@@ -126,6 +87,8 @@ const structure = [
     sort: 50,
     children: [
       ['库存查询', 'inventory:stocks', '/inventory/stocks'],
+      ['通用入库单', 'inventory:general-inputs', '/inventory/general-inputs'],
+      ['通用出库单', 'inventory:general-outputs', '/inventory/general-outputs'],
       ['库存调拨单', 'inventory:transfers', '/inventory/transfers'],
       ['库存调整记录', 'inventory:adjustments', '/inventory/adjustments'],
       ['报损出库单', 'inventory:losses', '/inventory/losses'],
@@ -179,7 +142,7 @@ const structure = [
     code: 'reports',
     icon: 'DataAnalysis',
     sort: 90,
-    children: reportSections.flatMap((section) => section.children),
+    children: reportSections,
   },
   {
     name: '系统管理',
@@ -190,6 +153,7 @@ const structure = [
       ['角色管理', 'system:1:view', '/system/roles'],
       ['用户管理', 'system:2:view', '/system/users'],
       ['系统配置', 'system:3:view', '/system/config'],
+      ['任务管理', 'system:4:view', '/system/tasks'],
     ],
   },
 ] as const;
@@ -198,12 +162,6 @@ const systemActions = [
   ['新增', 'system:create'],
   ['编辑', 'system:update'],
   ['删除', 'system:delete'],
-] as const;
-const organizationChildren = [
-  ['公司', 'master-data:companies', '/base/organizations'],
-  ['部门', 'master-data:departments', '/base/departments'],
-  ['职位', 'master-data:positions', '/base/positions'],
-  ['员工', 'master-data:employees', '/base/employees'],
 ] as const;
 async function upsertMenu(data: any) {
   const old = await prisma.hspsi_sys_menu.findFirst({
@@ -265,104 +223,6 @@ async function main() {
       await prisma.hspsi_sys_menu.deleteMany({
         where: { id: { in: staleMenus.map((menu) => menu.id) } },
       });
-    }
-    if (group.code === 'reports') {
-      const parentRoles = await prisma.hspsi_sys_role_menu.findMany({
-        where: { menu_id: BigInt(parent.id) },
-        select: { role_id: true },
-      });
-      for (const [sectionIndex, section] of reportSections.entries()) {
-        const directory = await upsertMenu({
-          parent_id: parent.id,
-          path: `0,${parent.id}`,
-          name: section.name,
-          code: section.code,
-          icon: null,
-          route: null,
-          component: null,
-          redirect: null,
-          type: 1,
-          status: 1,
-          sort: sectionIndex + 1,
-          remark: `报表中心-${section.name}`,
-        });
-        ids.push(directory.id);
-        const sectionRoleIds = new Set(parentRoles.map(({ role_id }) => role_id.toString()));
-        for (const [reportIndex, [name, code, route]] of section.children.entries()) {
-          const report = await upsertMenu({
-            parent_id: directory.id,
-            path: `0,${parent.id},${directory.id}`,
-            name,
-            code,
-            icon: null,
-            route,
-            component: null,
-            redirect: null,
-            type: 2,
-            status: 1,
-            sort: reportIndex + 1,
-            remark: `${section.name}-${name}`,
-          });
-          ids.push(report.id);
-          const reportRoles = await prisma.hspsi_sys_role_menu.findMany({
-            where: { menu_id: BigInt(report.id) },
-            select: { role_id: true },
-          });
-          reportRoles.forEach(({ role_id }) => sectionRoleIds.add(role_id.toString()));
-        }
-        if (sectionRoleIds.size) {
-          await prisma.hspsi_sys_role_menu.createMany({
-            data: [...sectionRoleIds].map((role_id) => ({
-              role_id: BigInt(role_id),
-              menu_id: BigInt(directory.id),
-            })),
-            skipDuplicates: true,
-          });
-        }
-      }
-    }
-    if (group.code === 'master-data') {
-      const organizationDirectory = await upsertMenu({
-        parent_id: parent.id,
-        path: `0,${parent.id}`,
-        name: '组织',
-        code: 'master-data:organizations',
-        icon: null,
-        route: null,
-        component: null,
-        redirect: '/base/organizations',
-        type: 1,
-        status: 1,
-        sort: 3,
-        remark: '公司、部门、职位和员工资料目录',
-      });
-      ids.push(organizationDirectory.id);
-      const inheritedRoles = await prisma.hspsi_sys_role_menu.findMany({
-        where: { menu_id: BigInt(organizationDirectory.id) },
-        select: { role_id: true },
-      });
-      for (const [index, [name, code, route]] of organizationChildren.entries()) {
-        const child = await upsertMenu({
-          parent_id: organizationDirectory.id,
-          path: `0,${parent.id},${organizationDirectory.id}`,
-          name,
-          code,
-          icon: null,
-          route,
-          component: null,
-          redirect: null,
-          type: 2,
-          status: 1,
-          sort: index + 1,
-          remark: `组织资料-${name}`,
-        });
-        ids.push(child.id);
-        if (inheritedRoles.length)
-          await prisma.hspsi_sys_role_menu.createMany({
-            data: inheritedRoles.map(({ role_id }) => ({ role_id, menu_id: BigInt(child.id) })),
-            skipDuplicates: true,
-          });
-      }
     }
   }
   const systemParent = await prisma.hspsi_sys_menu.findFirstOrThrow({

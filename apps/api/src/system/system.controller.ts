@@ -12,19 +12,19 @@ export class SystemController {
   constructor(@Inject(SystemService) private readonly service: SystemService) {}
 
   @Get('roles')
-  @RequirePermissions('system:view', 'system:1:view')
+  @RequirePermissions('system:roles')
   roles() {
     return this.service.roles();
   }
 
   @Post('roles')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:roles:create')
   createRole(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.createRole(body, user.id);
   }
 
   @Put('roles/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:roles:update')
   updateRole(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -34,53 +34,75 @@ export class SystemController {
   }
 
   @Get('users')
-  @RequirePermissions('system:view', 'system:2:view')
+  @RequirePermissions('system:users')
   users() {
     return this.service.users();
   }
 
   @Get('user-options')
-  @RequirePermissions('system:view', 'system:2:view')
-  userOptions() {
-    return this.service.userOptions();
+  @RequirePermissions('system:users')
+  userOptions(@CurrentUser() user: AuthUser) {
+    return this.service.userOptions(
+      user.isSuperAdmin === true ? undefined : user.authorizedOrganizations?.map((item) => item.id),
+    );
   }
 
   @Post('users')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:users:create')
   createUser(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
-    return this.service.createUser(body, user.id);
+    return this.service.createUser(body, user.id, user.isSuperAdmin === true);
   }
 
   @Put('users/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:users:update')
   updateUser(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.updateUser(id, body, user.id);
+    return this.service.updateUser(id, body, user.id, user.isSuperAdmin === true);
+  }
+
+  @Put('users/:id/roles')
+  @RequirePermissions('system:users:authorize-role')
+  updateUserRoles(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.updateUserRoles(id, body, user.id, user.isSuperAdmin === true);
+  }
+
+  @Put('users/:id/amount-access')
+  @RequirePermissions('system:users:configure-amount')
+  updateUserAmountAccess(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.updateUserAmountAccess(id, body, user.id);
   }
 
   @Get('menus')
-  @RequirePermissions('system:view', 'system:3:view')
+  @RequirePermissions('system:config')
   menus() {
     return this.service.menus();
   }
 
   @Get('menu-options')
-  @RequirePermissions('system:view', 'system:3:view')
+  @RequirePermissions('system:config')
   menuOptions() {
     return this.service.menuOptions();
   }
 
   @Post('menus')
-  @RequirePermissions('system:create')
+  @RequirePermissions('system:config:create')
   createMenu(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.service.createMenu(body, user.id);
   }
 
   @Put('menus/:id')
-  @RequirePermissions('system:update')
+  @RequirePermissions('system:config:update')
   updateMenu(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
@@ -90,7 +112,7 @@ export class SystemController {
   }
 
   @Delete('menus/:id')
-  @RequirePermissions('system:delete')
+  @RequirePermissions('system:config:delete')
   deleteMenu(@Param('id') id: string) {
     return this.service.deleteMenu(id);
   }

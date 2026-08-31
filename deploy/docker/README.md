@@ -2,124 +2,103 @@
 
 ## 1. 部署结构
 
-系统采用四个运行角色：
+系统采用两个容器角色，并依赖两个外部服务：
 
 - `web`：Nginx 承载 Vue 静态文件，并将同域 `/api` 请求反向代理到后端；
-- `api`：NestJS API，容器内监听 `8000`；
-- `redis`：Redis 7，启用 AOF 持久化；
-- `mysql`：默认不由本项目创建，直接连接指定数据库 `hspsi-dev-ai-02`。如需 MySQL 一并容器化，使用叠加编排文件。
+- `api`：NestJS API，容器内监听 `8000`，映射到宿主机 `8001`；
+- 外部 MySQL：由本编排之外的实例提供；
+- 外部 Redis：版本 8 及以上，由本编排之外的实例提供。
 
-所有业务数据库连接必须指向 `hspsi-dev-ai-02`，不得替换为历史数据库名称。
+MySQL 与 Redis 均不在本编排内创建容器，部署前请确认两者已就绪且对 Docker 网络可达。
 
 ## 2. 环境要求
 
 - Docker Engine 24+；
 - Docker Compose v2；
 - 至少 2 核 CPU、4 GB 内存；
-- 若连接宿主机 MySQL，必须允许 Docker 网络访问 MySQL 3306 端口；
-- 部署前备份 `hspsi-dev-ai-02`。
+- 外部 MySQL 8.x，允许 Docker 网络访问 3306 端口；
+- 外部 Redis 8+，允许 Docker 网络访问 6379 端口；
 
-生产环境建议在本编排外层配置 HTTPS 网关或负载均衡器，并仅对外开放 Web 端口。
+生产环境建议在本编排外层配置 HTTPS 网关或负载均衡器，仅对外开放 Web 端口（`8088`）；`api` 的 `8001` 端口已映射到宿主机，供调试与直连使用，生产环境建议通过防火墙限制外部访问。
 
-## 3. 推荐部署：复用现有 MySQL
+> 端口说明：宿主机 `8080`/`8000`/`80` 通常已被其他服务占用，本编排固定使用 `8088`（web）和 `8001`（api）。如需修改，编辑 [compose.yaml](../../compose.yaml) 的 `ports` 段，并同步更新 `.env` 中的 `WEB_ORIGIN`。
 
-该方式保留当前数据库中的真实业务数据，风险最低。
+## 3. 部署步骤
+
+复制环境变量模板：
 
 ```bash
-cp deploy/docker/.env.example .env.docker
+cp deploy/docker/.env.example .env
 ```
 
-编辑 `.env.docker`：
+编辑 `.env`：
 
-1. 将 `DATABASE_URL` 的密码替换为实际密码；
-2. 确认 URL 最后的数据库名为 `hspsi-dev-ai-02`；
+1. 将 `DATABASE_URL` 的密码替换为实际密码，确认 URL 最后的数据库名为 `hspsi-dev`；
+2. 配置 `REDIS_URL` 指向外部 Redis 8+ 实例；
 3. 生成并替换 `JWT_ACCESS_SECRET`；
 4. 若访问端口不是 `8080`，同步修改 `APP_PORT` 和 `WEB_ORIGIN`。
 
-当 MySQL 位于 Docker 宿主机时使用：
+当 MySQL 或 Redis 位于 Docker 宿主机时，主机名必须使用 `host.docker.internal`，不能使用 `127.0.0.1`：
 
 ```text
-mysql://用户名:URL编码后的密码@host.docker.internal:3306/hspsi-dev-ai-02
+mysql://用户名:URL编码后的密码@host.docker.internal:3306/hspsi-dev
+redis://host.docker.internal:6379/10
 ```
+
+如 Redis 需要密码或指定 db，使用 `redis://[:password@]host:port[/db]` 格式。
 
 启动：
 
 ```bash
-docker compose --env-file .env.docker up -d --build
+docker compose up -d --build
 ```
 
 访问：
 
-- 系统：`http://服务器IP:8080`
-- 健康检查：`http://服务器IP:8080/api/health`
+- 系统：`http://服务器IP:8088`
+- 健康检查：`http://服务器IP:8088/api/health`
+- API 直连：`http://服务器IP:8001/api/health`
 
-## 4. 可选部署：MySQL 也运行在 Docker
-
-先从当前指定数据库导出完整快照。不要使用旧库 SQL，也不要使用仓库中历史基线文件代替当前快照。
-
-```bash
-mysqldump \
-  -h 127.0.0.1 -P 3306 -u root -p \
-  --single-transaction --routines --triggers \
-  --default-character-set=utf8mb4 \
-  hspsi-dev-ai-02 \
-  > deploy/docker/initdb/01_hspsi-dev-ai-02.sql
-```
-
-确认 `.env.docker` 中已设置 `MYSQL_ROOT_PASSWORD`、`MYSQL_USER`、`MYSQL_PASSWORD`，然后启动：
-
-```bash
-docker compose \
-  -f compose.yaml \
-  -f compose.mysql.yaml \
-  --env-file .env.docker \
-  up -d --build
-```
-
-初始化 SQL 仅在 `mysql_data` 数据卷第一次创建时执行。已有数据卷不会重复导入，升级时也不要通过删除数据卷来更新数据库。
-
-## 5. 常用运维命令
+## 4. 常用运维命令
 
 查看服务：
 
 ```bash
-docker compose --env-file .env.docker ps
+docker compose ps
 ```
 
 查看日志：
 
 ```bash
-docker compose --env-file .env.docker logs -f --tail=200 web api redis
+docker compose logs -f --tail=200 web api
 ```
 
-停止服务但保留数据：
+停止服务：
 
 ```bash
-docker compose --env-file .env.docker down
+docker compose down
 ```
 
 更新代码后重新构建：
 
 ```bash
-docker compose --env-file .env.docker up -d --build
+docker compose up -d --build
 ```
 
 仅重启 API：
 
 ```bash
-docker compose --env-file .env.docker restart api
+docker compose restart api
 ```
 
-## 6. 数据备份与恢复原则
+## 5. 数据备份与恢复原则
 
-- 数据库备份对象只能是 `hspsi-dev-ai-02`；
-- Redis 数据位于 Docker 卷 `redis_data`，MySQL 容器方式的数据位于 `mysql_data`；
+- Redis 与 MySQL 的数据均由外部实例管理，备份与恢复在外部实例上进行；
 - 不要将真实数据库密码、JWT 密钥或数据库快照提交到 Git；
-- `deploy/docker/initdb/*.sql` 已被 Git 忽略；
 - 删除 Docker 数据卷会永久删除容器内数据，正常停止或升级禁止执行 `docker compose down -v`；
 - 当前项目没有可安全替代完整快照的 Prisma migration 历史，禁止在生产环境盲目执行 `prisma db push`。
 
-## 7. 启动验收
+## 6. 启动验收
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health
@@ -131,4 +110,4 @@ curl -fsS http://127.0.0.1:8080/api/health
 { "status": "up", "mysql": "up", "redis": "up" }
 ```
 
-随后使用浏览器登录并抽查：基础资料、采购管理、生产管理、库存管理、销售管理、领用管理。若健康检查失败，先查看 `api` 日志，重点核对 `DATABASE_URL`、MySQL 网络权限和 Redis 状态。
+随后使用浏览器登录并抽查：基础资料、采购管理、生产管理、库存管理、销售管理、领用管理。若健康检查失败，先查看 `api` 日志，重点核对 `DATABASE_URL`、`REDIS_URL`、MySQL/Redis 网络可达性。

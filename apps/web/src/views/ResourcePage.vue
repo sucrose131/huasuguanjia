@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { api } from '@/api';
@@ -7,7 +7,10 @@ import SummaryStrip from '@/components/SummaryStrip.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, display } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
+import { canPageAction } from '@/utils/permission';
 type InputType =
   | 'text'
   | 'textarea'
@@ -34,8 +37,23 @@ type Column = {
   width?: number;
   min?: number;
   kind?:
-    'date' | 'status' | 'org' | 'parent' | 'department' | 'position' | 'user' | 'customer' | 'dict';
+    | 'date'
+    | 'status'
+    | 'org'
+    | 'parent'
+    | 'department'
+    | 'position'
+    | 'user'
+    | 'customer'
+    | 'dict'
+    | 'levels';
 };
+type OrganizationOption = {
+  value: string | number;
+  label: string;
+  raw?: { parentId?: string | number; sort?: number };
+};
+type OrganizationTreeNode = OrganizationOption & { children?: OrganizationTreeNode[] };
 const configs: Record<
   string,
   {
@@ -79,7 +97,7 @@ const configs: Record<
   },
   customers: {
     title: '客户',
-    subtitle: '维护客户归属、来源及关联关系',
+    subtitle: '维护客户归属及来源',
     summary: ['客户总数', '启用客户', '停用客户'],
     keyword: '客户名称或手机号',
     dicts: ['gender', 'customer_source', 'enabled_status'],
@@ -88,7 +106,7 @@ const configs: Record<
       { key: 'mobile', label: '手机号', width: 130 },
       { key: 'organization', label: '所属组织', min: 170, kind: 'org' },
       { key: 'sourceType', label: '客户来源', width: 110, kind: 'dict' },
-      { key: 'relatedCustomer', label: '关联客户', min: 150, kind: 'customer' },
+      { key: 'levels', label: '身份', min: 180, kind: 'levels' },
       { key: 'status', label: '状态', width: 90, kind: 'status' },
       { key: 'operatorName', label: '操作人', width: 110 },
       { key: 'updatedAt', label: '操作时间', width: 168, kind: 'date' },
@@ -98,7 +116,6 @@ const configs: Record<
       { key: 'mobile', label: '手机号', required: true },
       { key: 'orgId', label: '所属组织', type: 'organization', required: true, immutable: true },
       { key: 'sourceType', label: '客户来源', type: 'dictionary', dict: 'customer_source' },
-      { key: 'relatedCustomerId', label: '关联客户', type: 'customer', immutable: true },
       { key: 'status', label: '状态', type: 'dictionary', dict: 'enabled_status' },
       { key: 'gender', label: '性别', type: 'dictionary', dict: 'gender' },
       { key: 'birthday', label: '生日', type: 'date' },
@@ -279,6 +296,8 @@ const configs: Record<
 const route = useRoute(),
   resource = computed(() => String(route.params.resource)),
   config = computed(() => configs[resource.value] ?? configs.vendors!);
+const auth = useAuthStore();
+const canAction = (action: string) => canPageAction(auth.user, route.path, action);
 const rows = ref<any[]>([]),
   total = ref(0),
   loading = ref(false),
@@ -303,12 +322,42 @@ const query = reactive<any>({
 const form = reactive<any>({}),
   dicts = reactive<Record<string, any[]>>({}),
   options = reactive({
-    organizations: [] as any[],
+    organizations: [] as OrganizationOption[],
     departments: [] as any[],
     positions: [] as any[],
     users: [] as any[],
     customers: [] as any[],
   });
+const organizationTree = computed<OrganizationTreeNode[]>(() => {
+  const nodes = new Map<string, OrganizationTreeNode>();
+  for (const option of options.organizations)
+    nodes.set(String(option.value), { ...option, children: [] });
+
+  const roots: OrganizationTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parentId = String(node.raw?.parentId ?? 0);
+    const parent = parentId !== '0' ? nodes.get(parentId) : undefined;
+    if (parent) parent.children!.push(node);
+    else roots.push(node);
+  }
+
+  const sortNodes = (items: OrganizationTreeNode[]) => {
+    items.sort(
+      (left, right) =>
+        Number(left.raw?.sort ?? 0) - Number(right.raw?.sort ?? 0) ||
+        left.label.localeCompare(right.label, 'zh-CN'),
+    );
+    for (const item of items) {
+      if (item.children?.length) sortNodes(item.children);
+      else delete item.children;
+    }
+  };
+  sortNodes(roots);
+  return roots;
+});
+const organizationParentTree = computed<OrganizationTreeNode[]>(() => [
+  { value: 0, label: '顶级公司', children: organizationTree.value },
+]);
 const rules = computed<FormRules>(() =>
   Object.fromEntries(
     config.value.fields
@@ -465,12 +514,13 @@ function cell(row: any, col: Column) {
       ? `${row.relatedCustomer.name}（${row.relatedCustomer.mobile || '无手机号'}）`
       : '—';
   if (col.kind === 'dict') return dictLabel(col.key, row[col.key]);
+  if (col.kind === 'levels') {
+    const levels = row.levels;
+    if (!Array.isArray(levels) || levels.length === 0) return '—';
+    return levels.map((item: unknown) => String(item)).filter(Boolean).join(' / ');
+  }
   return display(row[col.key]);
 }
-watch(resource, async () => {
-  reset();
-  await loadOptions();
-});
 onMounted(async () => {
   await loadOptions();
   await load();
@@ -484,7 +534,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle }}</p>
       </div>
       <div class="page-actions">
-        <el-button type="primary" @click="open('create')">新增{{ config.title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="open('create')">新增{{ config.title }}</el-button>
       </div>
     </header>
     <div class="panel">
@@ -496,21 +546,20 @@ onMounted(async () => {
           clearable
           :placeholder="config.keyword"
           @keyup.enter="search"
-        /><el-select
+        /><el-tree-select
           v-if="
             ['customers', 'warehouses', 'departments', 'positions', 'employees'].includes(resource)
           "
           v-model="query.orgId"
+          :data="organizationTree"
           class="query-field"
           clearable
           filterable
+          check-strictly
+          node-key="value"
+          :props="{ label: 'label', children: 'children' }"
           placeholder="所属公司"
-          ><el-option
-            v-for="item in options.organizations"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value" /></el-select
-        ><el-select
+        /><el-select
           v-if="resource === 'customers'"
           v-model="query.sourceType"
           class="query-field"
@@ -566,44 +615,50 @@ onMounted(async () => {
         :empty="!rows.length"
         :loading="loading"
         :title="config.title"
-        can-create
+          :can-create="canAction('create')"
         @retry="load"
         @create="open('create')"
       />
       <div v-else class="table-wrap">
         <el-table :data="rows" v-loading="loading"
           ><el-table-column type="index" label="序号" width="65" fixed="left" /><el-table-column
+            prop="id"
+            label="ID"
+            width="100"
+            fixed="left"
+          /><el-table-column
             v-for="column in config.columns"
             :key="column.key"
             :label="column.label"
             :width="column.width"
             :min-width="column.min"
-            show-overflow-tooltip
             ><template #default="scope"
-              ><StatusTag
-                v-if="column.kind === 'status'"
-                :value="scope.row[column.key]"
-                kind="enabled"
-                :label="
-                  resource === 'organizations'
-                    ? dictLabel(column.key, scope.row[column.key])
-                    : undefined
-                "
-              /><span v-else>{{ cell(scope.row, column) }}</span></template
+              ><OverflowTooltipCell :content="cell(scope.row, column)"
+                ><StatusTag
+                  v-if="column.kind === 'status'"
+                  :value="scope.row[column.key]"
+                  kind="enabled"
+                  :label="
+                    resource === 'organizations'
+                      ? dictLabel(column.key, scope.row[column.key])
+                      : undefined
+                  "
+                /><span v-else>{{ cell(scope.row, column) }}</span></OverflowTooltipCell
+              ></template
             ></el-table-column
           ><el-table-column label="操作" width="176" fixed="right" align="center"
             ><template #default="scope"
               ><TableRowActions
                 ><el-button link type="primary" @click="open('view', scope.row)">查看</el-button
                 ><el-button
-                  v-if="!scope.row.derived"
+                  v-if="!scope.row.derived && canAction('update')"
                   link
                   type="primary"
                   @click="open('edit', scope.row)"
                   >编辑</el-button
                 ><template #more
                   ><el-dropdown-item
-                    v-if="resource !== 'vendors' && !scope.row.derived"
+                    v-if="resource !== 'vendors' && !scope.row.derived && canAction('status')"
                     :class="
                       (resource === 'organizations'
                         ? scope.row.operationStatus
@@ -622,7 +677,7 @@ onMounted(async () => {
                           : '启用'
                     }}</el-dropdown-item
                   ><el-dropdown-item
-                    v-if="resource === 'vendors'"
+                    v-if="resource === 'vendors' && canAction('delete')"
                     class="table-action-danger"
                     @click="remove(scope.row)"
                     >删除</el-dropdown-item
@@ -639,6 +694,7 @@ onMounted(async () => {
           v-model:current-page="query.page"
           v-model:page-size="query.pageSize"
           :total="total"
+          :teleported="false"
           layout="prev, pager, next, sizes"
           @change="load"
         />
@@ -719,18 +775,16 @@ onMounted(async () => {
                 :key="item.value"
                 :label="item.label"
                 :value="Number(item.value)" /></el-select
-            ><el-select
+            ><el-tree-select
               v-else-if="field.type === 'organization'"
               v-model="form[field.key]"
+              :data="field.key === 'parentId' ? organizationParentTree : organizationTree"
               filterable
+              check-strictly
+              node-key="value"
+              :props="{ label: 'label', children: 'children' }"
               :disabled="mode === 'view' || (mode === 'edit' && field.immutable)"
-              style="width: 100%"
-              ><el-option v-if="field.key === 'parentId'" label="顶级公司" :value="0" /><el-option
-                v-for="item in options.organizations"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value" /></el-select
-            ><el-select
+              style="width: 100%" /><el-select
               v-else-if="field.type === 'department'"
               v-model="form[field.key]"
               clearable
@@ -781,7 +835,7 @@ onMounted(async () => {
       ><template #footer
         ><el-button @click="dialog = false">{{ mode === 'view' ? '关闭' : '取消' }}</el-button
         ><el-button
-          v-if="mode !== 'view'"
+          v-if="mode !== 'view' && canAction(mode === 'create' ? 'create' : 'update')"
           type="primary"
           :loading="saving"
           :disabled="saving"

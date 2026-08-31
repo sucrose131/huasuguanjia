@@ -16,11 +16,15 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { RequisitionService } from './requisition.service';
+import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('requisitions')
 export class RequisitionController {
-  constructor(@Inject(RequisitionService) private readonly service: RequisitionService) {}
+  constructor(
+    @Inject(RequisitionService) private readonly service: RequisitionService,
+    @Inject(RequisitionOaApprovalService) private readonly oaApproval: RequisitionOaApprovalService,
+  ) {}
 
   @RequirePermissions('requisitions')
   @Get('applications')
@@ -30,8 +34,35 @@ export class RequisitionController {
 
   @RequirePermissions('requisitions')
   @Get('application-form-options')
-  applicationFormOptions(@Query('orgId') orgId: string) {
-    return this.service.applicationFormOptions(orgId);
+  applicationFormOptions(
+    @Query('orgId') orgId: string | undefined,
+    @Query('deptId') deptId: string | undefined,
+  ) {
+    return this.service.applicationFormOptions(orgId ?? '', deptId);
+  }
+
+  @RequirePermissions('requisitions')
+  @Get('direct-output-options')
+  directOutputOptions(@CurrentUser() user: AuthUser) {
+    return this.service.directOutputOptions(user);
+  }
+  @RequirePermissions('requisitions')
+  @Get('current-applicant')
+  currentApplicant(@Query('orgId') orgId: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.service.currentApplicant(user.id, orgId);
+  }
+  @RequirePermissions('requisitions')
+  @Get('product-options')
+  productOptions(
+    @Query('orgId') orgId: string | undefined,
+    @Query('warehouseId') warehouseId: string | undefined,
+  ) {
+    return this.service.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('requisitions')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId: string | undefined) {
+    return this.service.allGoodsOptions(orgId);
   }
 
   @RequirePermissions('requisitions')
@@ -43,13 +74,26 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Post('applications')
   createApplication(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(null, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(null, body, user.id, Boolean(body.submit), user.orgId);
   }
 
   @RequirePermissions('requisitions')
   @Patch('applications/:id')
   updateApplication(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveApplication(id, body, user.id, Boolean(body.submit));
+    return this.service.saveApplication(id, body, user.id, Boolean(body.submit), user.orgId);
+  }
+
+  @RequirePermissions('requisitions')
+  @Post('applications/:id/submit-oa')
+  async submitApplicationToOa(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    const result = await this.oaApproval.submit(BigInt(id), user.id);
+    return {
+      ...result,
+      message:
+        result.procStatus === 'PUSH_FAILED'
+          ? `提交OA失败：${result.errorMessage ?? '请稍后重试'}`
+          : '已提交OA审批',
+    };
   }
 
   @RequirePermissions('requisitions')
@@ -85,13 +129,13 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Post('outputs')
   createOutput(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveOutput(null, body, user.id);
+    return this.service.saveOutput(null, body, user);
   }
 
   @RequirePermissions('requisitions')
   @Patch('outputs/:id')
   updateOutput(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveOutput(id, body, user.id);
+    return this.service.saveOutput(id, body, user);
   }
 
   @RequirePermissions('requisitions')

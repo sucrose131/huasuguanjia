@@ -14,6 +14,7 @@ export class BaseDataService {
     return (this.prisma as unknown as Record<string, any>)[config.model];
   }
   private value(value: unknown, type: string) {
+    if (type === 'json') return value ?? null;
     if (value === null || value === undefined || value === '')
       return type === 'date' ? null : type === 'string' ? '' : type === 'bigint' ? 0n : 0;
     if (type === 'bigint') return BigInt(String(value));
@@ -24,6 +25,8 @@ export class BaseDataService {
   private data(config: ResourceConfig, input: Record<string, unknown>, partial: boolean) {
     const result: Record<string, unknown> = {};
     for (const [field, definition] of Object.entries(config.fields)) {
+      // json 字段由外部同步维护，基础资料接口不接受写入
+      if (definition.type === 'json') continue;
       if (!(field in input)) {
         if (!partial && definition.required) throw new BadRequestException(`${field} 必填`);
         continue;
@@ -422,7 +425,7 @@ export class BaseDataService {
       orgId,
       page: '1',
       pageSize: '100',
-      status: '1',
+      ...(resource === 'organizations' ? { operationStatus: '1' } : { status: '1' }),
     });
     return result.items.map((item: Record<string, unknown>) => ({
       value: item.id,
@@ -443,6 +446,7 @@ export class BaseDataService {
   }
   async create(resource: string, input: Record<string, unknown>, userId: string) {
     const config = this.config(resource);
+    if (resource === 'warehouses') await this.assertOperatingOrganization(input.orgId);
     const audit =
       config.auditFields === false
         ? {}
@@ -455,6 +459,8 @@ export class BaseDataService {
   async update(resource: string, id: string, input: Record<string, unknown>, userId: string) {
     const existing = await this.detail(resource, id);
     const config = this.config(resource);
+    if (resource === 'warehouses')
+      await this.assertOperatingOrganization(input.orgId ?? existing.orgId);
     if (
       resource === 'warehouses' &&
       'warehouseType' in input &&
@@ -524,5 +530,19 @@ export class BaseDataService {
             ? '已启用'
             : '已停用',
     };
+  }
+
+  private async assertOperatingOrganization(value: unknown) {
+    if (value === null || value === undefined || value === '')
+      throw new BadRequestException('所属组织必填');
+    const organization = await this.prisma.hspsi_basic_organization.findFirst({
+      where: {
+        org_id: BigInt(String(value)),
+        operation_status: 1,
+        deleted_at: null,
+      },
+      select: { org_id: true },
+    });
+    if (!organization) throw new BadRequestException('所属组织已停业，不能新增或修改仓库');
   }
 }

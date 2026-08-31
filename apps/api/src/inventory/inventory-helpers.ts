@@ -1,5 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 
+export function filterQuantityAlertsByStatus<T extends { warning: boolean }>(
+  items: T[],
+  status: unknown,
+): T[] {
+  const value = status == null ? '' : String(status).trim();
+  if (value === '') return items;
+  if (value === '0') return items.filter((item) => !item.warning);
+  if (value === '1') return items.filter((item) => item.warning);
+  throw new BadRequestException('库存状态参数无效');
+}
+
 export type InventoryCheckQuantityResult = {
   inventory: number;
   actual: number;
@@ -34,12 +45,13 @@ export function classifyInventoryCheckQuantities(
   };
 }
 
-export function parseInventoryLossDisposal(value: unknown, required: boolean): -1 | 0 | 1 {
+export function parseInventoryLossDisposal(value: unknown, required: boolean): -1 | 0 | 1 | 2 {
   const raw = value == null ? '' : String(value).trim();
   if (raw === '0') return 0;
   if (raw === '1') return 1;
+  if (raw === '2') return 2;
   if (!required && (raw === '' || raw === '-1')) return -1;
-  throw new BadRequestException('报损出库单提交前必须选择直接报废或折价出售');
+  throw new BadRequestException('报损出库单提交前必须选择直接报废、折价出售或退货');
 }
 
 export function partitionInventoryCheckDetails<T extends Record<string, any>>(details: T[]) {

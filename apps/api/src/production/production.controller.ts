@@ -16,11 +16,30 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { ProductionService } from './production.service';
+import { ProductionOaApprovalService } from './production-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('production')
 export class ProductionController {
-  constructor(@Inject(ProductionService) private readonly s: ProductionService) {}
+  constructor(
+    @Inject(ProductionService) private readonly s: ProductionService,
+    @Inject(ProductionOaApprovalService) private readonly oa: ProductionOaApprovalService,
+  ) {}
+  @RequirePermissions('production')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.s.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('production')
+  @Get('all-product-options')
+  allProductOptions(@Query('orgId') orgId?: string) {
+    return this.s.allProductOptions(orgId);
+  }
+  @RequirePermissions('production')
+  @Get('warehouse-options')
+  warehouseOptions(@Query('orgId') orgId?: string, @Query('goodsId') goodsId?: string) {
+    return this.s.warehouseOptions(orgId, goodsId);
+  }
   @RequirePermissions('production')
   @Get('boms')
   boms(@Query() q: any) {
@@ -68,13 +87,19 @@ export class ProductionController {
   }
   @RequirePermissions('production')
   @Post('plans')
-  createPlan(@Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.s.savePlanChecked(null, b, u.id, !!b.submit);
+  async createPlan(@Body() b: any, @CurrentUser() u: AuthUser) {
+    const result = await this.s.savePlanChecked(null, b, u.id, !!b.submit);
+    return result.shortage
+      ? result
+      : { ...result, oa: await this.oa.submitPlan(BigInt(result.id), u.id) };
   }
   @RequirePermissions('production')
   @Patch('plans/:id')
-  updatePlan(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
-    return this.s.savePlanChecked(id, b, u.id, !!b.submit);
+  async updatePlan(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    const result = await this.s.savePlanChecked(id, b, u.id, !!b.submit);
+    return result.shortage
+      ? result
+      : { ...result, oa: await this.oa.submitPlan(BigInt(result.id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/approve')
@@ -83,13 +108,15 @@ export class ProductionController {
   }
   @RequirePermissions('production')
   @Post('plans/:id/recheck')
-  recheckPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.recheckPlan(id, u.id);
+  async recheckPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const result = await this.s.recheckPlan(id, u.id);
+    return result.shortage ? result : { ...result, oa: await this.oa.submitPlan(BigInt(id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/restart')
-  restartPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.restartPlan(id, u.id);
+  async restartPlan(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const result = await this.s.restartPlan(id, u.id);
+    return { ...result, oa: await this.oa.submitPlan(BigInt(id), u.id) };
   }
   @RequirePermissions('production')
   @Post('plans/:id/terminate')
@@ -110,11 +137,6 @@ export class ProductionController {
   @Get('shortages')
   shortages(@Query() q: any) {
     return this.s.shortages(q);
-  }
-  @RequirePermissions('production')
-  @Post('shortages/plan/:id/approve')
-  approveShortages(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.s.approveShortages(id, u.id);
   }
   @RequirePermissions('production')
   @Get('outputs')
@@ -145,6 +167,46 @@ export class ProductionController {
   @Post('outputs/:id/confirm')
   confirmOutput(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.confirmOutput(id, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns/source/:outId/available')
+  materialReturnAvailable(@Param('outId') outId: string) {
+    return this.s.materialReturnAvailable(outId);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns')
+  materialReturns(@Query() q: any) {
+    return this.s.materialReturns(q);
+  }
+  @RequirePermissions('production')
+  @Get('material-returns/:id')
+  materialReturn(@Param('id') id: string) {
+    return this.s.materialReturn(id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns')
+  createMaterialReturn(@Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveMaterialReturn(null, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Patch('material-returns/:id')
+  updateMaterialReturn(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveMaterialReturn(id, b, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/confirm')
+  confirmMaterialReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.s.confirmMaterialReturn(id, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/void')
+  voidMaterialReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.s.voidMaterialReturn(id, u.id);
+  }
+  @RequirePermissions('production')
+  @Post('material-returns/:id/reverse')
+  reverseMaterialReturn(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.reverseMaterialReturn(id, b, u.id);
   }
   @RequirePermissions('production')
   @Get('inputs')

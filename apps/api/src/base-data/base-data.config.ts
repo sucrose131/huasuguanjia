@@ -1,4 +1,4 @@
-export type FieldType = 'string' | 'number' | 'bigint' | 'date';
+export type FieldType = 'string' | 'number' | 'bigint' | 'date' | 'json';
 export interface ResourceConfig {
   model: string;
   primaryKey: string;
@@ -46,6 +46,8 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
       relatedCustomerId: { column: 'related_customer_id', type: 'bigint' },
       status: { column: 'status', type: 'number' },
       remark: { column: 'remark', type: 'string' },
+      /** 身份描述 JSON，仅同步写入，接口创建/更新忽略 */
+      levels: { column: 'levels', type: 'json' },
       sort: { column: 'sort', type: 'number' },
     },
   },

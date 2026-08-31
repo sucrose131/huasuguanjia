@@ -7,28 +7,31 @@ x-logging: &default-logging
     max-file: '5'
 
 services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec']
+    volumes:
+      - redis_data:/data
+    logging: *default-logging
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     init: true
-    environment:
-      NODE_ENV: production
-      TZ: ${TZ:-Asia/Shanghai}
-      API_PORT: 8000
-      DATABASE_URL: ${DATABASE_URL:?请在部署环境文件中配置 DATABASE_URL，且数据库必须为 hspsi-dev-ai-02}
-      REDIS_URL: redis://redis:6379
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?请配置不少于32字符的 JWT_ACCESS_SECRET}
-      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-45m}
-      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
-      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080,http://127.0.0.1:8080}
+    env_file: .env
+    ports:
+      - '8001:8000'
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     logging: *default-logging
-    depends_on:
-      redis:
-        condition: service_healthy
     healthcheck:
       test:
         [
@@ -48,10 +51,13 @@ services:
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
     ports:
-      - '${APP_PORT:-8080}:80'
+      - '8088:80'
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     logging: *default-logging
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  redis_data:

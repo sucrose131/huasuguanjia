@@ -14,12 +14,20 @@ import { SalesModule } from './sales/sales.module';
 import { RequisitionModule } from './requisition/requisition.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DocumentTraceModule } from './document-trace/document-trace.module';
+import { BusinessNumberModule } from './business-number/business-number.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { AttachmentsModule } from './attachments/attachments.module';
+import { ScheduledTaskModule } from './scheduled-task/scheduled-task.module';
+import { AmountAccessModule } from './amount-access/amount-access.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     RedisModule,
+    BusinessNumberModule,
+    AttachmentsModule,
+    AmountAccessModule,
     AuthModule,
     BaseDataModule,
     GoodsModule,
@@ -31,6 +39,8 @@ import { DocumentTraceModule } from './document-trace/document-trace.module';
     SystemModule,
     DashboardModule,
     DocumentTraceModule,
+    IntegrationsModule,
+    ScheduledTaskModule,
   ],
   controllers: [HealthController],
 })

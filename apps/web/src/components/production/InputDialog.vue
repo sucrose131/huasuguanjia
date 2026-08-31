@@ -3,6 +3,8 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import RemoteSelect from '@/components/RemoteSelect.vue';
 
 type B = Record<string, any>;
 const auth = useAuthStore();
@@ -37,18 +39,39 @@ function close() {
   emit('update:modelValue', false);
 }
 
+async function searchPlans(keyword: string) {
+  const eligible = (p: B) =>
+    Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty);
+  const toOptions = (list: B[]) =>
+    list.map((p: B) => ({
+      value: p.id,
+      label: `${p.planNo ?? ''} · ${p.goodsName ?? ''}`.trim(),
+    }));
+  if (!String(keyword ?? '').trim()) return toOptions(plans.value);
+  const r: any = await api.get('/production/plans', {
+    params: { keyword, pageSize: 50, status: 3 },
+  });
+  const items = ((r.items ?? []) as B[]).filter(eligible);
+  for (const item of items)
+    if (!plans.value.some((p: B) => String(p.id) === String(item.id))) plans.value.push(item);
+  return toOptions(items);
+}
+const currentPlanLabel = computed(() => {
+  const p = plans.value.find((x: B) => String(x.id) === String(f.planId));
+  return p ? `${p.planNo ?? ''} · ${p.goodsName ?? ''}`.trim() : '';
+});
+
 async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [pRes, wRes] = (await Promise.all([
+    const [pRes] = (await Promise.all([
       api.get('/production/plans', { params: { pageSize: 100 } }),
-      api.get('/base-data/warehouses/options'),
     ])) as any[];
     plans.value = (pRes.items ?? []).filter(
       (p: B) => Number(p.planStatus) === 3 && Number(p.deliveredQty) < Number(p.planQty),
     );
-    warehouses.value = wRes ?? [];
+    warehouses.value = [];
     if (sourceRow.value) {
       const r = sourceRow.value;
       if (!plans.value.some((item: B) => String(item.id) === String(r.planId))) {
@@ -72,6 +95,7 @@ async function load() {
         deliveredQty: Number(r.cumulativeQty || 0) - Number(r.quantity || 0),
         operatorName: r.operatorName ?? r.createdByName ?? auth.user?.username ?? '',
       });
+      await planChanged();
     }
   } catch (e: any) {
     error.value = e.response?.data?.message ?? '加载失败';
@@ -81,7 +105,11 @@ async function load() {
 }
 
 async function planChanged() {
-  if (!f.planId) return;
+  if (!f.planId) {
+    warehouses.value = [];
+    f.warehouseId = '';
+    return;
+  }
   try {
     const p: any = await api.get(`/production/plans/${f.planId}`);
     Object.assign(f, {
@@ -92,6 +120,11 @@ async function planChanged() {
       warehouseId: f.warehouseId || p.productWarehouseId || '',
       quantity: Math.max(1, Number(p.planQty || 0) - Number(p.deliveredQty || 0)),
     });
+    warehouses.value = (await api.get('/production/warehouse-options', {
+      params: { orgId: p.orgId, goodsId: p.goodsId },
+    })) as B[];
+    if (!warehouses.value.some((item) => String(item.value) === String(f.warehouseId)))
+      f.warehouseId = '';
   } catch (e: any) {
     /* ignore */
   }
@@ -176,18 +209,15 @@ watch(
       <div class="in-grid">
         <div class="in-fld">
           <span class="in-lb">关联生产计划 *</span
-          ><el-select
+          ><RemoteSelect
             v-model="f.planId"
+            :fetch="searchPlans"
+            :current-label="currentPlanLabel"
             :disabled="readonly || !!editRow"
-            filterable
             size="small"
+            placeholder="输入计划编号搜索"
             @change="planChanged"
-            ><el-option
-              v-for="p in plans"
-              :key="p.id"
-              :label="`${p.planNo} · ${p.goodsName}`"
-              :value="p.id"
-          /></el-select>
+          />
         </div>
         <div class="in-fld">
           <span class="in-lb">入库日期 *</span
@@ -280,6 +310,11 @@ watch(
       </div>
       <div v-if="error" class="in-error">{{ error }}</div>
     </template>
+    <DocumentAttachments
+      v-if="sourceRow?.id"
+      document-type="production_input"
+      :document-id="sourceRow.id"
+    />
     <template #footer>
       <el-button @click="close" :disabled="saving">{{ readonly ? '关闭' : '取消' }}</el-button>
       <el-button v-if="!readonly" type="primary" :loading="saving" @click="submit">保存</el-button>

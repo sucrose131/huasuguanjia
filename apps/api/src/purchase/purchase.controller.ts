@@ -16,24 +16,69 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { PurchaseService } from './purchase.service';
+import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
+import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
+import { AmountAccessService } from '../amount-access/amount-access.service';
+import { GLOBAL_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
+import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
 export class PurchaseController {
-  constructor(@Inject(PurchaseService) private service: PurchaseService) {}
+  constructor(
+    @Inject(PurchaseService) private service: PurchaseService,
+    @Inject(PurchaseOaApprovalService) private oaApproval: PurchaseOaApprovalService,
+    @Inject(PurchaseReturnOaApprovalService)
+    private returnOaApproval: PurchaseReturnOaApprovalService,
+    @Inject(AmountAccessService) private amountAccess: AmountAccessService,
+  ) {}
+
+  private async protectPurchaseAmounts<T>(value: T, userId: string): Promise<T> {
+    const access = await this.amountAccess.forUser(userId);
+    const protectedValue = access.canViewAmount
+      ? value
+      : this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
+    if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
+      return protectedValue;
+    return {
+      ...protectedValue,
+      amountAccess: access.level,
+      amountMasked: !access.canViewAmount,
+    } as T;
+  }
+  @RequirePermissions('purchase')
+  @Get(':resource/:id/operation-history')
+  operationHistory(@Param('resource') resource: string, @Param('id') id: string) {
+    return this.service.operationHistory(resource, id);
+  }
   @RequirePermissions('purchase')
   @Get('applications')
   applications(@Query() q: Record<string, string>) {
     return this.service.applications(q);
   }
   @RequirePermissions('purchase')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.service.productOptions(orgId, warehouseId);
+  }
+  @RequirePermissions('purchase')
+  @Get('all-goods-options')
+  allGoodsOptions(@Query('orgId') orgId?: string) {
+    return this.service.allGoodsOptions(orgId);
+  }
+  @RequirePermissions('purchase')
+  @Get('receiver-options')
+  receiverOptions(@Query('orgId') orgId?: string, @Query('deptId') deptId?: string) {
+    return this.service.receiverOptions(orgId, deptId);
+  }
+  @RequirePermissions('purchase')
   @Get('applications/:id')
-  application(@Param('id') id: string) {
-    return this.service.application(id);
+  async application(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.application(id), u.id);
   }
   @RequirePermissions('purchase')
   @Post('applications')
   createApplication(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
-    return this.service.saveApplication(null, b, u.id);
+    return this.service.saveApplication(null, b, u.id, false, u.orgId);
   }
   @RequirePermissions('purchase')
   @Patch('applications/:id')
@@ -42,12 +87,22 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.saveApplication(id, b, u.id);
+    return this.service.saveApplication(id, b, u.id, false, u.orgId);
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/submit')
-  submitApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.service.submitApplication(id, u.id);
+  async submitApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    await this.service.submitApplication(id, u.id);
+    const oa = await this.oaApproval.submit(BigInt(id), u.id);
+    return {
+      id,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购申请已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购申请已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/approve')
@@ -59,32 +114,44 @@ export class PurchaseController {
     return this.service.approveApplication(id, b.approved, b.comment ?? '', u.id);
   }
   @RequirePermissions('purchase')
+  @Post('applications/:id/generate-order')
+  async generateApplicationOrder(
+    @Param('id') id: string,
+    @Body() b: Record<string, unknown>,
+    @CurrentUser() u: AuthUser,
+  ) {
+    await this.amountAccess.assertCanEdit(u.id);
+    return this.service.generateApplicationOrder(id, b, u.id);
+  }
+  @RequirePermissions('purchase')
   @Delete('applications/:id')
   removeApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.service.removeApplication(id, u.id);
   }
   @RequirePermissions('purchase')
   @Get('orders')
-  orders(@Query() q: Record<string, string>) {
-    return this.service.orders(q);
+  async orders(@Query() q: Record<string, string>, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.orders(q), u.id);
   }
   @RequirePermissions('purchase')
   @Get('orders/:id')
-  order(@Param('id') id: string) {
-    return this.service.order(id);
+  async order(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.order(id), u.id);
   }
   @RequirePermissions('purchase')
   @Post('orders')
-  createOrder(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+  async createOrder(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+    await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveOrder(null, b, u.id);
   }
   @RequirePermissions('purchase')
   @Patch('orders/:id')
-  updateOrder(
+  async updateOrder(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveOrder(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -99,7 +166,7 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.generateReceipt(id, u.id, b.warehouseId);
+    return this.service.generateReceipt(id, u.id, b.warehouseId, b.inputType);
   }
   @RequirePermissions('purchase')
   @Delete('orders/:id')
@@ -127,16 +194,18 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('receipts')
-  createReceipt(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+  async createReceipt(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
+    if (b.directReceipt) await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveReceipt(null, b, u.id);
   }
   @RequirePermissions('purchase')
   @Patch('receipts/:id')
-  updateReceipt(
+  async updateReceipt(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    if (b.directReceipt) await this.amountAccess.assertCanEdit(u.id);
     return this.service.saveReceipt(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -159,12 +228,23 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('receipts/:id/return')
-  executeReceiptReturn(
+  async executeReceiptReturn(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true, true);
+    // 兼容旧入口，但只创建并提交审批，不再允许绕过OA/审批直接扣减库存。
+    const saved = await this.service.saveReturn(null, { ...b, receiptId: id }, u.id, true);
+    const oa = await this.returnOaApproval.submit(saved.id, u.id);
+    return {
+      ...saved,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购退货已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购退货已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Delete('receipts/:id')
@@ -197,8 +277,18 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Post('returns/:id/submit')
-  submitReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.service.submitReturn(id, u.id);
+  async submitReturn(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    await this.service.submitReturn(id, u.id);
+    const oa = await this.returnOaApproval.submit(BigInt(id), u.id);
+    return {
+      id,
+      message:
+        oa.procStatus === 'PUSH_FAILED'
+          ? `采购退货已提交，但发送OA失败：${oa.errorMessage ?? '请稍后重试'}`
+          : '采购退货已提交OA审批',
+      oaStatus: oa.procStatus,
+      oaProcessId: oa.procInstId,
+    };
   }
   @RequirePermissions('purchase')
   @Post('returns/:id/approve')
@@ -216,20 +306,22 @@ export class PurchaseController {
   }
   @RequirePermissions('purchase')
   @Get('refunds')
-  refunds(@Query() q: Record<string, string>) {
-    return this.service.refunds(q);
+  async refunds(@Query() q: Record<string, string>, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refunds(q), u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Delete('refunds/flows/:id')
   voidRefundFlow(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.service.voidRefundFlow(id, u.id);
   }
   @RequirePermissions('purchase')
   @Get('refunds/:id')
-  refund(@Param('id') id: string) {
-    return this.service.refund(id);
+  async refund(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.protectPurchaseAmounts(await this.service.refund(id), u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Post('refunds/:id/flows')
   createRefundFlow(
     @Param('id') id: string,
@@ -254,11 +346,13 @@ export class PurchaseController {
     return this.service.payment(id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Post('payments')
   createPayment(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
     return this.service.savePayment(null, b, u.id);
   }
   @RequirePermissions('purchase')
+  @RequireAmountEdit()
   @Patch('payments/:id')
   updatePayment(
     @Param('id') id: string,

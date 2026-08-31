@@ -4,17 +4,92 @@ import { ProductionService } from './production.service';
 function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
+  posting: Record<string, any> = { post: vi.fn() },
+  masterData: Record<string, any> = {
+    assertGoodsLines: vi.fn(),
+    assertGoodsActive: vi.fn(),
+    assertWarehouse: vi.fn(),
+  },
 ) {
   return new ProductionService(
     prisma as never,
-    { post: vi.fn() } as never,
+    posting as never,
     { syncExpiryAlert: vi.fn() } as never,
-    {} as never,
+    { enrich: vi.fn(async (rows: unknown[]) => rows) } as never,
     trace as never,
+    { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
+    masterData as never,
   );
 }
 
+describe('ProductionService mapped product options', () => {
+  it('loads BOM finished-goods candidates from all warehouse types owned by the organization', async () => {
+    const masterData = {
+      assertGoodsLines: vi.fn(),
+      assertGoodsActive: vi.fn(),
+      assertWarehouse: vi.fn(),
+      goodsOptionsByOrg: vi
+        .fn()
+        .mockResolvedValue([{ goodsId: 101n, goodsName: '康复训练成品' }]),
+    };
+    const service = serviceWith({}, undefined, undefined, masterData);
+
+    await expect(service.allProductOptions('6')).resolves.toEqual([
+      { goodsId: 101n, goodsName: '康复训练成品' },
+    ]);
+    expect(masterData.goodsOptionsByOrg).toHaveBeenCalledWith(6n);
+  });
+});
+
 describe('ProductionService chain guards', () => {
+  it('allows confirmed temporary supplements and subtracts draft BOM return occupancy', async () => {
+    const prisma = {
+      hspsi_production_material_out: {
+        findFirst: vi.fn().mockResolvedValue({
+          out_id: 7,
+          out_no: 'PMO7',
+          out_type: 2,
+          confirm_tag: 1,
+          org_id: 1,
+          warehouse_id: 2,
+        }),
+      },
+      hspsi_production_material_out_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            serial_number: 11,
+            goods_id: 100,
+            sku_id: 200,
+            out_qty: 10,
+            batch_no: 'PH20260807',
+          },
+        ]),
+      },
+      hspsi_production_material_return: {
+        findMany: vi.fn().mockImplementation((args: any) => {
+          if (!args.select) return [];
+          return args.where.status.in[0] === 1 ? [{ return_id: 20n }] : [{ return_id: 21n }];
+        }),
+      },
+      hspsi_production_material_return_detail: {
+        groupBy: vi
+          .fn()
+          .mockResolvedValueOnce([{ source_out_detail_id: 11, _sum: { return_qty: 2 } }])
+          .mockResolvedValueOnce([{ source_out_detail_id: 11, _sum: { return_qty: 3 } }]),
+      },
+      hspsi_basic_warehouse: {
+        findFirst: vi.fn().mockResolvedValue({ name: '原料仓' }),
+      },
+    };
+
+    const result = await serviceWith(prisma).materialReturnAvailable('7');
+
+    expect(result.details).toEqual([
+      expect.objectContaining({ returnedQty: 2, occupiedQty: 3, remainingQty: 5 }),
+    ]);
+    expect(result.returnableQty).toBe(5);
+  });
+
   it('blocks deleting a plan that still has an active shortage purchase application', async () => {
     const tx = {
       $queryRaw: vi.fn(),
@@ -499,5 +574,255 @@ describe('ProductionService chain guards', () => {
 
     expect(tx.$queryRaw).toHaveBeenCalledOnce();
     expect(createPlan).not.toHaveBeenCalled();
+  });
+
+  it('completes a BOM return into the original warehouse exactly once', async () => {
+    const posting = { post: vi.fn() };
+    const update = vi.fn();
+    const returnRow = {
+      return_id: 21n,
+      return_no: 'PMR20260807000001',
+      source_out_id: 7,
+      org_id: 1n,
+      warehouse_id: 2n,
+      status: 0,
+      posting_version: 0,
+      return_reason: '生产余料退回',
+    };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue(returnRow),
+        findMany: vi.fn().mockResolvedValue([]),
+        update,
+      },
+      hspsi_production_material_return_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            source_out_detail_id: 11,
+            goods_id: 100n,
+            sku_id: 200n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            return_qty: 3,
+          },
+        ]),
+        groupBy: vi.fn(),
+      },
+      hspsi_production_material_out: {
+        findFirst: vi.fn().mockResolvedValue({
+          out_id: 7,
+          out_type: 1,
+          confirm_tag: 1,
+          org_id: 1,
+          warehouse_id: 2,
+        }),
+      },
+      hspsi_production_material_out_detail: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { serial_number: 11, goods_id: 100, out_qty: 10, batch_no: 'PH20260807' },
+          ]),
+      },
+      hspsi_goods_info: {
+        findMany: vi.fn().mockResolvedValue([{ goods_id: 100n, const_price: 5 }]),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({ source_out_id: 7 }),
+      },
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, posting).confirmMaterialReturn('21', '9'),
+    ).resolves.toMatchObject({
+      id: 21n,
+    });
+    expect(posting.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        warehouseId: 2n,
+        direction: 1,
+        inventoryMode: 16,
+        idempotencyKey: 'production-material-return:21:confirm:v1',
+        lines: [expect.objectContaining({ quantity: 3, amount: 15 })],
+      }),
+      tx,
+    );
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 1, posting_version: 1 }) }),
+    );
+  });
+
+  it('rechecks completed BOM returns under lock and blocks an over-return', async () => {
+    const posting = { post: vi.fn() };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({
+          return_id: 21n,
+          return_no: 'PMR21',
+          source_out_id: 7,
+          org_id: 1n,
+          warehouse_id: 2n,
+          status: 0,
+          posting_version: 0,
+          return_reason: '',
+        }),
+        findMany: vi.fn().mockResolvedValue([{ return_id: 20n }]),
+      },
+      hspsi_production_material_return_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            source_out_detail_id: 11,
+            goods_id: 100n,
+            sku_id: 200n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            return_qty: 3,
+          },
+        ]),
+        groupBy: vi.fn().mockResolvedValue([{ source_out_detail_id: 11, _sum: { return_qty: 8 } }]),
+      },
+      hspsi_production_material_out: {
+        findFirst: vi.fn().mockResolvedValue({
+          out_id: 7,
+          out_type: 1,
+          confirm_tag: 1,
+          org_id: 1,
+          warehouse_id: 2,
+        }),
+      },
+      hspsi_production_material_out_detail: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { serial_number: 11, goods_id: 100, out_qty: 10, batch_no: 'PH20260807' },
+          ]),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({ source_out_id: 7 }),
+      },
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, posting).confirmMaterialReturn('21', '9'),
+    ).rejects.toThrow('当前最多可退 2');
+    expect(posting.post).not.toHaveBeenCalled();
+  });
+
+  it('reverses a completed BOM return with an outbound posting before changing status', async () => {
+    const update = vi.fn();
+    const posting = { post: vi.fn().mockResolvedValue([]) };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({
+          return_id: 21n,
+          return_no: 'PMR21',
+          source_out_id: 7,
+          org_id: 1n,
+          warehouse_id: 2n,
+          status: 1,
+          posting_version: 1,
+        }),
+        update,
+      },
+      hspsi_production_material_return_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            goods_id: 100n,
+            sku_id: 200n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            return_qty: 3,
+          },
+        ]),
+      },
+    };
+    const prisma = {
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({ source_out_id: 7 }),
+      },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, posting).reverseMaterialReturn(
+        '21',
+        { reversalReason: '录入错误' },
+        '9',
+      ),
+    ).resolves.toMatchObject({ id: 21n });
+    expect(posting.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: -1,
+        sourceType: 'production_material_return_reversal',
+        idempotencyKey: 'production-material-return:21:reverse:v2',
+        lines: [expect.objectContaining({ quantity: 3 })],
+      }),
+      tx,
+    );
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 3,
+          posting_version: 2,
+          reversal_reason: '录入错误',
+          reversed_by: 9n,
+        }),
+      }),
+    );
+  });
+
+  it('keeps a completed BOM return unchanged when reversal stock is insufficient', async () => {
+    const update = vi.fn();
+    const posting = { post: vi.fn().mockRejectedValue(new Error('批次库存不足')) };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({
+          return_id: 21n,
+          return_no: 'PMR21',
+          source_out_id: 7,
+          org_id: 1n,
+          warehouse_id: 2n,
+          status: 1,
+          posting_version: 1,
+        }),
+        update,
+      },
+      hspsi_production_material_return_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            goods_id: 100n,
+            sku_id: 200n,
+            batch_no: 'PH20260807',
+            unit_type: 1,
+            return_qty: 3,
+          },
+        ]),
+      },
+    };
+    const prisma = {
+      hspsi_production_material_return: {
+        findFirst: vi.fn().mockResolvedValue({ source_out_id: 7 }),
+      },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, posting).reverseMaterialReturn(
+        '21',
+        { reversalReason: '录入错误' },
+        '9',
+      ),
+    ).rejects.toThrow('批次库存不足');
+    expect(update).not.toHaveBeenCalled();
   });
 });

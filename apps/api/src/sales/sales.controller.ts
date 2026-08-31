@@ -16,12 +16,22 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { SalesService } from './sales.service';
+import { SalesOaApprovalService } from './sales-oa-approval.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApproveOrderDto } from './dto/approve-order.dto';
+import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('sales')
 export class SalesController {
-  constructor(@Inject(SalesService) private readonly s: SalesService) {}
+  constructor(
+    @Inject(SalesService) private readonly s: SalesService,
+    @Inject(SalesOaApprovalService) private readonly oa: SalesOaApprovalService,
+  ) {}
+  @RequirePermissions('sales')
+  @Get('product-options')
+  productOptions(@Query('orgId') orgId?: string, @Query('warehouseId') warehouseId?: string) {
+    return this.s.productOptions(orgId, warehouseId);
+  }
   @RequirePermissions('sales')
   @Get('orders')
   orders(@Query() q: any) {
@@ -58,11 +68,13 @@ export class SalesController {
     return this.s.order(id);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('orders')
   createOrder(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
     return this.s.saveOrder(null, dto as any, u.id, 1);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Patch('orders/:id')
   updateOrder(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
     return this.s.saveOrder(id, dto as any, u.id, 1);
@@ -163,6 +175,7 @@ export class SalesController {
     return this.s.payment(id, 1);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('payments')
   payment(@Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.createPayment(b, 1, u.id);
@@ -183,6 +196,7 @@ export class SalesController {
     return this.s.payment(id, 2);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('refunds')
   refund(@Body() b: any, @CurrentUser() u: AuthUser) {
     return this.s.createPayment(b, 2, u.id);
@@ -198,14 +212,22 @@ export class SalesController {
     return this.s.orders(q, 2);
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Post('discount-orders')
-  createDiscount(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
-    return this.s.saveOrder(null, dto as any, u.id, 2);
+  async createDiscount(@Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
+    const result = await this.s.saveOrder(null, dto as any, u.id, 2);
+    return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }
   @RequirePermissions('sales')
+  @RequireAmountEdit()
   @Patch('discount-orders/:id')
-  updateDiscount(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
-    return this.s.saveOrder(id, dto as any, u.id, 2);
+  async updateDiscount(
+    @Param('id') id: string,
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() u: AuthUser,
+  ) {
+    const result = await this.s.saveOrder(id, dto as any, u.id, 2);
+    return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }
   @RequirePermissions('sales')
   @Delete('discount-orders/:id')
@@ -235,6 +257,35 @@ export class SalesController {
   @Get('services/:id')
   service(@Param('id') id: string) {
     return this.s.service(id);
+  }
+  @RequirePermissions('sales')
+  @Get('services/:id/progress')
+  serviceProgresses(@Param('id') id: string) {
+    return this.s.serviceProgresses(id);
+  }
+  @RequirePermissions('sales')
+  @Post('services/:id/progress')
+  createServiceProgress(@Param('id') id: string, @Body() b: any, @CurrentUser() u: AuthUser) {
+    return this.s.saveServiceProgress(id, null, b, u.id);
+  }
+  @RequirePermissions('sales')
+  @Patch('services/:id/progress/:progressId')
+  updateServiceProgress(
+    @Param('id') id: string,
+    @Param('progressId') progressId: string,
+    @Body() b: any,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.s.saveServiceProgress(id, progressId, b, u.id);
+  }
+  @RequirePermissions('sales')
+  @Delete('services/:id/progress/:progressId')
+  deleteServiceProgress(
+    @Param('id') id: string,
+    @Param('progressId') progressId: string,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.s.deleteServiceProgress(id, progressId, u.id);
   }
   @RequirePermissions('sales')
   @Post('services')
