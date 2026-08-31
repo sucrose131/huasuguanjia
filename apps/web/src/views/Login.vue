@@ -11,10 +11,6 @@ const loading = ref(false);
 const error = ref('');
 const auth = useAuthStore();
 const router = useRouter();
-function fillDemo() {
-  form.username = 'admin';
-  form.password = 'admin123';
-}
 async function submit() {
   error.value = '';
   if (!form.username.trim() || !form.password) {
@@ -103,10 +99,7 @@ async function submit() {
             >登录</el-button
           >
         </el-form>
-        <div class="demo-account">
-          <div><strong>演示账号</strong><code>admin / admin123</code></div>
-          <button @click="fillDemo">填入账号</button>
-        </div>
+
       </div>
       <p class="secure">♢　企业数据安全连接</p>
     </section>
@@ -312,38 +305,7 @@ async function submit() {
   box-shadow: 0 8px 20px #3157d538;
   font-weight: 650;
 }
-.demo-account {
-  min-height: 58px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 22px;
-  padding: 10px 12px;
-  border: 1px solid #e1e5eb;
-  background: #f8f9fb;
-}
-.demo-account div {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.demo-account strong {
-  font-size: 10px;
-}
-.demo-account code {
-  color: #687487;
-  font-size: 10px;
-  letter-spacing: 1px;
-}
-.demo-account button {
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid #d9dee7;
-  background: #fff;
-  color: #3157d5;
-  font-size: 10px;
-  cursor: pointer;
-}
+
 .secure {
   position: absolute;
   bottom: 20px;
