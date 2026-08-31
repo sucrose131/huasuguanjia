@@ -5,6 +5,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -18,7 +19,6 @@ const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
   units: [],
-  goods: [],
   orders: [],
   serviceOutputs: [],
 });
@@ -49,10 +49,6 @@ function blankLine() {
     remainingQty: null,
     remark: '',
   };
-}
-
-function goodsOf(line: any) {
-  return (options.goods as any[]).find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
 }
 
 function unitName(line: any) {
@@ -101,8 +97,7 @@ async function searchServiceGoodsOptions(keyword: string) {
     !ids.length || ids.some((id: string | number) => String(id) === String(g.id));
   const toOptions = (list: any[]) =>
     list.map((g: any) => ({ value: g.id, label: g.goodsName ?? g.queryCode ?? '' }));
-  if (!String(keyword ?? '').trim())
-    return toOptions(((options.goods as any[]) ?? []).filter(inOrder));
+  // 售后商品始终走远程搜索，不再依赖 onMounted 全量商品列表
   const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
   const items = ((r.items ?? []) as any[]).filter(inOrder);
   return toOptions(items);
@@ -289,17 +284,13 @@ function serviceProgressStatusType(item: Record<string, any>): 'success' | 'warn
 }
 
 onMounted(async () => {
-  const [orgs, units, goodsResult, orders] = await Promise.all([
+  const [orgs, units, orders] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/sales/money-order-options', { params: { pageSize: 100 } }).catch(() => []),
   ]);
   options.orgs = orgs;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.orders = orders;
   await loadDicts();
 
@@ -349,6 +340,17 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="外部申请号">
           <el-input :model-value="form.externalRequestNo || form.externalRequestId" readonly />
+        </el-form-item>
+        <el-form-item label="接收时间">
+          <el-input :model-value="dateText(form.receivedAt, true)" readonly />
+        </el-form-item>
+        <el-form-item label="外部原始申请（只读）" class="span-2">
+          <el-input
+            :model-value="JSON.stringify(form.externalPayload || {}, null, 2)"
+            type="textarea"
+            :rows="8"
+            readonly
+          />
         </el-form-item>
       </template>
 
@@ -448,10 +450,10 @@ onMounted(async () => {
     </div>
     <el-table v-if="serviceNeedsBatch" :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="180">
-        <template #default="s">{{ goodsOf(s.row).goodsName || s.row.goodsName || s.row.goodsId }}</template>
+        <template #default="s">{{ s.row.goodsName || s.row.goodsId || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ goodsOf(s.row).queryCode || s.row.goodsCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
         <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
@@ -531,7 +533,11 @@ onMounted(async () => {
         <el-table-column label="处理时间" width="168">
           <template #default="{ row }">{{ dateText(row.occurredAt, true) }}</template>
         </el-table-column>
-        <el-table-column prop="content" label="处理内容" min-width="300" show-overflow-tooltip />
+        <el-table-column prop="content" label="处理内容" min-width="300">
+          <template #default="{ row }">
+            <OverflowTooltipCell :content="row.content">{{ row.content }}</OverflowTooltipCell>
+          </template>
+        </el-table-column>
         <el-table-column label="处理状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" effect="plain" :type="serviceProgressStatusType(row)">
@@ -546,9 +552,11 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="处理人" width="120" show-overflow-tooltip>
+        <el-table-column label="处理人" width="120">
           <template #default="{ row }">
-            {{ row.handlerIdName || row.createdByName || '未知操作人' }}
+            <OverflowTooltipCell :content="row.handlerIdName || row.createdByName || '未知操作人'">{{
+              row.handlerIdName || row.createdByName || '未知操作人'
+            }}</OverflowTooltipCell>
           </template>
         </el-table-column>
         <el-table-column v-if="!isView" fixed="right" label="操作" width="110" align="center">

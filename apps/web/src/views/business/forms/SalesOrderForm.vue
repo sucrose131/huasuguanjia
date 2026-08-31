@@ -5,6 +5,8 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { filterMappedGoodsByKeyword } from '@/utils/goods-warehouse';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -19,10 +21,10 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   customers: [],
-  goods: [],
   goodsSkus: [],
   units: [],
   contextGoods: [],
+  stocks: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
@@ -49,10 +51,6 @@ function lineUnitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
 }
-function goodsOf(line: any) {
-  return options.goods.find((g: any) => String(g.id) === String(line.goodsId)) ?? {};
-}
-
 const orderTotals = computed(() => {
   const quantity = (form.value.details ?? []).reduce(
     (s: number, x: any) => s + Number(x.quantity || 0),
@@ -63,7 +61,8 @@ const orderTotals = computed(() => {
     0,
   );
   const discount = (form.value.details ?? []).reduce(
-    (s: number, x: any) => s + Math.max(0, Number(x.quantity || 0) * Number(x.price || 0) - lineActual(x)),
+    (s: number, x: any) =>
+      s + Math.max(0, Number(x.quantity || 0) * Number(x.price || 0) - lineActual(x)),
     0,
   );
   const factAmount = (form.value.details ?? []).reduce((s: number, x: any) => s + lineActual(x), 0);
@@ -88,11 +87,14 @@ async function loadDicts() {
 async function customerChanged() {
   if (!form.value.customerId) return;
   const c: any = await api.get(`/base-data/customers/${form.value.customerId}`);
+  const nextOrgId = c.orgId ?? c.org_id ?? form.value.orgId;
+  const orgChanged = String(nextOrgId ?? '') !== String(form.value.orgId ?? '');
   Object.assign(form.value, {
     customerMobile: c.mobile ?? '',
     customerAddress: c.address ?? '',
-    orgId: c.orgId ?? c.org_id ?? form.value.orgId,
+    orgId: nextOrgId,
   });
+  if (orgChanged) await organizationChanged();
 }
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
@@ -110,12 +112,20 @@ async function organizationChanged() {
   form.value.warehouseId = '';
   form.value.details = [blankLine()];
   options.contextGoods = [];
+  options.stocks = [];
   await loadOrgWarehouses(form.value.orgId);
 }
 
-function warehouseChanged() {
+async function warehouseChanged() {
   form.value.details = [blankLine()];
-  loadContextGoods();
+  await Promise.all([loadContextGoods(), loadScopedStocks()]);
+}
+
+async function loadScopedStocks() {
+  // 销售订单记录客户需求；库存仅用于提示可用量，不能反向限制商品候选。
+  options.stocks = await fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(
+    () => [],
+  );
 }
 
 /** 按单据组织+仓库加载匹配商品（后端按分类仓库类型过滤），未选组织/仓库时清空 */
@@ -172,13 +182,9 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
-  );
-  return list.map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
+  return filterMappedGoodsByKeyword(options.contextGoods, keyword).map((item: any) => ({
+    value: item.id ?? item.goodsId,
+    label: `${item.queryCode || ''} ${item.goodsName || ''}`.trim(),
   }));
 }
 
@@ -231,17 +237,13 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, customers, goodsResult, units] = await Promise.all([
+  const [orgs, customers, units] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/customers/options').catch(() => []),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
     api.get('/base-data/units/options').catch(() => []),
   ]);
   options.orgs = orgs;
   options.customers = customers;
-  options.goods = (goodsResult as any).items ?? [];
   options.units = units;
   await loadDicts();
 
@@ -272,7 +274,7 @@ onMounted(async () => {
     }));
   }
   await loadOrgWarehouses(form.value.orgId);
-  await loadContextGoods();
+  await Promise.all([loadContextGoods(), loadScopedStocks()]);
 });
 </script>
 
@@ -280,8 +282,18 @@ onMounted(async () => {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="客户" required>
-        <el-select v-model="form.customerId" filterable :disabled="isView" @change="customerChanged">
-          <el-option v-for="x in options.customers" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select
+          v-model="form.customerId"
+          filterable
+          :disabled="isView"
+          @change="customerChanged"
+        >
+          <el-option
+            v-for="x in options.customers"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="所属组织" required>
@@ -310,7 +322,12 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="订单日期" required>
-        <el-date-picker v-model="form.orderDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.orderDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="订单来源">
         <el-select v-model="form.sourceType" :disabled="isView">
@@ -350,7 +367,7 @@ onMounted(async () => {
           <RemoteSelect
             v-model="s.row.goodsId"
             :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || goodsOf(s.row).goodsName"
+            :current-label="s.row.goodsName || '—'"
             :disabled="isView || !form.warehouseId"
             placeholder="请先选择组织与仓库，再搜索商品"
             @change="lineGoodsChanged(s.row)"
@@ -358,10 +375,12 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
-        <template #default="s">{{ s.row.goodsCode || goodsOf(s.row).queryCode || '—' }}</template>
+        <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="125">
-        <template #default="s">{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">{{
+          s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—'
+        }}</template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ lineUnitName(s.row) }}</template>
@@ -377,26 +396,36 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="金额" width="120">
-        <template #default="s">{{ moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0)) }}</template>
+        <template #default="s">{{
+          moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0))
+        }}</template>
       </el-table-column>
       <el-table-column label="可用库存" width="100">
         <template #default="s">
-          {{ s.row.availableStock == null ? '—' : Number(s.row.availableStock).toLocaleString('zh-CN') }}
+          {{
+            s.row.availableStock == null
+              ? '—'
+              : Number(s.row.availableStock).toLocaleString('zh-CN')
+          }}
         </template>
       </el-table-column>
+      <!-- 供应方式/商品形态：后端详情接口未富化这两类字段，且已不再加载全量商品列表反查，缺失时显示 '—' -->
       <el-table-column label="供应方式" width="110">
-        <template #default="s">
-          {{ goodsOf(s.row).supplyTypeName || goodsOf(s.row).supply_type_name || goodsOf(s.row).supplyType || '—' }}
-        </template>
+        <template #default="s">—</template>
       </el-table-column>
       <el-table-column label="商品形态" width="110">
-        <template #default="s">
-          {{ goodsOf(s.row).goodsFormName || goodsOf(s.row).goods_form_name || goodsOf(s.row).goodsForm || '—' }}
-        </template>
+        <template #default="s">—</template>
       </el-table-column>
       <el-table-column label="数量" width="130">
         <template #default="s">
-          <el-input-number v-model="s.row.quantity" :min="1" :precision="0" :step="1" :disabled="isView" @change="stockChanged(s.row)" />
+          <el-input-number
+            v-model="s.row.quantity"
+            :min="1"
+            :precision="0"
+            :step="1"
+            :disabled="isView"
+            @change="stockChanged(s.row)"
+          />
         </template>
       </el-table-column>
       <el-table-column label="备注" min-width="140">
@@ -410,10 +439,18 @@ onMounted(async () => {
     </el-table>
 
     <div v-if="(form.details ?? []).length" class="order-totals">
-      <span>合计数量：<strong>{{ orderTotals.quantity.toLocaleString('zh-CN') }}</strong></span>
-      <span>订单金额：<strong>¥ {{ moneyText(orderTotals.orderAmount) }}</strong></span>
-      <span>旧物折价金额：<strong>¥ {{ moneyText(orderTotals.discount) }}</strong></span>
-      <span>实付金额：<strong>¥ {{ moneyText(orderTotals.factAmount) }}</strong></span>
+      <span
+        >合计数量：<strong>{{ orderTotals.quantity.toLocaleString('zh-CN') }}</strong></span
+      >
+      <span
+        >订单金额：<strong>¥ {{ moneyText(orderTotals.orderAmount) }}</strong></span
+      >
+      <span
+        >旧物折价金额：<strong>¥ {{ moneyText(orderTotals.discount) }}</strong></span
+      >
+      <span
+        >实付金额：<strong>¥ {{ moneyText(orderTotals.factAmount) }}</strong></span
+      >
     </div>
 
     <div class="form-grid" style="margin-top: 12px">

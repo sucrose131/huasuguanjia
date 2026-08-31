@@ -39,6 +39,15 @@ export class BusinessMasterDataService {
     return warehouse;
   }
 
+  private async organizationWarehouseTypes(orgId: bigint, db: Db) {
+    const warehouses = await db.hspsi_basic_warehouse.findMany({
+      where: { org_id: orgId, status: 1, deleted_at: null, warehouse_type: { gt: 0 } },
+      distinct: ['warehouse_type'],
+      select: { warehouse_type: true },
+    });
+    return [...new Set(warehouses.map((item) => item.warehouse_type))];
+  }
+
   async goodsOptions(
     orgIdValue: bigint | string | number,
     warehouseIdValue: bigint | string | number,
@@ -52,7 +61,6 @@ export class BusinessMasterDataService {
     });
     const items = await db.hspsi_goods_info.findMany({
       where: {
-        org_id: { in: [0n, orgId] },
         goods_catg_id: { in: categories.map((item) => item.goods_catg_id) },
         status: 1,
         deleted_at: null,
@@ -64,34 +72,46 @@ export class BusinessMasterDataService {
       goodsId: item.goods_id,
       queryCode: item.query_code,
       goodsName: item.goods_name,
+      shortName: item.short_name,
+      brandName: item.brand_name,
       categoryId: item.goods_catg_id,
       categoryWarehouseType: warehouse.warehouse_type,
     }));
   }
 
-  /** 按组织返回全部启用商品（不按仓库类型过滤），携带分类 warehouse_type 供前端做仓库兼容匹配 */
+  /** 按组织实际拥有的启用仓库类型返回商品，供“先选商品、后选仓库”表单使用。 */
   async goodsOptionsByOrg(
     orgIdValue: bigint | string | number,
     db: Db = this.prisma,
   ) {
     const orgId = this.id(orgIdValue, '组织');
+    const warehouseTypes = await this.organizationWarehouseTypes(orgId, db);
+    if (!warehouseTypes.length) return [];
+    const categories = await db.hspsi_goods_info_category.findMany({
+      where: {
+        warehouse_type: { in: warehouseTypes },
+        status: 1,
+        deleted_at: null,
+      },
+      select: { goods_catg_id: true, warehouse_type: true },
+    });
+    if (!categories.length) return [];
     const items = await db.hspsi_goods_info.findMany({
-      where: { org_id: { in: [0n, orgId] }, status: 1, deleted_at: null },
+      where: {
+        goods_catg_id: { in: categories.map((item) => item.goods_catg_id) },
+        status: 1,
+        deleted_at: null,
+      },
       orderBy: [{ sort: 'asc' }, { goods_id: 'asc' }],
     });
-    const categoryIds = [...new Set(items.map((item) => String(item.goods_catg_id)))];
-    const categories = categoryIds.length
-      ? await db.hspsi_goods_info_category.findMany({
-          where: { goods_catg_id: { in: categoryIds.map(BigInt) } },
-          select: { goods_catg_id: true, warehouse_type: true },
-        })
-      : [];
     const typeMap = new Map(categories.map((c) => [String(c.goods_catg_id), c.warehouse_type]));
     return items.map((item) => ({
       id: item.goods_id,
       goodsId: item.goods_id,
       queryCode: item.query_code,
       goodsName: item.goods_name,
+      shortName: item.short_name,
+      brandName: item.brand_name,
       categoryId: item.goods_catg_id,
       categoryWarehouseType: typeMap.get(String(item.goods_catg_id)) ?? 0,
     }));
@@ -105,7 +125,8 @@ export class BusinessMasterDataService {
   ) {
     const orgId = this.id(orgIdValue, '组织');
     const warehouse = await this.assertWarehouse(orgId, warehouseIdValue, db);
-    const goods = await this.assertGoodsActive(orgId, lines, db);
+    // 已有具体仓库时，由下方精确比较该仓库类型；无需先做组织仓库类型并集校验。
+    const goods = await this.assertGoodsActive(orgId, lines, db, false);
     const categories = await db.hspsi_goods_info_category.findMany({
       where: {
         goods_catg_id: { in: [...new Set(goods.map((item) => item.goods_catg_id))] },
@@ -133,6 +154,7 @@ export class BusinessMasterDataService {
     orgIdValue: bigint | string | number,
     lines: BusinessGoodsLine[],
     db: Db = this.prisma,
+    requireOrganizationWarehouseType = true,
   ) {
     const orgId = this.id(orgIdValue, '组织');
     if (!lines.length) throw new BadRequestException('至少需要一条商品明细');
@@ -143,7 +165,6 @@ export class BusinessMasterDataService {
     const goods = await db.hspsi_goods_info.findMany({
       where: {
         goods_id: { in: uniqueGoodsIds },
-        org_id: { in: [0n, orgId] },
         status: 1,
         deleted_at: null,
       },
@@ -157,6 +178,9 @@ export class BusinessMasterDataService {
       },
     });
     const categoryById = new Map(categories.map((item) => [String(item.goods_catg_id), item]));
+    const allowedWarehouseTypes = requireOrganizationWarehouseType
+      ? new Set(await this.organizationWarehouseTypes(orgId, db))
+      : null;
 
     const skuLines = lines.filter((line) => line.skuId !== undefined && line.skuId !== null);
     const skus = skuLines.length
@@ -173,11 +197,15 @@ export class BusinessMasterDataService {
     for (const line of lines) {
       const goodsId = this.id(line.goodsId, '商品');
       const item = goodsById.get(String(goodsId));
-      if (!item) throw new BadRequestException('所选商品不存在、不属于当前单据组织或已停用');
+      if (!item) throw new BadRequestException('所选商品不存在或已停用');
       const category = categoryById.get(String(item.goods_catg_id));
       if (!category) throw new BadRequestException(`商品“${item.goods_name}”的分类不存在或已停用`);
       if (!Number.isSafeInteger(category.warehouse_type) || category.warehouse_type <= 0)
         throw new BadRequestException(`商品“${item.goods_name}”的分类未配置仓库类型`);
+      if (allowedWarehouseTypes && !allowedWarehouseTypes.has(category.warehouse_type))
+        throw new BadRequestException(
+          `当前单据组织没有商品“${item.goods_name}”对应仓库类型的启用仓库`,
+        );
       if (line.skuId !== undefined && line.skuId !== null) {
         const sku = skuById.get(String(this.id(line.skuId, 'SKU')));
         if (!sku || sku.good_id !== goodsId)

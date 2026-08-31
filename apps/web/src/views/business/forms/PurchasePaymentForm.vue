@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
@@ -27,11 +27,18 @@ const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
-
-const maxAmount = computed(() => {
-  const remaining = Number(form.value.orderRemaining ?? 0);
-  return remaining > 0 ? remaining : undefined;
+const remainingAfterPayment = computed(() =>
+  Math.max(0, Number(form.value.orderRemaining ?? 0) - Number(form.value.paymentAmount ?? 0)),
+);
+const paymentProgressStatus = computed(() => {
+  if (remainingAfterPayment.value <= 0 && Number(form.value.effectivePayable ?? 0) > 0) return 2;
+  if (Number(form.value.netPaidAmount ?? 0) + Number(form.value.paymentAmount ?? 0) > 0) return 1;
+  return 0;
 });
+
+function dictLabel(code: string, value: unknown) {
+  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
+}
 
 /** 按组织加载部门/仓库选项（走后端），组织为空时清空 */
 async function loadOrgOptions(orgId: unknown) {
@@ -64,8 +71,10 @@ function vendorLabel(id: unknown) {
 async function loadDicts() {
   const values = await Promise.all([
     api.get('/dictionaries/payment_channel').catch(() => []),
+    api.get('/dictionaries/purchase_payment_progress_status').catch(() => []),
   ]);
   dicts.payment_channel = values[0] as any[];
+  dicts.purchase_payment_progress_status = values[1] as any[];
 }
 
 async function searchPurchaseOrderOptions(keyword: string) {
@@ -94,6 +103,12 @@ async function orderChanged() {
   form.value.deptId = order.deptId ?? order.dept_id ?? '';
   form.value.warehouseId = order.warehouseId ?? order.warehouse_id ?? '';
   form.value.effectivePayable = Number(order.effectivePayable ?? 0);
+  form.value.payableAmount = Number(order.payableAmount ?? order.totalAmount ?? order.effectivePayable ?? 0);
+  form.value.paidAmount = Number(order.paidAmount ?? 0);
+  form.value.refundedAmount = Number(order.refundedAmount ?? 0);
+  form.value.netPaidAmount = Number(
+    order.netPaidAmount ?? form.value.paidAmount - form.value.refundedAmount,
+  );
   form.value.orderRemaining = Number(order.remainingPayable ?? order.effectivePayable ?? 0);
   form.value.paymentAmount = Math.min(
     Number(form.value.paymentAmount ?? 0),
@@ -137,6 +152,16 @@ function validate() {
 
 async function save() {
   if (!validate()) return;
+  const amount = Number(form.value.paymentAmount ?? 0);
+  try {
+    await ElMessageBox.confirm(`确认登记本次付款 ¥ ${moneyText(amount)}？`, '确认采购付款', {
+      type: 'warning',
+      confirmButtonText: '确认付款',
+      cancelButtonText: '取消',
+    });
+  } catch {
+    return;
+  }
   saving.value = true;
   try {
     const url = '/purchase/payments';
@@ -146,7 +171,7 @@ async function save() {
       deptId: form.value.deptId,
       warehouseId: form.value.warehouseId ?? '',
       paymentChannel: Number(form.value.paymentChannel),
-      paymentAmount: Number(form.value.paymentAmount),
+      paymentAmount: amount,
       paymentDate: form.value.paymentDate,
       remark: form.value.remark ?? '',
     };
@@ -187,7 +212,14 @@ onMounted(async () => {
     if (form.value.orderId) await orderChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/purchase/payments/${form.value.id}`).catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    if (detail) {
+      Object.assign(form.value, detail, {
+        payableAmount: Number(detail.payableAmount ?? detail.orderPayable ?? 0),
+        paidAmount: Number(detail.paidAmount ?? detail.orderPaid ?? 0),
+        refundedAmount: Number(detail.refundedAmount ?? detail.orderRefunded ?? 0),
+        netPaidAmount: Number(detail.netPaidAmount ?? detail.netPaid ?? 0),
+      });
+    }
     await loadOrgOptions(form.value.orgId);
   }
 });
@@ -260,7 +292,6 @@ onMounted(async () => {
         <el-input-number
           v-model="form.paymentAmount"
           :min="0.01"
-          :max="maxAmount"
           :precision="2"
           controls-position="right"
           style="width: 100%"
@@ -275,11 +306,20 @@ onMounted(async () => {
           style="width: 100%"
         />
       </el-form-item>
+      <el-form-item label="付款人">
+        <el-input :model-value="form.payerName || auth.user?.username || '—'" disabled />
+      </el-form-item>
     </div>
 
     <div class="money-ref">
+      <span>订单总金额：<strong>{{ money(form.payableAmount) }}</strong></span>
       <span>退货后应付：<strong>{{ money(form.effectivePayable) }}</strong></span>
+      <span>累计付款：<strong>{{ money(form.paidAmount) }}</strong></span>
+      <span>累计退款：<strong>{{ money(form.refundedAmount) }}</strong></span>
+      <span>净已付款：<strong>{{ money(form.netPaidAmount) }}</strong></span>
       <span>剩余应付：<strong>{{ money(form.orderRemaining) }}</strong></span>
+      <span>付款后剩余：<strong>{{ money(remainingAfterPayment) }}</strong></span>
+      <span>付款后进度：<strong>{{ dictLabel('purchase_payment_progress_status', paymentProgressStatus) }}</strong></span>
     </div>
 
     <el-form-item label="备注" class="span-2">
@@ -304,6 +344,7 @@ onMounted(async () => {
 }
 .money-ref {
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
   margin: 4px 0 12px;
   font-size: 13px;

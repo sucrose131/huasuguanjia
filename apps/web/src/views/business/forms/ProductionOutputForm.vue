@@ -7,6 +7,7 @@ import { dateText } from '@/utils/format';
 import { lineUnitName, type UnitOption } from '@/utils/unit-name';
 import BatchMaterialTable from '@/components/production/BatchMaterialTable.vue';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import { fetchScopedStockOptions } from '../use-scoped-stock-options';
 
 type B = Record<string, any>;
 
@@ -74,13 +75,9 @@ function blankRow(): B {
 function refreshRowStock(row: B) {
   const stocks = allStocks.value.filter(
     (stock: B) =>
-      String(stock.goodsId) === String(row.goodsId) &&
-      String(stock.skuId) === String(row.skuId),
+      String(stock.goodsId) === String(row.goodsId) && String(stock.skuId) === String(row.skuId),
   );
-  row.stockQty = stocks.reduce(
-    (sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0),
-    0,
-  );
+  row.stockQty = stocks.reduce((sum: number, stock: B) => sum + Number(stock.inventoryQty ?? 0), 0);
   for (const batchRow of row.batchRows ?? []) {
     const stock = stocks.find((item: B) => String(item.batchNo) === String(batchRow.batchNo));
     batchRow.avail = Number(stock?.inventoryQty ?? 0);
@@ -91,19 +88,15 @@ function refreshAllRowStocks() {
   rows.value.forEach(refreshRowStock);
 }
 
-async function reloadStocks() {
+async function reloadStocks(resetRows = true) {
   if (!form.value.warehouseId) {
     allStocks.value = [];
     options.goods = [];
-    rows.value = [blankRow()];
+    if (resetRows) rows.value = [blankRow()];
     return;
   }
   const [stocks, goods] = (await Promise.all([
-    api
-      .get('/inventory/stock-options', {
-        params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
-      })
-      .catch(() => []),
+    fetchScopedStockOptions(form.value.orgId, form.value.warehouseId).catch(() => []),
     api
       .get('/production/product-options', {
         params: { orgId: form.value.orgId, warehouseId: form.value.warehouseId },
@@ -112,7 +105,8 @@ async function reloadStocks() {
   ])) as any[];
   allStocks.value = stocks;
   options.goods = goods;
-  rows.value = [blankRow()];
+  if (resetRows) rows.value = [blankRow()];
+  else refreshAllRowStocks();
 }
 
 function onRowsChanged(newRows: B[]) {
@@ -180,10 +174,11 @@ async function planChanged() {
 
 async function searchPlanOptions(keyword: string) {
   if (!String(keyword ?? '').trim()) {
-    const base = (options.plans ?? []).filter((p: B) =>
-      Number(p.planStatus) === 3 &&
-      Number(p.approveStatus) === 1 &&
-      Number(p.outboundStatus) === 0,
+    const base = (options.plans ?? []).filter(
+      (p: B) =>
+        Number(p.planStatus) === 3 &&
+        Number(p.approveStatus) === 1 &&
+        Number(p.outboundStatus) === 0,
     );
     return base.map((x: B) => ({ value: x.id, label: x.planNo }));
   }
@@ -295,12 +290,31 @@ onMounted(async () => {
       }
     } else if (form.value.id) {
       const detail: any = await api.get(`/production/outputs/${form.value.id}`).catch(() => null);
-      if (detail) Object.assign(form.value, detail);
+      const plan: any = detail?.planId
+        ? await api.get(`/production/plans/${detail.planId}`).catch(() => null)
+        : null;
+      if (detail)
+        Object.assign(form.value, detail, {
+          orgId: String(detail.orgId ?? ''),
+          warehouseId: String(detail.warehouseId ?? ''),
+          planId: detail.planId == null ? '' : String(detail.planId),
+          bomId: detail.bomId ?? plan?.bomId ?? '',
+          bomNo: detail.bomNo ?? plan?.bomNo ?? '',
+          goodsName: detail.goodsName ?? plan?.goodsName ?? '',
+        });
+      const planLineMap = new Map<string, B>(
+        (plan?.details ?? []).map((line: B) => [`${line.goodsId}:${line.skuId}`, line]),
+      );
       const grouped = new Map<string, B>();
       for (const line of form.value.details ?? []) {
         const key = `${line.goodsId ?? ''}:${line.skuId ?? ''}`;
+        const planLine = planLineMap.get(key);
         const existing = grouped.get(key);
-        const batchRow = { batchNo: line.batchNo ?? '', qty: Number(line.quantity ?? 0), avail: Number(line.inventoryQty ?? 0) };
+        const batchRow = {
+          batchNo: line.batchNo ?? '',
+          qty: Number(line.quantity ?? 0),
+          avail: Number(line.inventoryQty ?? 0),
+        };
         if (existing) {
           existing.batchRows.push(batchRow);
           continue;
@@ -311,16 +325,18 @@ onMounted(async () => {
           goodsName: line.goodsName ?? '—',
           skuSpec: line.skuSpec ?? line.goodsSpec ?? '—',
           unitName: line.unitName ?? lineUnitName(options.units as UnitOption[], line),
-          bomUnitQty: line.bomUnitQty ?? '—',
-          totalDemand: line.standardQty ?? line.totalDemand ?? line.quantity ?? 0,
+          bomUnitQty: line.bomUnitQty ?? planLine?.bomUnitQty ?? '—',
+          totalDemand:
+            line.standardQty ?? planLine?.standardQty ?? line.totalDemand ?? line.quantity ?? 0,
           stockQty: line.currentStock ?? 0,
-          planQty: line.planOutQty ?? line.quantity ?? 0,
+          planQty: line.planOutQty ?? planLine?.planOutQty ?? line.quantity ?? 0,
           batchRows: [batchRow],
         });
       }
       rows.value = [...grouped.values()];
       await loadOrgWarehouses(form.value.orgId);
-      await reloadStocks();
+      // 已确认的查看详情必须保留单据发生时的出库数量，不能按当前库存反向截断历史值。
+      if (!isView.value) await reloadStocks(false);
     }
   } catch (e: any) {
     error.value = e?.response?.data?.message ?? '加载失败';
@@ -384,8 +400,18 @@ watch(
         />
       </el-form-item>
       <el-form-item label="仓库" required>
-        <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId" @change="reloadStocks">
-          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
+        <el-select
+          v-model="form.warehouseId"
+          filterable
+          :disabled="isView || !form.orgId"
+          @change="reloadStocks"
+        >
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item v-if="isLab" label="出库去向" required>
@@ -399,7 +425,12 @@ watch(
         </el-select>
       </el-form-item>
       <el-form-item label="出库日期" required>
-        <el-date-picker v-model="form.outDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.outDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <template v-if="!isLab">
         <el-form-item label="BOM编号">

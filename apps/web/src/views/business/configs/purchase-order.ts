@@ -86,9 +86,21 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
     },
     {
       prop: 'arrivalProgress',
-      label: '到货进度',
+      label: '原始到货率',
       width: 96,
       kind: 'progress',
+    },
+    {
+      prop: 'handlingProgress',
+      label: '处理完成率',
+      width: 104,
+      kind: 'progress',
+    },
+    {
+      prop: 'statusProgress',
+      label: '业务进展',
+      minWidth: 210,
+      tooltip: true,
     },
     {
       prop: 'orderStatus',
@@ -98,10 +110,16 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       statusDict: 'purchase_order_status',
     },
     {
+      prop: 'receiverId',
+      label: '收货人',
+      width: 104,
+      render: (row, ctx) => row.receiverName || ctx.lookup('users', row.receiverId),
+    },
+    {
       prop: 'createdBy',
       label: '创建人',
       width: 96,
-      render: (row, ctx) => ctx.creator(row),
+      render: (row, ctx) => row.createdByName || ctx.creator(row),
     },
   ],
   dictionaries: ['purchase_settlement_type', 'purchase_order_status', 'purchase_payment_progress_status'],
@@ -139,11 +157,11 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
     }
     const id = String(query.documentId ?? query.viewId ?? '');
     if (id) {
-      const detail: any = await api.get(`/purchase/orders/${id}`);
       const viewOnly =
         String(query.view ?? '') === '1' || Boolean(query.viewId) || !canEditAmount();
-      if (viewOnly) ctx.openView(detail);
-      else ctx.openEdit(detail);
+      const row = { id };
+      if (viewOnly) ctx.openView(row);
+      else ctx.openEdit(row);
     }
   },
   rowActions: [
@@ -172,6 +190,8 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.orderStatus) === 1,
       confirm: '开始采购后订单进入采购执行，是否继续？',
+      confirmTitle: '开始采购',
+      confirmButtonText: '确认开始',
       handler: async (row) => {
         const result: any = await api.post(`/purchase/orders/${row.id}/start`, {});
         ElMessage.success(result?.message ?? '采购订单已开始采购');
@@ -183,40 +203,31 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       kind: 'success',
       primary: false,
       show: (row) =>
-        [2, 3].includes(Number(row.orderStatus)) && Number(row.isAllArrived) !== 1,
+        row.canGenerateNormalReceipt === true && Number(row.normalAvailableQuantity ?? 0) > 0,
       confirm: '生成待入库单，是否继续？',
-      handler: async (row) => {
-        const result: any = await api.post(`/purchase/orders/${row.id}/generate-receipt`, {});
+      handler: async (row, ctx) => {
+        const result: any = await api.post(`/purchase/orders/${row.id}/generate-receipt`, {
+          inputType: 1,
+        });
         ElMessage.success(result?.message ?? '采购入库单已生成');
+        await ctx.navigate('/purchase/receipts', { receiptId: String(result.id) });
       },
     },
     {
-      key: 'cancel-pending',
-      label: '退回未到货',
-      kind: 'warning',
+      key: 'generate-exchange-receipt',
+      label: '生成换货入库',
+      kind: 'success',
       primary: false,
+      permission: 'generate-receipt',
       show: (row) =>
-        [2, 3].includes(Number(row.orderStatus)) &&
-        Number(row.quantity) - Number(row.arrivedQuantity) - Number(row.cancelQty) > 0,
-      confirm: '将未到货部分标记退回，是否继续？',
-      handler: async (row) => {
-        const detail: any = await api.get(`/purchase/orders/${row.id}`);
-        const lines = (detail.details ?? [])
-          .map((line: any) => ({
-            goodsId: line.goodsId,
-            skuId: line.skuId,
-            cancelQuantity: Number(line.remainingQuantity ?? 0),
-          }))
-          .filter((line: any) => Number(line.cancelQuantity) > 0);
-        if (!lines.length) {
-          ElMessage.warning('该订单没有可退回的未到货数量');
-          return;
-        }
-        const result: any = await api.post(`/purchase/orders/${row.id}/cancel-pending`, {
-          reason: '采购订单未到货退回',
-          details: lines,
+        row.canGenerateExchangeReceipt === true && Number(row.exchangeAvailableQuantity ?? 0) > 0,
+      confirm: '将按已生效换货退回数量生成换货入库单，是否继续？',
+      handler: async (row, ctx) => {
+        const result: any = await api.post(`/purchase/orders/${row.id}/generate-receipt`, {
+          inputType: 2,
         });
-        ElMessage.success(result?.message ?? '未到货数量已退回');
+        ElMessage.success(result?.message ?? '采购换货入库单已生成');
+        await ctx.navigate('/purchase/receipts', { receiptId: String(result.id) });
       },
     },
     {
@@ -226,6 +237,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.orderStatus) === 1,
       confirm: '确认删除该采购订单？',
+      confirmTitle: '确认删除',
       handler: async (row) => {
         await api.delete(`/purchase/orders/${row.id}`);
         ElMessage.success('删除成功');

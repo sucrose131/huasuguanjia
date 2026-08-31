@@ -18,6 +18,7 @@ describe('ScheduledTaskHandlers', () => {
   const shifangUsers = { syncUsers: vi.fn() };
   const shifangGoods = { syncGoods: vi.fn() };
   const shifangOrders = { syncOrders: vi.fn() };
+  const shifangAgentOrders = { syncAgentOrders: vi.fn() };
   const oaOrg = { syncAll: vi.fn() };
   let handlers: ScheduledTaskHandlers;
 
@@ -32,6 +33,7 @@ describe('ScheduledTaskHandlers', () => {
       shifangUsers as never,
       shifangGoods as never,
       shifangOrders as never,
+      shifangAgentOrders as never,
       oaOrg as never,
     );
   });
@@ -88,6 +90,23 @@ describe('ScheduledTaskHandlers', () => {
       failures: [],
     });
     await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_ORDERS)).resolves.toContain('拉取8');
+  });
+
+  it('路由十方清源自提订单同步', async () => {
+    shifangAgentOrders.syncAgentOrders.mockResolvedValue({
+      fetched: 5,
+      created: 2,
+      updated: 1,
+      skipped: 1,
+      failed: 0,
+      outputs: 2,
+      exits: 1,
+      warnings: [],
+      failures: [],
+    });
+    await expect(handlers.execute(SCHEDULED_TASK_CODE.SHIFANG_AGENT_ORDERS)).resolves.toContain(
+      '拉取5',
+    );
   });
 
   it('路由 OA 组织同步', async () => {

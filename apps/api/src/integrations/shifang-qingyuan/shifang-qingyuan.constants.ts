@@ -44,7 +44,38 @@ export const SHIFANG_QINGYUAN_RULE_STATUS = {
 /** 外部订单业务类型（由拉取接口族决定，非订单体字段） */
 export const SHIFANG_QINGYUAN_ORDER_TYPE = {
   SALE_ORDER: 'SALE_ORDER',
+  /** 云库存自提单（cloud-stock-agent-order） */
+  CLOUD_STOCK_AGENT_ORDER: 'CLOUD_STOCK_AGENT_ORDER',
 } as const;
+
+/**
+ * 自提单发货状态（cloud-stock-agent-order send_status）
+ * 0待发货 1已发货 2已完成 3未支付运费 4已取消
+ */
+export const SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS = {
+  PENDING_SHIP: 0,
+  SHIPPED: 1,
+  COMPLETED: 2,
+  UNPAID_FREIGHT: 3,
+  CANCELLED: 4,
+} as const;
+
+/** 自提单视为已发货（需出库） */
+export const SHIFANG_QINGYUAN_AGENT_ORDER_SHIPPED_STATUSES = new Set<number>([
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.SHIPPED,
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.COMPLETED,
+]);
+
+/** 自提单可同步入库：待发货 / 已发货 / 已完成 / 已取消；未支付运费跳过 */
+export const SHIFANG_QINGYUAN_AGENT_ORDER_SYNCABLE_STATUSES = new Set<number>([
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.PENDING_SHIP,
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.SHIPPED,
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.COMPLETED,
+  SHIFANG_QINGYUAN_AGENT_ORDER_SEND_STATUS.CANCELLED,
+]);
+
+/** 自提增量水位重叠窗口，避免 list 无 updated_at 时边界漏单 */
+export const SHIFANG_QINGYUAN_AGENT_ORDER_SYNC_OVERLAP_MS = 5 * 60 * 1000;
 
 /**
  * 快照级出库类型（list/detail 与 order 同级的 order_type，v8）

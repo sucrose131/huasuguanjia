@@ -44,6 +44,8 @@ export type QueryField = {
   optionBag?: OptionBagName;
   /** 依赖字段：该字段值变化时，清空本字段值并重新加载选项、重新查询（如 仓库 依赖 组织） */
   dependsOn?: string;
+  /** 依赖字段为空时也加载选项（配合 loadOptions：不选组织时默认加载授权组织下的仓库，选中后收窄） */
+  loadOnEmptyDep?: boolean;
   /** 动态选项加载（走后端）：返回 {value,label,raw?}[]，优先于 optionBag/options/dictionary；常用于按依赖字段过滤的选项 */
   loadOptions?: (deps: Record<string, any>) => Promise<Array<{ value: string | number; label: string; raw?: any }>>;
   /** 远程搜索（remote-select 用）：返回 {value,label}[] */
@@ -65,12 +67,24 @@ export type RowAction = {
   show?: (row: Record<string, any>) => boolean;
   /** 操作前的确认文案（可动态按行生成） */
   confirm?: string | ((row: Record<string, any>) => string);
+  /** 旧版确认框标题和按钮文案；未配置时按当前操作名称生成。 */
+  confirmTitle?: string | ((row: Record<string, any>) => string);
+  confirmButtonText?: string;
+  cancelButtonText?: string;
+  confirmType?: 'success' | 'warning' | 'info' | 'error';
+  /** 预检：返回非空文案时中止操作（不发请求、不弹确认框），用于“先编辑补数据再操作”的引导 */
+  verify?: (row: Record<string, any>) => string | null | undefined | Promise<string | null | undefined>;
   /** 是否作为主操作平铺展示（默认 true：平铺在操作列；false 时收进“更多”下拉） */
   primary?: boolean;
   /** 菜单内操作权限；支持 create/update/delete，或完整权限码。缺省按 action key 推导。 */
   permission?: string;
   /** 操作回调：ctx 提供打开表单、刷新列表等能力 */
   handler: (row: Record<string, any>, ctx: BusinessDocumentContext) => void | Promise<void>;
+  /**
+   * handler 完成后是否刷新列表。默认 true；调用 ctx.openCreate/openEdit/openView/navigate
+   * 时共享引擎会自动跳过刷新。仅供不经过 ctx 打开的只读自定义弹框显式设为 false。
+   */
+  refreshAfter?: boolean;
 };
 
 /** 引擎上下文（传给表单组件 / 行操作） */
@@ -110,6 +124,10 @@ export type BusinessDocumentConfig = {
   /** 页面及新增权限。缺省按当前路由和 create 操作判断。 */
   pagePermission?: string;
   createPermission?: string;
+  /** 关键字搜索框占位文案；缺省「单号 / 关键字」 */
+  keywordPlaceholder?: string;
+  /** 是否显示分页 footer；缺省 true（预警类全量列表设 false） */
+  pagination?: boolean;
   createText?: string;
   /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */
   createPreset?: () => Record<string, any>;
@@ -119,8 +137,14 @@ export type BusinessDocumentConfig = {
   formComponent?: Component;
   /** 通用表单弹框布局；复杂业务弹框仍由薄页面通过 business-dialogs 插槽挂载。 */
   dialog?: { width?: string; top?: string; className?: string };
+  /** 表单弹框标题定制（如采购入库的「办理采购入库」）；缺省用 title */
+  dialogTitle?: (mode: 'create' | 'edit' | 'view') => string;
+  /** 查看态关闭按钮已经由专属表单提供；缺省由共享弹框统一提供。 */
+  viewCloseInForm?: boolean;
   /** 查看、编辑前加载完整详情；未配置时沿用列表行。 */
   loadDetail?: (id: string | number) => Promise<Record<string, any>>;
+  /** 表单实际读取详情的接口前缀；缺省与 endpoint 相同。 */
+  detailEndpoint?: string;
   /** 路由深链处理：页面挂载时如有相关 query（documentId/applicationId/outputId 等），打开对应表单 */
   openFromRoute?: (
     query: Record<string, any>,

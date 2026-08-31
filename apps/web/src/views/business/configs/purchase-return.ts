@@ -99,6 +99,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
       confirm: '提交后将进入审批流程，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         await api.post(`/purchase/returns/${row.id}/submit`);
         ElMessage.success('已提交审批');
@@ -111,6 +112,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '审批通过将立即扣减库存，是否继续？',
+      confirmTitle: '确认审批通过',
       handler: async (row) => {
         await api.post(`/purchase/returns/${row.id}/approve`, {
           approved: true,
@@ -143,6 +145,7 @@ export const purchaseReturnConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0,
       confirm: '确认删除该采购退货记录？',
+      confirmTitle: '确认删除',
       handler: async (row) => {
         await api.delete(`/purchase/returns/${row.id}`);
         ElMessage.success('删除成功');

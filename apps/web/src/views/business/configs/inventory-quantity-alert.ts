@@ -4,7 +4,7 @@ import InventoryQuantityAlertForm from '../forms/InventoryQuantityAlertForm.vue'
 
 export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   key: 'inventory/quantity-alerts',
-  title: '数量预警',
+  title: '库存预警',
   subtitle: '按仓库监控安全库存、缺口及建议补货数量',
   endpoint: '/inventory/quantity-alerts',
   no: 'goodsName',
@@ -23,31 +23,34 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
       minWidth: 95,
       kind: 'status',
       statusDict: 'inventory_stock_health_status',
+      statusType: (row) => (row.warning ? 'danger' : 'success'),
       render: (row) => String(row.warning ? 1 : 0),
     },
   ],
   dictionaries: ['inventory_stock_health_status'],
   optionBags: ['orgs'],
+  autoStatusFilter: false,
   queryFields: [
     { key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 },
     {
-      key: 'warehouseId',
-      label: '仓库',
+      key: 'status',
+      label: '库存状态',
       type: 'select',
-      dependsOn: 'orgId',
-      width: 180,
-      loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
-        return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
-        })) as any[];
-      },
+      dictionary: 'inventory_stock_health_status',
+      width: 160,
     },
   ],
+  summaryLabels: [
+    { label: '库存品项', key: 'itemCount', kind: 'number' },
+    { label: '库存总值', key: 'totalAmount', kind: 'money' },
+    { label: '库存预警', key: 'warningCount', kind: 'number' },
+  ],
   creatable: false,
+  pagination: false,
+  dialog: { width: '520px', top: '4vh' },
   formComponent: InventoryQuantityAlertForm,
+  viewCloseInForm: true,
   rowActions: [
-    { key: 'view', label: '查看', handler: (row, ctx) => ctx.openView(row) },
-    { key: 'edit', label: '设置阈值', handler: (row, ctx) => ctx.openEdit(row) },
+    { key: 'edit', label: '配置', handler: (row, ctx) => ctx.openEdit(row) },
   ],
 };

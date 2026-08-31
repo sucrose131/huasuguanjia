@@ -20,15 +20,10 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   plans: [],
-  goods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
-
-function goodsOf(row: any) {
-  return options.goods.find((g: any) => String(g.id) === String(row.goodsId)) ?? {};
-}
 
 /** 按组织加载仓库选项（走后端），组织为空时清空 */
 async function loadOrgWarehouses(orgId: unknown) {
@@ -110,22 +105,19 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, plans, goodsResult] = await Promise.all([
+  const [orgs, plans] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/production/plans', { params: { pageSize: 100 } }).catch(() => ({ items: [] })),
-    api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
   ]);
   options.orgs = orgs;
   options.plans = (plans as any).items ?? [];
-  options.goods = (goodsResult as any).items ?? [];
 
   if (props.mode === 'create') {
+    const initialPlanId = form.value.planId ?? '';
     Object.assign(form.value, {
       orgId: auth.user?.orgId ?? '',
       warehouseId: '',
-      planId: '',
+      planId: initialPlanId,
       goodsId: '',
       skuId: '',
       planQty: 0,
@@ -138,9 +130,27 @@ onMounted(async () => {
       inputDate: dateText(new Date()),
       remark: '',
     });
+    if (form.value.planId) await planChanged();
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/inputs/${form.value.id}`).catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    if (detail) {
+      Object.assign(form.value, detail, {
+        orgId: String(detail.orgId ?? ''),
+        warehouseId: String(detail.warehouseId ?? ''),
+        planId: detail.planId == null ? '' : String(detail.planId),
+        deliveredQty: detail.deliveredQty ?? detail.cumulativeQty ?? 0,
+      });
+      // 兼容历史详情未富化成品名称/计划数量的情况，显示字段以生产计划为准补齐。
+      if ((!form.value.goodsName || form.value.planQty == null) && form.value.planId) {
+        const plan: any = await api
+          .get(`/production/plans/${form.value.planId}`)
+          .catch(() => null);
+        if (plan) {
+          form.value.goodsName ||= plan.goodsName ?? '';
+          form.value.planQty ??= plan.planQty ?? 0;
+        }
+      }
+    }
     await loadOrgWarehouses(form.value.orgId);
   }
 });
@@ -160,7 +170,7 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="入库成品">
-        <el-input :model-value="form.goodsName || goodsOf(form).goodsName || form.goodsId" readonly />
+        <el-input :model-value="form.goodsName || form.goodsId" readonly />
       </el-form-item>
       <el-form-item label="计划数量">
         <el-input :model-value="form.planQty ?? 0" readonly />
@@ -171,28 +181,52 @@ onMounted(async () => {
       <el-form-item label="剩余可入">
         <el-input
           :model-value="
-            Math.max(0, (Number(form.planQty) || 0) - (Number(form.deliveredQty ?? form.cumulativeQty) || 0))
+            Math.max(
+              0,
+              (Number(form.planQty) || 0) - (Number(form.deliveredQty ?? form.cumulativeQty) || 0),
+            )
           "
           readonly
         />
       </el-form-item>
       <el-form-item label="本次入库数量" required>
-        <el-input-number v-model="form.quantity" :min="1" :precision="0" :step="1" :disabled="isView" />
+        <el-input-number
+          v-model="form.quantity"
+          :min="1"
+          :precision="0"
+          :step="1"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="批号" required>
         <el-input v-model="form.batchNo" :disabled="isView" />
       </el-form-item>
       <el-form-item label="生产日期">
-        <el-date-picker v-model="form.productDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.productDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="有效期">
-        <el-date-picker v-model="form.validityPeriod" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.validityPeriod"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="库位">
         <el-input v-model="form.position" :disabled="isView" />
       </el-form-item>
       <el-form-item label="入库日期" required>
-        <el-date-picker v-model="form.inputDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.inputDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="仓库" required>
         <el-select v-model="form.warehouseId" filterable :disabled="isView || !form.orgId">
@@ -205,7 +239,7 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="操作人">
-        <el-input :model-value="auth.user?.username" readonly />
+        <el-input :model-value="form.createdByName || auth.user?.username || '—'" readonly />
       </el-form-item>
     </div>
 

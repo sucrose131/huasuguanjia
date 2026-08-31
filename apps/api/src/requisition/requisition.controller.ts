@@ -34,8 +34,17 @@ export class RequisitionController {
 
   @RequirePermissions('requisitions')
   @Get('application-form-options')
-  applicationFormOptions(@Query('orgId') orgId: string | undefined) {
-    return this.service.applicationFormOptions(orgId ?? '');
+  applicationFormOptions(
+    @Query('orgId') orgId: string | undefined,
+    @Query('deptId') deptId: string | undefined,
+  ) {
+    return this.service.applicationFormOptions(orgId ?? '', deptId);
+  }
+
+  @RequirePermissions('requisitions')
+  @Get('direct-output-options')
+  directOutputOptions(@CurrentUser() user: AuthUser) {
+    return this.service.directOutputOptions(user);
   }
   @RequirePermissions('requisitions')
   @Get('current-applicant')
@@ -120,13 +129,13 @@ export class RequisitionController {
   @RequirePermissions('requisitions')
   @Post('outputs')
   createOutput(@Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveOutput(null, body, user.id);
+    return this.service.saveOutput(null, body, user);
   }
 
   @RequirePermissions('requisitions')
   @Patch('outputs/:id')
   updateOutput(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    return this.service.saveOutput(id, body, user.id);
+    return this.service.saveOutput(id, body, user);
   }
 
   @RequirePermissions('requisitions')

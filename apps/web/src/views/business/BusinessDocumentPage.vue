@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api } from '@/api';
+import { api, primeDetailHandoff } from '@/api';
 import { moneyText } from '@/utils/format';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
@@ -10,6 +10,7 @@ import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.v
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { useBusinessDocumentPermissions } from './use-business-document-permissions';
 import { useBusinessDocumentOptions } from './use-business-document-options';
 import type {
@@ -28,12 +29,18 @@ const rows = ref<Record<string, any>[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const summary = reactive<Record<string, any>>({});
+const warehouseCounts = reactive<Record<string, number>>({});
 const query = reactive<Record<string, any>>({ keyword: '', page: 1, pageSize: 20 });
 
 // 表单对话框
 const formDialog = ref(false);
 const formMode = ref<'create' | 'edit' | 'view'>('create');
 const form = ref<Record<string, any>>({});
+const formDialogTitle = computed(() => {
+  if (props.config.dialogTitle) return props.config.dialogTitle(formMode.value);
+  const prefix = { create: '新增', edit: '编辑', view: '查看' }[formMode.value];
+  return `${prefix}${props.config.title}`;
+});
 const detailLoading = ref(false);
 const traceRef = ref<InstanceType<typeof BusinessDocumentTrace>>();
 const { canCreate, canRunAction } = useBusinessDocumentPermissions(() => props.config);
@@ -126,6 +133,8 @@ async function load() {
     total.value = data.total ?? rows.value.length;
     Object.keys(summary).forEach((k) => delete summary[k]);
     Object.assign(summary, data.summary ?? {});
+    Object.keys(warehouseCounts).forEach((k) => delete warehouseCounts[k]);
+    Object.assign(warehouseCounts, data.warehouseCounts ?? {});
   } finally {
     loading.value = false;
   }
@@ -148,22 +157,57 @@ function displayCell(
   return String(value);
 }
 
-// 金额：无查看权限掩码，有权限加 ¥ 前缀
+// 金额：无查看权限时仍带 ¥ 前缀掩码（对齐旧版「¥ ****」），有权限加 ¥ 前缀
 const protectedMoney = (value: unknown) => {
   const text = moneyText(value);
-  return text === '****' ? text : `¥ ${text}`;
+  return text === '****' ? '¥ ****' : `¥ ${text}`;
 };
 
+let openingFromRoute = false;
+
+function handoffResolvedDetail(row: Record<string, any>) {
+  if (row.id == null) return;
+  const endpoint = props.config.detailEndpoint ?? props.config.endpoint;
+  primeDetailHandoff(`${endpoint}/${row.id}`, row);
+}
+
 async function runAction(action: RowAction, row: Record<string, any>) {
+  // 打开弹框或跨页跳转属于只读/界面操作，不应在操作完成后刷新当前列表。
+  // 使用递增序号记录 handler 是否触发了这类交互；真正修改业务数据的 action
+  // 沿用成功后刷新，避免 100+ 份业务配置各自重复声明刷新规则。
+  const interactionVersionBefore = interactionVersion;
   try {
+    if (action.verify) {
+      const problem = await action.verify(row);
+      if (problem) {
+        ElMessage.warning(problem);
+        return;
+      }
+    }
     if (action.confirm) {
       const text = typeof action.confirm === 'function' ? action.confirm(row) : action.confirm;
-      await ElMessageBox.confirm(text, '提示', { type: 'warning' });
+      const actionLabel = typeof action.label === 'function' ? action.label(row) : action.label;
+      const title =
+        typeof action.confirmTitle === 'function'
+          ? action.confirmTitle(row)
+          : action.confirmTitle || actionLabel || '操作确认';
+      await ElMessageBox.confirm(text, title, {
+        type: action.confirmType ?? 'warning',
+        confirmButtonText: action.confirmButtonText ?? '确认',
+        cancelButtonText: action.cancelButtonText ?? '取消',
+      });
     }
     await action.handler(row, ctx);
-    await load();
+    if (action.refreshAfter !== false && interactionVersion === interactionVersionBefore) {
+      await load();
+    }
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(error instanceof Error ? error.message : String(error));
+    const action =
+      typeof error === 'object' && error && 'action' in error
+        ? String((error as { action?: unknown }).action ?? '')
+        : String(error ?? '');
+    if (!['cancel', 'close'].includes(action))
+      ElMessage.error(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -180,7 +224,10 @@ const moreActions = (row: Record<string, any>) =>
 const hasMoreActions = (row: Record<string, any>) =>
   moreActions(row).length > 0 || Boolean(slots['more-actions']) || Boolean(props.config.documentType);
 
+let interactionVersion = 0;
+
 function openCreate(initial: Record<string, any> = {}) {
+  interactionVersion += 1;
   formMode.value = 'create';
   form.value = { ...(props.config.createPreset?.() ?? {}), ...initial };
   formDialog.value = true;
@@ -197,11 +244,17 @@ async function resolveDetail(row: Record<string, any>) {
   }
 }
 async function openEdit(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'edit';
   form.value = await resolveDetail(row);
   formDialog.value = true;
 }
 async function openView(row: Record<string, any>) {
+  interactionVersion += 1;
+  if (openingFromRoute && !props.config.loadDetail && Object.keys(row).length > 1)
+    handoffResolvedDetail(row);
   formMode.value = 'view';
   form.value = await resolveDetail(row);
   formDialog.value = true;
@@ -216,9 +269,12 @@ const ctx: BusinessDocumentContext = {
   openEdit,
   openView,
   navigate: async (path, query) => {
+    interactionVersion += 1;
     await router.push({ path, query });
   },
 };
+
+defineExpose({ ctx, load, openCreate, openEdit, openView });
 
 watch(
   () => props.config.key,
@@ -231,7 +287,8 @@ watch(
     await loadOptionBags();
     // 深链/回显场景：依赖字段已有值时先加载下游选项
     for (const field of props.config.queryFields ?? []) {
-      if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+      if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+        await loadFieldOptions(field);
     }
     await load();
   },
@@ -242,7 +299,8 @@ onMounted(async () => {
   await loadOptionBags();
   // 深链/回显场景：依赖字段已有值时先加载下游选项
   for (const field of props.config.queryFields ?? []) {
-    if (field.dependsOn && query[field.dependsOn]) await loadFieldOptions(field);
+    if (field.dependsOn && (query[field.dependsOn] || field.loadOnEmptyDep))
+      await loadFieldOptions(field);
   }
   await load();
   if (String(route.query.create ?? '') === '1') {
@@ -250,7 +308,12 @@ onMounted(async () => {
     delete initial.create;
     openCreate(initial);
   } else if (props.config.openFromRoute && Object.keys(route.query).length) {
-    await props.config.openFromRoute(route.query, ctx);
+    openingFromRoute = true;
+    try {
+      await props.config.openFromRoute(route.query, ctx);
+    } finally {
+      openingFromRoute = false;
+    }
   }
 });
 </script>
@@ -263,6 +326,7 @@ onMounted(async () => {
         <p class="page-subtitle">{{ config.subtitle || '真实业务数据、来源追溯与库存事务处理' }}</p>
       </div>
       <div class="page-actions">
+        <el-button @click="load">刷新</el-button>
         <slot name="page-actions" :refresh="load" :open-create="openCreate" />
         <el-button
           v-if="canCreate"
@@ -274,14 +338,29 @@ onMounted(async () => {
     </header>
 
     <div class="panel">
-      <SummaryStrip v-if="summaryItems.length" :items="summaryItems" />
+      <slot
+        v-if="$slots.summary"
+        name="summary"
+        :summary="summary"
+        :rows="rows"
+        :total="total"
+      />
+      <SummaryStrip v-else-if="summaryItems.length" :items="summaryItems" />
+
+      <slot
+        name="query-tools"
+        :query="query"
+        :load="load"
+        :total="total"
+        :warehouse-counts="warehouseCounts"
+      />
 
       <div class="query-bar">
         <el-input
           v-model="query.keyword"
           class="query-field keyword"
           clearable
-          placeholder="单号 / 关键字"
+          :placeholder="config.keywordPlaceholder || '单号 / 关键字'"
           @keyup.enter="query.page = 1; load()"
         />
         <template v-for="field in config.queryFields ?? []" :key="field.key">
@@ -354,9 +433,9 @@ onMounted(async () => {
       </div>
 
       <div class="table-wrap">
-        <el-table :data="rows" v-loading="loading" border stripe row-key="id">
-          <el-table-column type="index" label="序号" width="65" fixed="left" />
-          <el-table-column prop="id" label="ID" width="100" fixed="left" />
+        <el-table :data="rows" v-loading="loading" border row-key="id">
+          <el-table-column type="index" label="序号" width="58" />
+          <el-table-column prop="id" label="ID" width="100" />
           <el-table-column
             v-for="column in config.columns"
             :key="column.prop"
@@ -364,11 +443,18 @@ onMounted(async () => {
             :width="column.width"
             :min-width="column.minWidth"
             :align="column.align"
-            :show-overflow-tooltip="column.tooltip"
           >
             <template #default="s">
+              <button
+                v-if="column.link"
+                type="button"
+                class="document-link"
+                @click="openView(s.row)"
+              >
+                {{ displayCell(s.row, column) }}
+              </button>
               <el-progress
-                v-if="column.kind === 'progress'"
+                v-else-if="column.kind === 'progress'"
                 :percentage="Math.round(Number(s.row[column.prop] || 0))"
                 :stroke-width="7"
               />
@@ -377,12 +463,22 @@ onMounted(async () => {
                 :value="column.statusDict && column.render ? displayCell(s.row, column) : s.row[column.prop]"
                 :dict-code="column.statusDict"
                 :label="column.render && !column.statusDict ? displayCell(s.row, column) : undefined"
+                :type="
+                  typeof column.statusType === 'function'
+                    ? column.statusType(s.row)
+                    : column.statusType
+                "
               />
+              <OverflowTooltipCell
+                v-else-if="column.tooltip"
+                :content="displayCell(s.row, column)"
+                >{{ displayCell(s.row, column) }}</OverflowTooltipCell
+              >
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
           </el-table-column>
           <el-table-column
-            v-if="(config.rowActions ?? []).length"
+            v-if="(config.rowActions ?? []).length || $slots['row-actions']"
             label="操作"
             width="220"
             fixed="right"
@@ -425,23 +521,23 @@ onMounted(async () => {
         </el-table>
       </div>
 
-      <div class="table-footer">
+      <div v-if="config.pagination !== false" class="table-footer">
         <span class="result-total">共 {{ total }} 条</span>
         <el-pagination
           v-model:current-page="query.page"
           v-model:page-size="query.pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="load"
-          @size-change="query.page = 1; load()"
+          :teleported="false"
+          layout="prev, pager, next, sizes"
+          @change="load"
         />
       </div>
     </div>
 
     <el-dialog
       v-model="formDialog"
-      :title="config.title"
+      :title="formDialogTitle"
       :width="config.dialog?.width || '720px'"
       :top="config.dialog?.top || '3vh'"
       :class="config.dialog?.className"
@@ -462,6 +558,12 @@ onMounted(async () => {
         :document-type="config.documentType"
         :document-id="form.id"
       />
+      <div
+        v-if="formMode === 'view' && !config.viewCloseInForm"
+        class="business-view-footer"
+      >
+        <el-button @click="closeForm">关闭</el-button>
+      </div>
     </el-dialog>
     <slot name="business-dialogs" :refresh="load" />
     <BusinessDocumentTrace
@@ -472,3 +574,23 @@ onMounted(async () => {
     />
   </section>
 </template>
+
+<style scoped>
+.document-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hs-color-primary);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.document-link:hover {
+  text-decoration: underline;
+}
+.business-view-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+</style>

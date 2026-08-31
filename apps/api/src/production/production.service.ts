@@ -60,6 +60,10 @@ export class ProductionService {
       BigInt(String(warehouseIdValue)),
     );
   }
+  async allProductOptions(orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
+  }
   async warehouseOptions(orgIdValue: unknown, goodsIdValue: unknown) {
     if (!orgIdValue || !goodsIdValue) return [];
     const orgId = BigInt(String(orgIdValue));

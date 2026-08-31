@@ -3,7 +3,13 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import {
+  filterGoodsByWarehouseType,
+  filterMappedGoodsByKeyword,
+  warehouseTypeOf,
+} from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
+import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -19,9 +25,34 @@ const options = reactive<Record<string, any>>({
   depts: [],
   warehouses: [],
   units: [],
+  users: [],
   contextGoods: [],
 });
 const isView = computed(() => props.mode === 'view');
+const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+const applicantLabel = computed(() => {
+  if (form.value.applicantName) return form.value.applicantName;
+  const creatorId = form.value.createdBy ?? form.value.created_by;
+  const creator = options.users.find(
+    (item: any) => String(item.value ?? item.id) === String(creatorId ?? ''),
+  );
+  return creator?.raw?.nickname || creator?.label || form.value.createdByName || '系统自动生成';
+});
+
+function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
+  quickCatalogRef.value?.open(line, mode);
+}
+
+async function selectExistingGoods(line: any, goods: any) {
+  delete line.newGoods;
+  delete line.newSku;
+  line.goodsId = goods.id;
+  await lineGoodsChanged(line);
+}
+
+function quickCatalogStaged() {
+  if (form.value.warehouseId) warehouseChanged();
+}
 
 function blankLine() {
   return {
@@ -72,6 +103,11 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
+/** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
+const selectedWarehouseType = computed(() =>
+  warehouseTypeOf(options.warehouses ?? [], form.value.warehouseId),
+);
+
 /** 仓库选项：按明细商品分类类型过滤（先选商品后选仓库场景） */
 const warehouseOptions = computed(() =>
   (options.warehouses ?? []).filter(
@@ -93,9 +129,9 @@ function warehouseChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  const list = filterMappedGoodsByKeyword(
+    filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
+    keyword,
   );
   return list.map((g: any) => ({
     value: g.id,
@@ -115,6 +151,21 @@ async function lineGoodsChanged(line: any) {
     (g: any) => String(g.id) === String(line.goodsId),
   );
   line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+  const otherTypes = new Set(
+    (form.value.details ?? [])
+      .filter((item: any) => item !== line)
+      .map((item: any) => Number(item.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  if (
+    line.goodsWarehouseType > 0 &&
+    otherTypes.size > 0 &&
+    !otherTypes.has(line.goodsWarehouseType)
+  ) {
+    Object.assign(line, blankLine());
+    ElMessage.warning('同一采购申请只能选择相同仓库类型的商品，请拆分申请单');
+    return;
+  }
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
@@ -212,7 +263,7 @@ function validate() {
   return true;
 }
 
-async function save() {
+async function save(submit = false) {
   if (!validate()) return;
   saving.value = true;
   try {
@@ -222,7 +273,8 @@ async function save() {
       props.mode === 'edit'
         ? await api.patch(`${url}/${form.value.id}`, payload)
         : await api.post(url, payload);
-    ElMessage.success(result?.message ?? '保存成功');
+    if (submit) await api.post(`${url}/${result?.id ?? form.value.id}/submit`);
+    ElMessage.success(submit ? '已提交审批' : (result?.message ?? '草稿已保存'));
     emit('saved');
   } catch {
     // axios 拦截器已提示
@@ -232,12 +284,14 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units] = await Promise.all([
+  const [orgs, units, users] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
+    api.get('/base-data/users/options').catch(() => []),
   ]);
   options.orgs = orgs as any[];
   options.units = units as any[];
+  options.users = users as any[];
 
   if (props.mode === 'create') {
     Object.assign(form.value, {
@@ -248,18 +302,27 @@ onMounted(async () => {
       remark: '',
       details: [blankLine()],
     });
-  } else if (form.value.id) {
-    // 编辑/查看：拉取完整详情（列表行只有摘要字段）
-    const detail: any = await api
-      .get(`/purchase/applications/${form.value.id}`)
-      .catch(() => null);
-    if (detail) Object.assign(form.value, detail);
-    if (Array.isArray(form.value.details)) {
-      await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
-    }
   }
   await loadOrgScopedOptions(form.value.orgId);
   await loadContextGoods();
+  // 详情接口本身已经返回商品名称、编码和规格；优先使用按单据组织加载的商品上下文补齐，
+  // 避免跨组织查看时再次访问当前登录人本组织的商品详情接口并产生误报。
+  for (const line of form.value.details ?? []) {
+    const matched = (options.contextGoods ?? []).find(
+      (g: any) => String(g.id) === String(line.goodsId),
+    );
+    if (matched) {
+      line.goodsCode ||= matched.queryCode ?? matched.goodsCode ?? '';
+      line.goodsName ||= matched.goodsName ?? '';
+    }
+  }
+  if (props.mode === 'edit' && Array.isArray(form.value.details)) {
+    await Promise.all(
+      form.value.details
+        .filter((line: any) => !line.goodsName || !line.goodsCode || !line.skuSpec)
+        .map((line: any) => enrichLine(line)),
+    );
+  }
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
   for (const line of form.value.details ?? []) {
     if (line.goodsId && !Number(line.goodsWarehouseType)) {
@@ -301,6 +364,9 @@ onMounted(async () => {
           已按明细商品类型匹配仓库
         </div>
       </el-form-item>
+      <el-form-item label="申请人">
+        <el-input :model-value="applicantLabel" disabled />
+      </el-form-item>
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" type="textarea" :rows="2" :disabled="isView" />
       </el-form-item>
@@ -322,11 +388,16 @@ onMounted(async () => {
             placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
           />
+          <el-button v-if="!isView" link type="primary" @click="openQuickCatalog(s.row, 'goods')">快捷新增商品</el-button>
+          <el-tag v-if="s.row.newGoods" type="warning" size="small">待创建</el-tag>
           <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="130">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+        <template #default="s">
+          <span>{{ s.row.skuSpec || s.row.skuId || '—' }}</span>
+          <el-button v-if="!isView && s.row.goodsId && !s.row.newGoods" link type="primary" @click="openQuickCatalog(s.row, 'sku')">补充 SKU</el-button>
+        </template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ unitName(s.row) }}</template>
@@ -360,8 +431,10 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
+      <el-button type="primary" :loading="saving" @click="save(true)">提交审批</el-button>
     </div>
+    <PurchaseQuickCatalogDialog ref="quickCatalogRef" :can-edit-amount="auth.amountAccess.canEditAmount" @selected-existing="selectExistingGoods" @staged="quickCatalogStaged" />
   </el-form>
 </template>
 

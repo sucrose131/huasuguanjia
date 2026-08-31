@@ -4,6 +4,11 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
+import {
+  filterGoodsByWarehouseType,
+  filterMappedGoodsByKeyword,
+  warehouseTypeOf,
+} from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import SignaturePad from '@/components/requisition/SignaturePad.vue';
 
@@ -46,12 +51,20 @@ function blankLine() {
 }
 
 async function loadDicts() {
-  const [drawType, yesNo] = await Promise.all([
+  const [drawType, yesNo, status, approvalStatus] = await Promise.all([
     api.get('/dictionaries/draw_type').catch(() => []),
     api.get('/dictionaries/yes_no').catch(() => []),
+    api.get('/dictionaries/requisition_status').catch(() => []),
+    api.get('/dictionaries/requisition_approval_status').catch(() => []),
   ]);
   dicts.draw_type = drawType as any[];
   dicts.yes_no = yesNo as any[];
+  dicts.requisition_status = status as any[];
+  dicts.requisition_approval_status = approvalStatus as any[];
+}
+
+function dictLabel(code: string, value: unknown) {
+  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
 }
 
 async function loadRequisitionOptions(orgId: unknown) {
@@ -120,6 +133,11 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
+/** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
+const selectedWarehouseType = computed(() =>
+  warehouseTypeOf(options.requisitionWarehouses ?? [], form.value.warehouseId),
+);
+
 /** 仓库选项：领用仓库范围内，按明细商品分类类型过滤（先选商品后选仓库场景） */
 const warehouseOptions = computed(() =>
   (options.requisitionWarehouses ?? []).filter(
@@ -153,9 +171,9 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  const list = filterMappedGoodsByKeyword(
+    filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
+    keyword,
   );
   return list.map((g: any) => ({
     value: g.id,
@@ -169,6 +187,21 @@ async function lineGoodsChanged(line: any) {
     (g: any) => String(g.id) === String(line.goodsId),
   );
   line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+  const otherTypes = new Set(
+    (form.value.details ?? [])
+      .filter((item: any) => item !== line)
+      .map((item: any) => Number(item.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  if (
+    line.goodsWarehouseType > 0 &&
+    otherTypes.size > 0 &&
+    !otherTypes.has(line.goodsWarehouseType)
+  ) {
+    Object.assign(line, blankLine());
+    ElMessage.warning('同一领用申请只能选择相同仓库类型的商品，请拆分申请单');
+    return;
+  }
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
@@ -359,6 +392,23 @@ onMounted(async () => {
       <el-form-item label="申请原因" required class="span-2">
         <el-input v-model="form.reason" :disabled="isView" />
       </el-form-item>
+      <template v-if="isView">
+        <el-form-item label="单据状态">
+          <el-input :model-value="form.statusName || dictLabel('requisition_status', form.status)" readonly />
+        </el-form-item>
+        <el-form-item label="审批状态">
+          <el-input :model-value="form.approveStatusName || dictLabel('requisition_approval_status', form.approveStatus)" readonly />
+        </el-form-item>
+        <el-form-item label="审批人">
+          <el-input :model-value="form.approveByName || '—'" readonly />
+        </el-form-item>
+        <el-form-item label="审批时间">
+          <el-input :model-value="form.approveDate ? dateText(form.approveDate, true) : '—'" readonly />
+        </el-form-item>
+        <el-form-item label="审批意见" class="span-2">
+          <el-input :model-value="form.approveComment || '—'" readonly />
+        </el-form-item>
+      </template>
     </div>
 
     <div class="details-header">

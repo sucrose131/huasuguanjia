@@ -12,9 +12,33 @@ export class DashboardController {
   constructor(@Inject(DashboardService) private readonly service: DashboardService) {}
 
   @Get()
-  @RequirePermissions('dashboard:1:view', 'dashboard:4:view')
+  @RequirePermissions('dashboard:1:view')
   overview(@CurrentUser() user: AuthUser) {
     return this.service.overview(user);
+  }
+
+  @Get('access')
+  @RequirePermissions('dashboard:1:view')
+  access(@CurrentUser() user: AuthUser) {
+    return this.service.access(user);
+  }
+
+  @Get('metrics')
+  @RequirePermissions('dashboard:1:view')
+  metrics(@CurrentUser() user: AuthUser) {
+    return this.service.metrics(user);
+  }
+
+  @Get('trend')
+  @RequirePermissions('dashboard:1:view')
+  trend(@CurrentUser() user: AuthUser) {
+    return this.service.trend(user);
+  }
+
+  @Get('inventory-health')
+  @RequirePermissions('dashboard:1:view')
+  inventoryHealth(@CurrentUser() user: AuthUser) {
+    return this.service.inventoryHealth(user);
   }
 
   @Get('todos')
@@ -30,7 +54,7 @@ export class DashboardController {
   }
 
   @Post('messages/:id/read')
-  @RequirePermissions('dashboard:3:view')
+  @RequirePermissions('dashboard:messages:read')
   read(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.service.readMessage(user, id);
   }

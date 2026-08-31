@@ -4,7 +4,16 @@ import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
-import RemoteSelect from '@/components/RemoteSelect.vue';
+import {
+  filterGoodsByWarehouseType,
+  filterMappedGoodsByKeyword,
+  warehouseTypeOf,
+} from '@/utils/goods-warehouse';
+import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import PurchaseQuickCatalogDialog from '@/components/purchase/PurchaseQuickCatalogDialog.vue';
+import PurchaseOrderBasicInfo from '@/components/purchase/PurchaseOrderBasicInfo.vue';
+import PurchaseOrderDetailsSection from '@/components/purchase/PurchaseOrderDetailsSection.vue';
+import PurchaseOrderPaymentSummary from '@/components/purchase/PurchaseOrderPaymentSummary.vue';
 
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -19,6 +28,7 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   depts: [],
   warehouses: [],
+  receivers: [],
   vendors: [],
   units: [],
   contextGoods: [],
@@ -27,6 +37,25 @@ const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
+const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
+const organizationTree = computed(() =>
+  buildOrganizationTree(options.orgs as OrganizationTreeNode[]),
+);
+
+function openQuickCatalog(line: any, mode: 'goods' | 'sku') {
+  quickCatalogRef.value?.open(line, mode);
+}
+
+async function selectExistingGoods(line: any, goods: any) {
+  delete line.newGoods;
+  delete line.newSku;
+  line.goodsId = goods.id;
+  await lineGoodsChanged(line);
+}
+
+function quickCatalogStaged() {
+  if (form.value.warehouseId) warehouseChanged();
+}
 
 function blankLine() {
   return {
@@ -56,22 +85,44 @@ const orderTotal = computed(() =>
   (form.value.details ?? []).reduce((sum: number, line: any) => sum + lineAmount(line), 0),
 );
 const orderQuantity = computed(() =>
-  (form.value.details ?? []).reduce((sum: number, line: any) => sum + Number(line.quantity ?? 0), 0),
+  (form.value.details ?? []).reduce(
+    (sum: number, line: any) => sum + Number(line.quantity ?? 0),
+    0,
+  ),
 );
+const orderEffectivePayable = computed(() => Number(form.value.effectivePayable ?? orderTotal.value));
+const orderNetPaidAmount = computed(() =>
+  Number(form.value.netPaidAmount ?? Number(form.value.paidAmount ?? 0) - Number(form.value.refundedAmount ?? 0)),
+);
+const orderRemainingAfterPayment = computed(() =>
+  Math.max(0, orderEffectivePayable.value - orderNetPaidAmount.value - Number(form.value.currentPaymentAmount ?? 0)),
+);
+const orderPreviewProgressStatus = computed(() => {
+  if (orderRemainingAfterPayment.value <= 0 && orderEffectivePayable.value > 0) return 2;
+  if (orderNetPaidAmount.value + Number(form.value.currentPaymentAmount ?? 0) > 0) return 1;
+  return 0;
+});
 
 async function loadDicts() {
-  const [arrivalType, settlementType] = await Promise.all([
+  const [arrivalType, deliveryType, settlementType, paymentChannel, paymentProgress] = await Promise.all([
     api.get('/dictionaries/purchase_arrival_type').catch(() => []),
+    api.get('/dictionaries/purchase_delivery_type').catch(() => []),
     api.get('/dictionaries/purchase_settlement_type').catch(() => []),
+    api.get('/dictionaries/payment_channel').catch(() => []),
+    api.get('/dictionaries/purchase_payment_progress_status').catch(() => []),
   ]);
   dicts.purchase_arrival_type = arrivalType as any[];
+  dicts.purchase_delivery_type = deliveryType as any[];
   dicts.purchase_settlement_type = settlementType as any[];
+  dicts.payment_channel = paymentChannel as any[];
+  dicts.purchase_payment_progress_status = paymentProgress as any[];
 }
 
 async function loadOrgScopedOptions(orgId: unknown) {
   if (!orgId) {
     options.depts = [];
     options.warehouses = [];
+    options.receivers = [];
     return;
   }
   const [depts, warehouses] = await Promise.all([
@@ -82,13 +133,30 @@ async function loadOrgScopedOptions(orgId: unknown) {
   options.warehouses = warehouses as any[];
 }
 
+async function loadReceiverOptions(orgId: unknown, deptId: unknown) {
+  if (!orgId || !deptId) {
+    options.receivers = [];
+    return;
+  }
+  options.receivers = (await api
+    .get('/purchase/receiver-options', { params: { orgId, deptId } })
+    .catch(() => [])) as any[];
+}
+
 function organizationChanged() {
   form.value.deptId = '';
   form.value.warehouseId = '';
+  form.value.receiverId = '';
+  options.receivers = [];
   form.value.details = [blankLine()];
   options.contextGoods = [];
   loadOrgScopedOptions(form.value.orgId);
   loadContextGoods();
+}
+
+async function departmentChanged() {
+  form.value.receiverId = '';
+  await loadReceiverOptions(form.value.orgId, form.value.deptId);
 }
 
 /** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
@@ -103,14 +171,19 @@ async function loadContextGoods() {
 }
 
 /** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
-const documentWarehouseType = computed(() => {
-  const types = new Set(
+const documentWarehouseType = computed<number>(() => {
+  const types = new Set<number>(
     (form.value.details ?? [])
       .map((line: any) => Number(line.goodsWarehouseType ?? 0))
       .filter(Boolean),
   );
-  return types.size === 1 ? [...types][0] : 0;
+  return types.size === 1 ? ([...types][0] ?? 0) : 0;
 });
+
+/** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
+const selectedWarehouseType = computed(() =>
+  warehouseTypeOf(options.warehouses ?? [], form.value.warehouseId),
+);
 
 /** 仓库选项：按明细商品分类类型过滤（先选商品后选仓库场景） */
 const warehouseOptions = computed(() =>
@@ -133,9 +206,9 @@ function warehouseChanged() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const kw = String(keyword ?? '').trim().toLowerCase();
-  const list = options.contextGoods.filter((g: any) =>
-    kw ? `${g.queryCode ?? ''} ${g.goodsName ?? ''}`.toLowerCase().includes(kw) : true,
+  const list = filterMappedGoodsByKeyword(
+    filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
+    keyword,
   );
   return list.map((g: any) => ({
     value: g.id,
@@ -155,6 +228,21 @@ async function lineGoodsChanged(line: any) {
     (g: any) => String(g.id) === String(line.goodsId),
   );
   line.goodsWarehouseType = Number(matched?.categoryWarehouseType ?? 0);
+  const otherTypes = new Set(
+    (form.value.details ?? [])
+      .filter((item: any) => item !== line)
+      .map((item: any) => Number(item.goodsWarehouseType ?? 0))
+      .filter(Boolean),
+  );
+  if (
+    line.goodsWarehouseType > 0 &&
+    otherTypes.size > 0 &&
+    !otherTypes.has(line.goodsWarehouseType)
+  ) {
+    Object.assign(line, blankLine());
+    ElMessage.warning('同一采购订单只能选择相同仓库类型的商品，请拆分订单');
+    return;
+  }
   const g: any = await api.get(`/goods/${line.goodsId}`);
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
@@ -187,8 +275,7 @@ async function enrichLine(line: any) {
   if (!line.goodsId) return;
   try {
     const g: any = await api.get(`/goods/${line.goodsId}`);
-    const sku =
-      (g.skus ?? []).find((x: any) => String(x.id) === String(line.skuId)) ?? g.skus?.[0];
+    const sku = (g.skus ?? []).find((x: any) => String(x.id) === String(line.skuId)) ?? g.skus?.[0];
     line.goodsCode = line.goodsCode || g.queryCode || '';
     line.goodsName = line.goodsName || g.goodsName || '';
     line.skuSpec = sku?.specModels ?? '';
@@ -197,11 +284,6 @@ async function enrichLine(line: any) {
   } catch {
     // 商品不存在时保留原始值
   }
-}
-
-function unitName(line: any) {
-  const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
-  return unit?.label ?? unit?.name ?? '—';
 }
 
 function normalizeOrder(data: any) {
@@ -235,15 +317,19 @@ async function applicationChanged() {
     applicationNo: source.applicationNo ?? '',
   });
   await loadOrgScopedOptions(form.value.orgId);
+  await loadReceiverOptions(form.value.orgId, form.value.deptId);
+  if (
+    !options.receivers.some((item: any) => String(item.value) === String(form.value.receiverId))
+  ) {
+    form.value.receiverId = '';
+  }
   form.value.details = (source.details ?? []).map((line: any) => ({
     ...blankLine(),
     goodsId: line.goodsId,
     skuId: line.skuId,
     unitType: line.unitType,
     quantity: Number(line.quantity ?? 0),
-    totalAmount: Number(
-      (Number(line.referencePrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2),
-    ),
+    totalAmount: Number((Number(line.referencePrice ?? 0) * Number(line.quantity ?? 0)).toFixed(2)),
     remark: line.remark ?? '',
     goodsWarehouseType: Number(line.goodsWarehouseType ?? 0),
   }));
@@ -267,11 +353,13 @@ function validate() {
     ElMessage.warning('请选择所属组织和部门');
     return false;
   }
+  if (!form.value.receiverId) {
+    ElMessage.warning('请选择收货人');
+    return false;
+  }
   const hasGoods = (form.value.details ?? []).some((line: any) => line.goodsId);
   if (!form.value.warehouseId) {
-    ElMessage.warning(
-      hasGoods ? '请选择与商品匹配的目标仓库' : '请选择所属组织、目标仓库和部门',
-    );
+    ElMessage.warning(hasGoods ? '请选择与商品匹配的目标仓库' : '请选择所属组织、目标仓库和部门');
     return false;
   }
   if (hasGoods && documentWarehouseType.value) {
@@ -309,6 +397,10 @@ function validate() {
       return false;
     }
   }
+  if (props.mode === 'create' && Number(form.value.currentPaymentAmount ?? 0) > orderTotal.value) {
+    ElMessage.warning('本次付款金额不能超过订单总金额');
+    return false;
+  }
   return true;
 }
 
@@ -340,14 +432,16 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, units, vendors] = await Promise.all([
+  const [orgs, units, vendors, receivers] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/base-data/vendors/options').catch(() => []),
+    api.get('/purchase/receiver-options').catch(() => []),
   ]);
   options.orgs = orgs as any[];
   options.units = units as any[];
   options.vendors = vendors as any[];
+  options.receivers = receivers as any[];
   await loadDicts();
 
   if (props.mode === 'create') {
@@ -356,7 +450,7 @@ onMounted(async () => {
       orgId: form.value.orgId ?? auth.user?.orgId ?? '',
       deptId: form.value.deptId ?? auth.user?.deptId ?? '',
       warehouseId: '',
-      receiverId: form.value.receiverId ?? auth.user?.id ?? '',
+      receiverId: form.value.receiverId ?? '',
       vendorId: '',
       arrivalType: 1,
       planArrivalDate: '',
@@ -364,26 +458,37 @@ onMounted(async () => {
       deliveryNo: '',
       paymentType: 1,
       planPayDate: '',
+      currentPaymentAmount: 0,
+      currentPaymentDate: dateText(new Date()),
+      currentPaymentChannel: Number(dicts.payment_channel?.[0]?.value ?? 1),
+      currentPaymentRemark: '',
       remark: '',
       details: [blankLine()],
     });
     if (form.value.applicationId) await applicationChanged();
-    else await loadOrgScopedOptions(form.value.orgId);
-  } else if (form.value.id) {
-    const detail: any = await api.get(`/purchase/orders/${form.value.id}`).catch(() => null);
-    if (detail) {
-      Object.assign(form.value, normalizeOrder(detail));
-      form.value.details = (form.value.details ?? []).map((line: any) => ({
-        ...line,
-        totalAmount: Number(
-          line.totalAmount ?? Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0),
-        ),
-      }));
+    else {
+      await loadOrgScopedOptions(form.value.orgId);
+      await loadReceiverOptions(form.value.orgId, form.value.deptId);
+      if (
+        options.receivers.some((item: any) => String(item.value) === String(auth.user?.id ?? ''))
+      ) {
+        form.value.receiverId = auth.user?.id ?? '';
+      }
     }
+  } else if (form.value.id) {
+    // 编辑/查看的完整详情由 BusinessDocumentPage 统一加载，表单只做显示归一化。
+    Object.assign(form.value, normalizeOrder(form.value));
+    form.value.details = (form.value.details ?? []).map((line: any) => ({
+      ...line,
+      totalAmount: Number(
+        line.totalAmount ?? Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0),
+      ),
+    }));
     if (Array.isArray(form.value.details)) {
       await Promise.all(form.value.details.map((line: any) => enrichLine(line)));
     }
     await loadOrgScopedOptions(form.value.orgId);
+    await loadReceiverOptions(form.value.orgId, form.value.deptId);
   }
   await loadContextGoods();
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
@@ -399,176 +504,48 @@ onMounted(async () => {
 </script>
 
 <template>
-  <el-form label-position="top" :disabled="isView">
-    <div class="form-grid">
-      <el-form-item label="来源采购申请">
-        <el-input
-          :model-value="form.applicationNo || (form.applicationId ? form.applicationId : '直接采购')"
-          disabled
-        />
-      </el-form-item>
-      <el-form-item label="供应商" required>
-        <el-select v-model="form.vendorId" filterable clearable :disabled="isView">
-          <el-option
-            v-for="x in options.vendors"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="所属组织" required>
-        <el-select
-          v-model="form.orgId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId)"
-          @change="organizationChanged"
-        >
-          <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="目标仓库" required>
-        <el-select
-          v-model="form.warehouseId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId) || !form.orgId"
-          @change="warehouseChanged"
-        >
-          <el-option
-            v-for="x in warehouseOptions"
-            :key="x.value"
-            :label="x.label"
-            :value="x.value"
-          />
-        </el-select>
-        <div
-          v-if="documentWarehouseType && form.details?.some((l: any) => l.goodsId)"
-          class="warehouse-hint"
-        >
-          已按明细商品类型匹配仓库
-        </div>
-      </el-form-item>
-      <el-form-item label="接收部门" required>
-        <el-select
-          v-model="form.deptId"
-          filterable
-          :disabled="isView || Boolean(form.applicationId)"
-        >
-          <el-option v-for="x in options.depts" :key="x.value" :label="x.label" :value="x.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="收货人">
-        <el-input :model-value="auth.user?.username ?? '—'" disabled />
-      </el-form-item>
-      <el-form-item label="到货方式">
-        <el-select v-model="form.arrivalType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.purchase_arrival_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="计划到货日期" required>
-        <el-date-picker
-          v-model="form.planArrivalDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :disabled="isView"
-        />
-      </el-form-item>
-      <el-form-item label="结算方式">
-        <el-select v-model="form.paymentType" :disabled="isView">
-          <el-option
-            v-for="item in dicts.purchase_settlement_type || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="计划付款日期">
-        <el-date-picker
-          v-model="form.planPayDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :disabled="isView"
-        />
-      </el-form-item>
-      <el-form-item label="备注" class="span-2">
-        <el-input v-model="form.remark" type="textarea" :rows="2" :disabled="isView" />
-      </el-form-item>
-    </div>
+  <el-form label-position="top" :disabled="isView" class="purchase-order-form">
+    <PurchaseOrderBasicInfo
+      :form="form"
+      :mode="mode"
+      :options="options"
+      :dicts="dicts"
+      :organization-tree="organizationTree"
+      :warehouse-options="warehouseOptions"
+      :document-warehouse-type="documentWarehouseType"
+      @organization-change="organizationChanged"
+      @warehouse-change="warehouseChanged"
+      @department-change="departmentChanged"
+    />
 
-    <div class="details-header">
-      <span class="details-title">订单明细</span>
-      <el-button v-if="!isView" link type="primary" @click="addLine">+ 添加明细</el-button>
-    </div>
-    <el-table :data="form.details ?? []" border size="small">
-      <el-table-column label="商品" min-width="200">
-        <template #default="s">
-          <RemoteSelect
-            v-if="!isView"
-            v-model="s.row.goodsId"
-            :fetch="searchGoodsOptions"
-            :current-label="s.row.goodsName || s.row.goodsId"
-            :disabled="!form.orgId"
-            placeholder="输入商品名称或编码搜索"
-            @change="lineGoodsChanged(s.row)"
-          />
-          <span v-else>{{ s.row.goodsName || s.row.goodsCode || s.row.goodsId || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="单位" width="80">
-        <template #default="s">{{ unitName(s.row) }}</template>
-      </el-table-column>
-      <el-table-column label="采购数量" width="120">
-        <template #default="s">
-          <el-input-number
-            v-model="s.row.quantity"
-            :min="1"
-            :precision="0"
-            :step="1"
-            :disabled="isView"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column label="总金额" width="155" align="right">
-        <template #default="s">
-          <el-input-number
-            v-if="canViewAmount"
-            v-model="s.row.totalAmount"
-            :min="0"
-            :precision="2"
-            :step="1"
-            controls-position="right"
-            :disabled="isView || !canEditAmount"
-          />
-          <span v-else>****</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="计算单价" width="120" align="right">
-        <template #default="s">
-          {{ canViewAmount ? lineUnitPrice(s.row).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '****' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="备注" min-width="130">
-        <template #default="s"><el-input v-model="s.row.remark" :disabled="isView" /></template>
-      </el-table-column>
-      <el-table-column v-if="!isView" label="" width="60">
-        <template #default="s">
-          <el-button link type="danger" @click="removeLine(s.$index)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <PurchaseOrderPaymentSummary
+      :form="form"
+      :mode="mode"
+      :dicts="dicts"
+      :can-view-amount="canViewAmount"
+      :can-edit-amount="canEditAmount"
+      :order-total="orderTotal"
+      :effective-payable="orderEffectivePayable"
+      :net-paid-amount="orderNetPaidAmount"
+      :remaining-after-payment="orderRemainingAfterPayment"
+      :preview-progress-status="orderPreviewProgressStatus"
+    />
 
-    <div class="form-total">
-      合计：{{ orderQuantity }} 件　订单金额 {{ canViewAmount ? `¥ ${orderTotal.toFixed(2)}` : '****' }}
-    </div>
+    <PurchaseOrderDetailsSection
+      :form="form"
+      :mode="mode"
+      :can-view-amount="canViewAmount"
+      :can-edit-amount="canEditAmount"
+      :order-quantity="orderQuantity"
+      :order-total="orderTotal"
+      :units="options.units"
+      :search-goods-options="searchGoodsOptions"
+      :line-unit-price="lineUnitPrice"
+      @add="addLine"
+      @remove="removeLine"
+      @goods-change="lineGoodsChanged"
+      @quick-catalog="openQuickCatalog"
+    />
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
@@ -576,42 +553,47 @@ onMounted(async () => {
         保存
       </el-button>
     </div>
+    <PurchaseQuickCatalogDialog ref="quickCatalogRef" :can-edit-amount="canEditAmount" @selected-existing="selectExistingGoods" @staged="quickCatalogStaged" />
   </el-form>
 </template>
 
 <style scoped>
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0 16px;
-}
-.span-2 {
-  grid-column: 1 / -1;
-}
-.warehouse-hint {
-  font-size: 12px;
-  color: var(--hs-muted, #909399);
-  margin-top: 2px;
-}
-.details-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-}
-.details-title {
-  font-weight: 600;
-}
-.form-total {
-  margin-top: 12px;
-  text-align: right;
-  color: #606266;
-  font-variant-numeric: tabular-nums;
+.purchase-order-form {
+  min-width: 0;
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-body);
+  line-height: var(--hs-line-body);
 }
 .form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--hs-space-2);
+  margin-top: var(--hs-space-5);
+}
+:global(.purchase-order-form-dialog) {
+  max-width: calc(100vw - 32px);
+}
+:global(.purchase-order-form-dialog .el-dialog__header) {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--hs-color-border);
+}
+:global(.purchase-order-form-dialog .el-dialog__title) {
+  color: var(--hs-color-text-primary);
+  font-size: var(--hs-font-dialog-title);
+  line-height: var(--hs-line-dialog-title);
+  font-weight: 600;
+}
+:global(.purchase-order-form-dialog .el-dialog__body) {
+  max-height: calc(94vh - 80px);
+  padding: 16px 20px 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+@media (max-width: 760px) {
+  :global(.purchase-order-form-dialog) {
+    width: calc(100vw - 24px) !important;
+    margin-right: auto;
+    margin-left: auto;
+  }
 }
 </style>

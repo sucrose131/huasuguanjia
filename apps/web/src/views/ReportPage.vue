@@ -732,7 +732,6 @@ function exportReport() {
   link.click();
   URL.revokeObjectURL(url);
 }
-watch(key, load);
 watch(
   () => [query.startDate, query.endDate],
   () => {

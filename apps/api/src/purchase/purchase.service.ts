@@ -4,19 +4,25 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+import { BusinessReferenceService } from '../database/business-reference.service';
 import { BusinessMasterDataService } from '../database/business-master-data.service';
 import { InventoryPostingService } from '../inventory/inventory-posting.service';
 import { InventoryAlertService } from '../inventory/inventory-alert.service';
 import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
+import { MessageService } from '../message/message.service';
+
+import { TodoService } from '../database/todo.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
+import { calculatePurchaseOrderLifecycle } from './purchase-order-lifecycle';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
@@ -33,13 +39,19 @@ type OperationHistoryItem = {
 };
 @Injectable()
 export class PurchaseService {
+  private static readonly logger = new Logger(PurchaseService.name);
+
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(BusinessMasterDataService) private masterData: BusinessMasterDataService,
+    @Inject(BusinessReferenceService) private readonly references: BusinessReferenceService,
     @Inject(InventoryPostingService) private inventoryPosting: InventoryPostingService,
     @Inject(InventoryAlertService) private inventoryAlerts: InventoryAlertService,
     @Inject(DocumentTraceService) private documentTrace: DocumentTraceService,
     @Inject(BusinessNumberService) private businessNumber: BusinessNumberService,
+    @Inject(MessageService) private message: MessageService,
+
+    @Inject(TodoService) private readonly todoService: TodoService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -65,9 +77,73 @@ export class PurchaseService {
     if (!orgIdValue) return [];
     return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
   }
+  async receiverOptions(orgIdValue: unknown, deptIdValue: unknown) {
+    if (!orgIdValue || !deptIdValue) return [];
+    const orgId = BigInt(String(orgIdValue));
+    const deptId = BigInt(String(deptIdValue));
+    const department = await this.prisma.hspsi_basic_dept.findFirst({
+      where: { dept_id: deptId, org_id: orgId, status: 1, deleted_at: null },
+      select: { dept_id: true },
+    });
+    if (!department) throw new BadRequestException('所选接收部门不属于当前组织或已停用');
+    const users = await this.prisma.hspsi_sys_user.findMany({
+      where: {
+        org_id: orgId,
+        dept_id: deptId,
+        staff_id: { not: null },
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, staff_id: true, username: true, nickname: true },
+      orderBy: [{ nickname: 'asc' }, { id: 'asc' }],
+    });
+    if (!users.length) return [];
+    const [staff, memberships] = await Promise.all([
+      this.prisma.hspsi_basic_staff.findMany({
+        where: {
+          id: { in: users.flatMap((user) => (user.staff_id ? [user.staff_id] : [])) },
+          status: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      }),
+      this.prisma.hspsi_basic_staff_organizations.findMany({
+        where: {
+          staff_id: { in: users.flatMap((user) => (user.staff_id ? [user.staff_id] : [])) },
+          org_type: 2,
+          org_id: deptId,
+          type: 1,
+          deleted_at: null,
+        },
+        select: { staff_id: true },
+      }),
+    ]);
+    const activeStaffIds = new Set(staff.map((item) => String(item.id)));
+    const memberStaffIds = new Set(memberships.map((item) => String(item.staff_id)));
+    return users
+      .filter(
+        (user) =>
+          user.staff_id &&
+          activeStaffIds.has(String(user.staff_id)) &&
+          memberStaffIds.has(String(user.staff_id)),
+      )
+      .map((user) => ({
+        value: user.id,
+        label: user.nickname || user.username,
+        raw: { username: user.username, orgId, deptId },
+      }));
+  }
   private details(input: unknown) {
     if (!Array.isArray(input) || !input.length) throw new BadRequestException('至少需要一条明细');
     return input as Body[];
+  }
+  private assertUniqueOrderLines(lines: Body[]) {
+    const keys = new Set<string>();
+    for (const line of lines) {
+      const key = `${line.goodsId ?? line.goods_id}:${line.skuId ?? line.sku_id}`;
+      if (keys.has(key)) throw new BadRequestException('同一采购订单不能重复选择相同商品和SKU');
+      keys.add(key);
+    }
   }
   private quantity(value: unknown, label = '数量', allowZero = false) {
     const quantity = Number(value);
@@ -77,9 +153,7 @@ export class PurchaseService {
   }
   /** sku_id 缺失(0)的明细回填商品默认/第一个有效 SKU，保证下游单据可过账 */
   private async resolveLineSkus(lines: Body[], db: PurchaseDb = this.prisma) {
-    const missing = lines.filter(
-      (line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n,
-    );
+    const missing = lines.filter((line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n);
     if (!missing.length) return;
     const goodsIds = [...new Set(missing.map((line) => String(line.goodsId ?? line.goods_id)))];
     const goodsList = await db.hspsi_goods_info.findMany({
@@ -378,45 +452,299 @@ export class PurchaseService {
     if (!warehouse || warehouse.org_id !== orgId)
       throw new BadRequestException('所选仓库不属于当前组织');
   }
-  private async recalcOrderStatus(tx: Prisma.TransactionClient, poId: bigint) {
-    const order = await tx.hspsi_purchase_order.findUniqueOrThrow({
-      where: { po_id: poId },
-      select: { po_id: true, pcs_qty: true, arrival_qty: true, is_all_arrival: true, status: true },
+  private async assertReceiverScope(
+    tx: PurchaseDb,
+    orgId: bigint,
+    deptId: bigint,
+    receiverId: bigint,
+  ) {
+    if (receiverId <= 0n) throw new BadRequestException('请选择收货人');
+    const receiver = await tx.hspsi_sys_user.findFirst({
+      where: {
+        id: receiverId,
+        org_id: orgId,
+        dept_id: deptId,
+        staff_id: { not: null },
+        status: 1,
+        deleted_at: null,
+      },
+      select: { id: true, staff_id: true, username: true, nickname: true },
     });
-    const details = await tx.hspsi_purchase_order_detail.findMany({
-      where: { po_id: poId },
-      select: { qty: true, actual_qty: true, cancel_qty: true },
+    if (!receiver?.staff_id)
+      throw new BadRequestException('所选收货人账号不存在、已停用或不属于所选组织和部门');
+    const [staff, membership] = await Promise.all([
+      tx.hspsi_basic_staff.findFirst({
+        where: { id: receiver.staff_id, status: 1, deleted_at: null },
+        select: { id: true },
+      }),
+      tx.hspsi_basic_staff_organizations.findFirst({
+        where: {
+          staff_id: receiver.staff_id,
+          org_type: 2,
+          org_id: deptId,
+          type: 1,
+          deleted_at: null,
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!staff || !membership)
+      throw new BadRequestException('所选收货人的OA主组织、部门关系无效，请先同步组织人员');
+    return receiver;
+  }
+  private async syncPurchaseOrderTodo(
+    tx: Prisma.TransactionClient,
+    order: {
+      po_id: bigint;
+      po_no: string;
+      org_id: bigint;
+      receiver_id: bigint;
+      status: number;
+      created_by: bigint;
+    },
+    actorId?: string,
+    closed = false,
+    paid = false,
+  ) {
+    const existing = await tx.hspsi_sys_todo.findFirst({
+      where: {
+        source_type: 'purchase_order',
+        business_id: order.po_id,
+        deleted_at: null,
+      },
+      orderBy: { id: 'desc' },
     });
-    const returnHeaders = await tx.hspsi_purchase_order_input_exit.findMany({
-      where: { po_id: poId, po_input_id: { gt: 0n }, approve_status: 1, deleted_at: null },
-      select: { po_exit_id: true },
-    });
-    const returnDetails = returnHeaders.length
-      ? await tx.hspsi_purchase_order_input_exit_detail.aggregate({
-          where: { po_exit_id: { in: returnHeaders.map((h) => h.po_exit_id) }, deleted_at: null },
-          _sum: { exit_qty: true },
-        })
-      : { _sum: { exit_qty: null } };
-    const confirmedReturnQty = Number(returnDetails._sum.exit_qty ?? 0);
-    const totalQty = details.reduce((s, l) => s + l.qty, 0);
-    const confirmedQty = details.reduce((s, l) => s + l.actual_qty, 0);
-    const cancelledQty = details.reduce((s, l) => s + l.cancel_qty, 0);
-    const netRemaining = totalQty - cancelledQty;
-    let newStatus: number;
-    if (confirmedQty === 0 && confirmedReturnQty === 0) {
-      newStatus = order.status === 1 ? 1 : 2;
-    } else if (confirmedQty >= netRemaining && confirmedReturnQty === 0) {
-      newStatus = 4;
-    } else if (confirmedReturnQty > 0 && confirmedQty > confirmedReturnQty) {
-      newStatus = 5;
-    } else if (confirmedReturnQty > 0 && confirmedQty === 0) {
-      newStatus = 6;
-    } else if (confirmedQty >= confirmedReturnQty && confirmedQty >= netRemaining) {
-      newStatus = 6;
-    } else {
-      newStatus = 3;
+    const completed = closed || Number(order.status) === 6;
+    const now = new Date();
+    const data = {
+      organization_id: Number(order.org_id),
+      user_id: Number(order.receiver_id),
+      title: `采购订单 ${order.po_no} 待收货`,
+      content: paid
+        ? `采购订单 ${order.po_no} 已完成付款，请关注到货/收货`
+        : `请办理采购订单 ${order.po_no} 的到货及入库`,
+      source_type: 'purchase_order',
+      source_id: order.po_id,
+      business_type: 'purchase_receipt',
+      business_id: order.po_id,
+      status: completed ? (closed ? 2 : 1) : 0,
+      completed_time: completed ? now : null,
+      updated_by: Number(actorId ?? order.created_by),
+      updated_at: now,
+    };
+    if (existing) {
+      await tx.hspsi_sys_todo.update({ where: { id: existing.id }, data });
+    } else if (!completed) {
+      await tx.hspsi_sys_todo.create({
+        data: {
+          ...data,
+          created_by: Number(actorId ?? order.created_by),
+          created_at: now,
+        },
+      });
     }
-    await tx.hspsi_purchase_order.update({ where: { po_id: poId }, data: { status: newStatus } });
+  }
+  private async purchaseOrderLifecycle(db: PurchaseDb, poId: bigint) {
+    const order = await db.hspsi_purchase_order.findUniqueOrThrow({
+      where: { po_id: poId },
+      select: {
+        po_id: true,
+        po_no: true,
+        org_id: true,
+        receiver_id: true,
+        created_by: true,
+        status: true,
+      },
+    });
+    const [details, receiptHeaders, returnHeaders, refundTasks, money] = await Promise.all([
+      db.hspsi_purchase_order_detail.findMany({
+        where: { po_id: poId },
+        select: {
+          id: true,
+          goods_id: true,
+          sku_id: true,
+          qty: true,
+          cancel_qty: true,
+        },
+      }),
+      db.hspsi_purchase_order_input.findMany({
+        where: { po_id: poId, comfirm_status: { in: [0, 1] }, deleted_at: null },
+        select: { po_input_id: true, input_type: true, comfirm_status: true },
+      }),
+      db.hspsi_purchase_order_input_exit.findMany({
+        where: { po_id: poId, approve_status: { in: [0, 1] }, deleted_at: null },
+        select: {
+          po_exit_id: true,
+          po_input_id: true,
+          exit_type: true,
+          status: true,
+          approve_status: true,
+        },
+      }),
+      db.hspsi_purchase_refund.findMany({
+        where: { po_id: poId, deleted_at: null },
+        select: {
+          refund_status: true,
+          refundable_amount: true,
+          refunded_amount: true,
+        },
+      }),
+      this.purchaseMoneyPosition(db, poId),
+    ]);
+    const [receiptDetails, returnDetails] = await Promise.all([
+      receiptHeaders.length
+        ? db.hspsi_purchase_order_input_detail.findMany({
+            where: {
+              po_input_id: { in: receiptHeaders.map((item) => item.po_input_id) },
+              deleted_at: null,
+            },
+            select: { po_input_id: true, goods_id: true, sku_id: true, input_qty: true },
+          })
+        : [],
+      returnHeaders.length
+        ? db.hspsi_purchase_order_input_exit_detail.findMany({
+            where: {
+              po_exit_id: { in: returnHeaders.map((item) => item.po_exit_id) },
+              deleted_at: null,
+            },
+            select: { po_exit_id: true, goods_id: true, sku_id: true, exit_qty: true },
+          })
+        : [],
+    ]);
+    const receiptHeaderById = new Map(
+      receiptHeaders.map((item) => [String(item.po_input_id), item]),
+    );
+    const returnHeaderById = new Map(
+      returnHeaders.map((item) => [String(item.po_exit_id), item]),
+    );
+    const lineProgress = new Map<
+      string,
+      {
+        ordered: number;
+        cancelled: number;
+        confirmedNormal: number;
+        pendingNormal: number;
+        purchaseReturned: number;
+        exchangeReturned: number;
+        confirmedExchange: number;
+        pendingExchange: number;
+      }
+    >();
+    for (const line of details) {
+      const key = `${line.goods_id}:${line.sku_id}`;
+      if (lineProgress.has(key))
+        throw new BadRequestException('采购订单存在重复商品和SKU，请合并明细后再处理');
+      lineProgress.set(key, {
+        ordered: Number(line.qty),
+        cancelled: Number(line.cancel_qty),
+        confirmedNormal: 0,
+        pendingNormal: 0,
+        purchaseReturned: 0,
+        exchangeReturned: 0,
+        confirmedExchange: 0,
+        pendingExchange: 0,
+      });
+    }
+    for (const line of receiptDetails) {
+      const progress = lineProgress.get(`${line.goods_id}:${line.sku_id}`);
+      const header = receiptHeaderById.get(String(line.po_input_id));
+      if (!progress || !header) continue;
+      const exchange = Number(header.input_type) === 2;
+      const confirmed = Number(header.comfirm_status) === 1;
+      const field = exchange
+        ? confirmed
+          ? 'confirmedExchange'
+          : 'pendingExchange'
+        : confirmed
+          ? 'confirmedNormal'
+          : 'pendingNormal';
+      progress[field] += Number(line.input_qty);
+    }
+    for (const line of returnDetails) {
+      const progress = lineProgress.get(`${line.goods_id}:${line.sku_id}`);
+      const header = returnHeaderById.get(String(line.po_exit_id));
+      if (!progress || !header || Number(header.approve_status) !== 1 || header.po_input_id <= 0n)
+        continue;
+      if (Number(header.exit_type) === 2) progress.exchangeReturned += Number(line.exit_qty);
+      else progress.purchaseReturned += Number(line.exit_qty);
+    }
+    const totals = [...lineProgress.values()].reduce(
+      (sum, line) => ({
+        ordered: sum.ordered + line.ordered,
+        cancelled: sum.cancelled + line.cancelled,
+        confirmedNormal: sum.confirmedNormal + line.confirmedNormal,
+        pendingNormal: sum.pendingNormal + line.pendingNormal,
+        purchaseReturned: sum.purchaseReturned + line.purchaseReturned,
+        exchangeReturned: sum.exchangeReturned + line.exchangeReturned,
+        confirmedExchange: sum.confirmedExchange + line.confirmedExchange,
+        pendingExchange: sum.pendingExchange + line.pendingExchange,
+      }),
+      {
+        ordered: 0,
+        cancelled: 0,
+        confirmedNormal: 0,
+        pendingNormal: 0,
+        purchaseReturned: 0,
+        exchangeReturned: 0,
+        confirmedExchange: 0,
+        pendingExchange: 0,
+      },
+    );
+    const openRefundTaskCount = refundTasks.filter((item) =>
+      [0, 1].includes(Number(item.refund_status)),
+    ).length;
+    const openRefundAmount = refundTasks
+      .filter((item) => [0, 1].includes(Number(item.refund_status)))
+      .reduce(
+        (sum, item) =>
+          sum + Math.max(0, Number(item.refundable_amount) - Number(item.refunded_amount)),
+        0,
+      );
+    const closedRefundOutstandingAmount = refundTasks
+      .filter((item) => Number(item.refund_status) === 3)
+      .reduce(
+        (sum, item) =>
+          sum + Math.max(0, Number(item.refundable_amount) - Number(item.refunded_amount)),
+        0,
+      );
+    const overpaid = Math.max(0, Number(money.netPaid) - Number(money.effectivePayable));
+    const lifecycle = calculatePurchaseOrderLifecycle({
+      started: Number(order.status) !== 1,
+      orderedQuantity: totals.ordered,
+      cancelledQuantity: totals.cancelled,
+      confirmedNormalReceiptQuantity: totals.confirmedNormal,
+      pendingNormalReceiptQuantity: totals.pendingNormal,
+      purchaseReturnQuantity: totals.purchaseReturned,
+      exchangeReturnQuantity: totals.exchangeReturned,
+      confirmedExchangeReceiptQuantity: totals.confirmedExchange,
+      pendingExchangeReceiptQuantity: totals.pendingExchange,
+      pendingReturnCount: returnHeaders.filter((item) => Number(item.approve_status) === 0).length,
+      remainingPayable: Number(money.remainingPayable),
+      openRefundTaskCount,
+      unallocatedRefundAmount: Math.max(
+        0,
+        overpaid - openRefundAmount - closedRefundOutstandingAmount,
+      ),
+      closedRefundOutstandingAmount,
+    });
+    return { order, lifecycle, lineProgress, money };
+  }
+
+  private async recalcOrderStatus(tx: Prisma.TransactionClient, poId: bigint) {
+    const position = await this.purchaseOrderLifecycle(tx, poId);
+    await tx.hspsi_purchase_order.update({
+      where: { po_id: poId },
+      data: {
+        status: position.lifecycle.status,
+        arrival_qty: position.lifecycle.confirmedNormalReceiptQuantity,
+        is_all_arrival: position.lifecycle.normalRemainingQuantity <= 0 ? 1 : 0,
+      },
+    });
+    await this.syncPurchaseOrderTodo(tx, {
+      ...position.order,
+      status: position.lifecycle.status,
+    });
+    return position.lifecycle;
   }
   private async assertDictionaryValue(tx: PurchaseDb, code: string, value: number, label: string) {
     const category = await tx.hspsi_sys_dictionary_category.findFirst({
@@ -941,6 +1269,26 @@ export class PurchaseService {
     const mappedLineByApplicationDetail = new Map(
       activeMappedLines.map((item) => [String(item.source_application_detail_id), item]),
     );
+    const mappedDetails = details.map((item) => ({
+      id: item.id,
+      applicationDetailId: item.id,
+      goodsId: item.goods_id,
+      skuId: item.sku_id,
+      sourceShortageId: item.source_shortage_id,
+      quantity: item.qty,
+      unitType: item.unit_type,
+      referencePrice: item.reference_price,
+      remark: item.remark,
+      generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
+      generatedOrderNo:
+        activeOrderMap.get(
+          String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
+        )?.po_no ?? null,
+      generationStatus: mappedLineByApplicationDetail.has(String(item.id))
+        ? 'generated'
+        : 'not_generated',
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       id: header.pur_id,
       applicationNo: header.pur_no,
@@ -958,25 +1306,7 @@ export class PurchaseService {
       remark: header.remark,
       createdBy: header.created_by,
       createdAt: header.created_at,
-      details: details.map((item) => ({
-        id: item.id,
-        applicationDetailId: item.id,
-        goodsId: item.goods_id,
-        skuId: item.sku_id,
-        sourceShortageId: item.source_shortage_id,
-        quantity: item.qty,
-        unitType: item.unit_type,
-        referencePrice: item.reference_price,
-        remark: item.remark,
-        generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
-        generatedOrderNo:
-          activeOrderMap.get(
-            String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
-          )?.po_no ?? null,
-        generationStatus: mappedLineByApplicationDetail.has(String(item.id))
-          ? 'generated'
-          : 'not_generated',
-      })),
+      details: enrichedDetails,
       generatedOrders: linkedOrders.map((order) => {
         const orderLines = activeMappedLines.filter((item) => item.po_id === order.po_id);
         return {
@@ -1171,6 +1501,27 @@ export class PurchaseService {
         updated_by: BigInt(userId),
       },
     });
+    // 审批通过 → 给该组织下「采购经理」（权限码 purchase:applications:generate-order）下发待办，
+    // 提示生成采购订单。接收人由权限码+组织授权配置化解析，不写死角色。
+    const managerIds = await this.todoService.resolveRecipients(
+      'purchase:applications:generate-order',
+      Number(app.org_id),
+      tx,
+    );
+    for (const managerId of managerIds) {
+      await this.todoService.create(
+        {
+          userId: managerId,
+          organizationId: Number(app.org_id),
+          title: app.pur_no,
+          content: '采购申请已审批通过，请生成采购订单',
+          businessType: 'purchase_application',
+          businessId: Number(purId),
+          actorUserId: userId,
+        },
+        tx,
+      );
+    }
     return { id, message: '审批通过，请由采购人员生成采购订单' };
   }
 
@@ -1178,6 +1529,8 @@ export class PurchaseService {
     const purId = BigInt(id);
     const vendorId = BigInt(String(body.vendorId ?? 0));
     if (vendorId <= 0n) throw new BadRequestException('请选择本次采购订单的供应商');
+    const receiverId = BigInt(String(body.receiverId ?? 0));
+    if (receiverId <= 0n) throw new BadRequestException('请选择本次采购订单的收货人');
     const generationMode = String(body.generationMode ?? 'partial');
     if (!['all', 'partial'].includes(generationMode))
       throw new BadRequestException('采购订单生成方式无效');
@@ -1214,6 +1567,7 @@ export class PurchaseService {
         application.dept_id,
         application.warehouse_id,
       );
+      await this.assertReceiverScope(tx, application.org_id, application.dept_id, receiverId);
       const vendor = await tx.hspsi_basic_vendor.findFirst({
         where: { vendor_id: vendorId, deleted_at: null },
         select: { vendor_id: true },
@@ -1321,7 +1675,7 @@ export class PurchaseService {
           org_id: application.org_id,
           warehouse_id: application.warehouse_id,
           dept_id: application.dept_id,
-          receiver_id: BigInt(userId),
+          receiver_id: receiverId,
           vendor_id: vendorId,
           pcs_qty: totalQuantity,
           arrival_type: 1,
@@ -1374,6 +1728,20 @@ export class PurchaseService {
         },
         tx,
       );
+      await this.syncPurchaseOrderTodo(
+        tx,
+        {
+          po_id: order.po_id,
+          po_no: orderNo,
+          org_id: application.org_id,
+          receiver_id: receiverId,
+          status: 1,
+          created_by: BigInt(userId),
+        },
+        userId,
+      );
+      // 采购订单已生成，关闭「采购申请待生成订单」的待办
+      await this.todoService.completeByBusiness('purchase_application', Number(purId), tx);
       return {
         id: order.po_id,
         businessNo: orderNo,
@@ -1503,7 +1871,9 @@ export class PurchaseService {
     if (query.vendorId) where.vendor_id = BigInt(query.vendorId);
     if (query.orderStatus) where.status = Number(query.orderStatus);
     if (query.keyword) where.po_no = { contains: String(query.keyword) };
-    const [items, total] = await this.prisma.$transaction([
+    const summaryWhere = { ...where };
+    delete summaryWhere.status;
+    const [items, total, pendingTotal, completeTotal] = await this.prisma.$transaction([
       this.prisma.hspsi_purchase_order.findMany({
         where,
         skip: (page - 1) * pageSize,
@@ -1511,8 +1881,12 @@ export class PurchaseService {
         orderBy: { po_id: 'desc' },
       }),
       this.prisma.hspsi_purchase_order.count({ where }),
+      this.prisma.hspsi_purchase_order.count({
+        where: { ...summaryWhere, status: { not: 6 } },
+      }),
+      this.prisma.hspsi_purchase_order.count({ where: { ...summaryWhere, status: 6 } }),
     ]);
-    const [details, vendors, positions] = await Promise.all([
+    const [details, vendors, lifecyclePositions] = await Promise.all([
       items.length
         ? this.prisma.hspsi_purchase_order_detail.findMany({
             where: { po_id: { in: items.map((item) => item.po_id) } },
@@ -1529,21 +1903,43 @@ export class PurchaseService {
           async (item) =>
             [
               String(item.po_id),
-              await this.purchaseMoneyPosition(this.prisma, item.po_id),
+              await this.purchaseOrderLifecycle(this.prisma, item.po_id),
             ] as const,
         ),
       ),
     ]);
-    const positionMap = new Map(positions);
+    const orderUserIds = [
+      ...new Set(
+        items
+          .flatMap((item) => [item.receiver_id, item.created_by])
+          .filter((userId) => userId > 0n)
+          .map(String),
+      ),
+    ].map(BigInt);
+    // 姓名只按当前已获准查看的订单中出现的用户ID精确回查。
+    // 不走按用户所属组织过滤的通用下拉，避免总部人员替子公司建单时姓名显示为“—”。
+    const orderUsers = orderUserIds.length
+      ? await this.prisma.$queryRaw<Array<{ id: bigint; display_name: string }>>(
+          Prisma.sql`
+            SELECT id, COALESCE(NULLIF(nickname, ''), username) AS display_name
+            FROM hspsi_sys_user
+            WHERE id IN (${Prisma.join(orderUserIds)}) AND deleted_at IS NULL
+          `,
+        )
+      : [];
+    const orderUserNames = new Map(
+      orderUsers.map((user) => [String(user.id), String(user.display_name ?? '')]),
+    );
+    const lifecycleMap = new Map(lifecyclePositions);
     return {
       items: items.map((item) => {
         const lines = details.filter((line) => line.po_id === item.po_id);
         const detailAmount = lines.reduce((sum, line) => sum + Number(line.total_amout), 0);
         const totalCancelQty = lines.reduce((sum, line) => sum + Number(line.cancel_qty), 0);
         const vendor = vendors.find((v) => v.vendor_id === item.vendor_id);
-        const position = positionMap.get(String(item.po_id));
-        const progressPct =
-          item.pcs_qty > 0 ? Math.round((Number(item.arrival_qty) / item.pcs_qty) * 100) : 0;
+        const lifecyclePosition = lifecycleMap.get(String(item.po_id));
+        const lifecycle = lifecyclePosition?.lifecycle;
+        const position = lifecyclePosition?.money;
         return {
           id: item.po_id,
           orderNo: item.po_no,
@@ -1552,6 +1948,7 @@ export class PurchaseService {
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
           receiverId: item.receiver_id,
+          receiverName: orderUserNames.get(String(item.receiver_id)) ?? '',
           vendorId: item.vendor_id,
           vendorName: vendor?.conpany_name ?? '',
           pcsQty: item.pcs_qty,
@@ -1561,9 +1958,21 @@ export class PurchaseService {
           planArrivalDate: item.plan_arrival_date,
           deliveryType: item.delivery_type,
           deliveryNo: item.delivery_no,
-          arrivedQuantity: item.arrival_qty,
-          isAllArrived: item.is_all_arrival,
-          arrivalProgress: progressPct,
+          arrivedQuantity: lifecycle?.confirmedNormalReceiptQuantity ?? item.arrival_qty,
+          isAllArrived: lifecycle ? Number(lifecycle.normalRemainingQuantity <= 0) : item.is_all_arrival,
+          arrivalProgress: lifecycle?.originalArrivalProgress ?? 0,
+          handlingProgress: lifecycle?.handlingProgress ?? 0,
+          statusProgress: lifecycle?.statusProgress ?? '',
+          normalRemainingQuantity: lifecycle?.normalRemainingQuantity ?? 0,
+          normalAvailableQuantity: lifecycle?.normalAvailableQuantity ?? 0,
+          exchangeRemainingQuantity: lifecycle?.exchangeRemainingQuantity ?? 0,
+          exchangeAvailableQuantity: lifecycle?.exchangeAvailableQuantity ?? 0,
+          purchaseReturnQuantity: lifecycle?.purchaseReturnQuantity ?? 0,
+          netRetainedQuantity: lifecycle?.netRetainedQuantity ?? 0,
+          canGenerateNormalReceipt: lifecycle?.canGenerateNormalReceipt ?? false,
+          canGenerateExchangeReceipt: lifecycle?.canGenerateExchangeReceipt ?? false,
+          canCancelUnarrived: lifecycle?.canCancelUnarrived ?? false,
+          abnormalRefundClosed: lifecycle?.abnormalRefundClosed ?? false,
           totalAmount: detailAmount,
           payableAmount: Number(position?.originalPayable ?? detailAmount),
           returnAmount: Number(position?.returnAmount ?? 0),
@@ -1576,9 +1985,10 @@ export class PurchaseService {
           paymentType: item.pay_type,
           planPayDate: item.plan_pay_date,
           paymentStatus: item.pay_status,
-          orderStatus: item.status,
+          orderStatus: lifecycle?.status ?? item.status,
           remark: item.remark,
           createdBy: item.created_by,
+          createdByName: orderUserNames.get(String(item.created_by)) ?? '',
           createdAt: item.created_at,
         };
       }),
@@ -1586,9 +1996,9 @@ export class PurchaseService {
       page,
       pageSize,
       summary: {
-        total,
-        pending: items.filter((item) => Number(item.status) === 1).length,
-        complete: items.filter((item) => Number(item.status) === 3).length,
+        total: pendingTotal + completeTotal,
+        pending: pendingTotal,
+        complete: completeTotal,
       },
     };
   }
@@ -1608,7 +2018,7 @@ export class PurchaseService {
         : [],
       this.prisma.hspsi_purchase_order_input.findMany({
         where: { po_id: header.po_id, comfirm_status: { in: [0, 1] }, deleted_at: null },
-        select: { po_input_id: true, comfirm_status: true },
+        select: { po_input_id: true, input_type: true, comfirm_status: true },
       }),
       header.pur_id > 0n
         ? this.prisma.hspsi_purchase_approve.findFirst({
@@ -1640,8 +2050,77 @@ export class PurchaseService {
         .filter((item) => item.comfirm_status === 1)
         .map((item) => String(item.po_input_id)),
     );
+    const normalReceiptIds = new Set(
+      receiptHeads
+        .filter((item) => Number(item.input_type) !== 2)
+        .map((item) => String(item.po_input_id)),
+    );
     const detailAmount = details.reduce((sum, line) => sum + Number(line.total_amout), 0);
-    const position = await this.purchaseMoneyPosition(this.prisma, header.po_id);
+    const lifecyclePosition = await this.purchaseOrderLifecycle(this.prisma, header.po_id);
+    const position = lifecyclePosition.money;
+    const mappedDetails = details.map((line) => {
+      const product = goods.find((item) => item.goods_id === line.goods_id);
+      const received = receiptDetails.filter(
+        (item) =>
+          item.goods_id === line.goods_id &&
+          item.sku_id === line.sku_id &&
+          normalReceiptIds.has(String(item.po_input_id)),
+      );
+      const arrivedQuantity = received.reduce((sum, item) => sum + Number(item.input_qty), 0);
+      const inputtedQuantity = received
+        .filter((item) => confirmedIds.has(String(item.po_input_id)))
+        .reduce((sum, item) => sum + Number(item.input_qty), 0);
+      const latestArrivalDate =
+        received
+          .map((item) => item.arrive_at)
+          .filter(Boolean)
+          .sort((a, b) => Number(b) - Number(a))[0] ?? null;
+      const canceledQuantity = Number(line.cancel_qty);
+      const category = categories.find((item) => item.goods_catg_id === product?.goods_catg_id);
+      const lineLifecycle = lifecyclePosition.lineProgress.get(`${line.goods_id}:${line.sku_id}`);
+      return {
+        id: line.id,
+        sourceApplicationDetailId: line.source_application_detail_id,
+        goodsId: line.goods_id,
+        goodsCode: product?.query_code ?? '',
+        goodsName: product?.goods_name ?? '',
+        categoryId: product?.goods_catg_id ?? 0,
+        categoryName: category?.goods_name ?? '',
+        categoryWarehouseType: category?.warehouse_type ?? 0,
+        skuId: line.sku_id,
+        quantity: line.qty,
+        canceledQuantity,
+        arrivedQuantity,
+        unarrivedQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
+        inputtedQuantity,
+        uninputtedQuantity: Math.max(0, arrivedQuantity - inputtedQuantity),
+        remainingQuantity: Math.max(
+          0,
+          Number(lineLifecycle?.ordered ?? line.qty) -
+            Number(lineLifecycle?.cancelled ?? canceledQuantity) -
+            Number(lineLifecycle?.confirmedNormal ?? inputtedQuantity) -
+            Number(lineLifecycle?.pendingNormal ?? 0),
+        ),
+        normalRemainingQuantity: Math.max(
+          0,
+          Number(lineLifecycle?.ordered ?? line.qty) -
+            Number(lineLifecycle?.cancelled ?? canceledQuantity) -
+            Number(lineLifecycle?.confirmedNormal ?? inputtedQuantity),
+        ),
+        exchangeRemainingQuantity: Math.max(
+          0,
+          Number(lineLifecycle?.exchangeReturned ?? 0) -
+            Number(lineLifecycle?.confirmedExchange ?? 0) -
+            Number(lineLifecycle?.pendingExchange ?? 0),
+        ),
+        latestArrivalDate,
+        unitType: line.unit_type,
+        unitPrice: line.unit_price,
+        totalAmount: Number(line.total_amout),
+        remark: line.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       id: header.po_id,
@@ -1657,46 +2136,21 @@ export class PurchaseService {
       netPaidAmount: Number(position.netPaid),
       remainingPayable: Number(position.remainingPayable),
       paymentProgressStatus: position.paymentProgressStatus,
-      details: details.map((line) => {
-        const product = goods.find((item) => item.goods_id === line.goods_id);
-        const received = receiptDetails.filter(
-          (item) => item.goods_id === line.goods_id && item.sku_id === line.sku_id,
-        );
-        const arrivedQuantity = received.reduce((sum, item) => sum + Number(item.input_qty), 0);
-        const inputtedQuantity = received
-          .filter((item) => confirmedIds.has(String(item.po_input_id)))
-          .reduce((sum, item) => sum + Number(item.input_qty), 0);
-        const latestArrivalDate =
-          received
-            .map((item) => item.arrive_at)
-            .filter(Boolean)
-            .sort((a, b) => Number(b) - Number(a))[0] ?? null;
-        const canceledQuantity = Number(line.cancel_qty);
-        const category = categories.find((item) => item.goods_catg_id === product?.goods_catg_id);
-        return {
-          id: line.id,
-          sourceApplicationDetailId: line.source_application_detail_id,
-          goodsId: line.goods_id,
-          goodsCode: product?.query_code ?? '',
-          goodsName: product?.goods_name ?? '',
-          categoryId: product?.goods_catg_id ?? 0,
-          categoryName: category?.goods_name ?? '',
-          categoryWarehouseType: category?.warehouse_type ?? 0,
-          skuId: line.sku_id,
-          quantity: line.qty,
-          canceledQuantity,
-          arrivedQuantity,
-          unarrivedQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
-          inputtedQuantity,
-          uninputtedQuantity: Math.max(0, arrivedQuantity - inputtedQuantity),
-          remainingQuantity: Math.max(0, Number(line.qty) - canceledQuantity - arrivedQuantity),
-          latestArrivalDate,
-          unitType: line.unit_type,
-          unitPrice: line.unit_price,
-          totalAmount: Number(line.total_amout),
-          remark: line.remark,
-        };
-      }),
+      orderStatus: lifecyclePosition.lifecycle.status,
+      statusProgress: lifecyclePosition.lifecycle.statusProgress,
+      arrivalProgress: lifecyclePosition.lifecycle.originalArrivalProgress,
+      handlingProgress: lifecyclePosition.lifecycle.handlingProgress,
+      normalRemainingQuantity: lifecyclePosition.lifecycle.normalRemainingQuantity,
+      normalAvailableQuantity: lifecyclePosition.lifecycle.normalAvailableQuantity,
+      exchangeRemainingQuantity: lifecyclePosition.lifecycle.exchangeRemainingQuantity,
+      exchangeAvailableQuantity: lifecyclePosition.lifecycle.exchangeAvailableQuantity,
+      purchaseReturnQuantity: lifecyclePosition.lifecycle.purchaseReturnQuantity,
+      netRetainedQuantity: lifecyclePosition.lifecycle.netRetainedQuantity,
+      canGenerateNormalReceipt: lifecyclePosition.lifecycle.canGenerateNormalReceipt,
+      canGenerateExchangeReceipt: lifecyclePosition.lifecycle.canGenerateExchangeReceipt,
+      canCancelUnarrived: lifecyclePosition.lifecycle.canCancelUnarrived,
+      abnormalRefundClosed: lifecyclePosition.lifecycle.abnormalRefundClosed,
+      details: enrichedDetails,
     };
   }
   async saveOrder(id: string | null, body: Body, userId: string) {
@@ -1767,7 +2221,7 @@ export class PurchaseService {
       org_id: BigInt(String(body.orgId)),
       warehouse_id: BigInt(String(body.warehouseId)),
       dept_id: BigInt(String(body.deptId)),
-      receiver_id: BigInt(String(body.receiverId)),
+      receiver_id: BigInt(String(body.receiverId ?? 0)),
       vendor_id: body.vendorId ? BigInt(String(body.vendorId)) : 0n,
       pcs_qty: quantity,
       arrival_type: Number(body.arrivalType),
@@ -1784,7 +2238,9 @@ export class PurchaseService {
     };
     return this.guardedTransaction(async (tx) => {
       await this.materializeQuickCatalog(tx, pricedLines, userId);
+      this.assertUniqueOrderLines(pricedLines);
       await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
+      await this.assertReceiverScope(tx, data.org_id, data.dept_id, data.receiver_id);
       await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, pricedLines);
       await this.assertDictionaryValue(tx, 'purchase_settlement_type', data.pay_type, '结算方式');
       if (id) {
@@ -1851,6 +2307,18 @@ export class PurchaseService {
           remark: String(line.remark ?? ''),
         })),
       });
+      await this.syncPurchaseOrderTodo(
+        tx,
+        {
+          po_id: poId,
+          po_no: orderNo,
+          org_id: data.org_id,
+          receiver_id: data.receiver_id,
+          status: 1,
+          created_by: BigInt(String(existingOrder?.created_by ?? userId)),
+        },
+        userId,
+      );
       let paymentNo = '';
       if (currentPaymentAmount.greaterThan(0)) {
         const paymentChannel = Number(body.currentPaymentChannel);
@@ -1962,6 +2430,7 @@ export class PurchaseService {
       if (!vendor) throw new BadRequestException('所选供应商不存在或已停用');
       const lines = await tx.hspsi_purchase_order_detail.findMany({ where: { po_id: poId } });
       if (!lines.length) throw new BadRequestException('采购订单至少需要一条明细');
+      this.assertUniqueOrderLines(lines);
       if (lines.some((line) => Number(line.total_amout) <= 0))
         throw new BadRequestException('请先填写所有采购明细总价并保存订单');
       await this.assertOrganizationScope(tx, order.org_id, order.dept_id, order.warehouse_id);
@@ -2021,6 +2490,7 @@ export class PurchaseService {
           updated_at: new Date(),
         },
       });
+      await this.logOrderTransition(tx, poId, 'start', '开始采购', userId, '订单进入采购中');
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_application',
@@ -2033,6 +2503,7 @@ export class PurchaseService {
         },
         tx,
       );
+      await this.ensurePurchasePaidTodo(tx, poId);
       return { id, applicationId, applicationNo, message: '采购订单已开始采购' };
     });
   }
@@ -2042,7 +2513,15 @@ export class PurchaseService {
       await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${poId} FOR UPDATE`;
       const order = await tx.hspsi_purchase_order.findFirst({
         where: { po_id: poId, deleted_at: null },
-        select: { pur_id: true },
+        select: {
+          po_id: true,
+          po_no: true,
+          pur_id: true,
+          org_id: true,
+          receiver_id: true,
+          status: true,
+          created_by: true,
+        },
       });
       if (!order) throw new NotFoundException('采购订单不存在');
       const [inputs, payments, shortageLines] = await Promise.all([
@@ -2068,6 +2547,7 @@ export class PurchaseService {
         where: { po_id: poId },
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
       });
+      await this.syncPurchaseOrderTodo(tx, order, userId, true);
       await tx.hspsi_purchase_order_detail.updateMany({
         where: { po_id: poId, source_application_detail_id: { not: null } },
         data: { source_application_detail_id: null },
@@ -2097,13 +2577,19 @@ export class PurchaseService {
         where: { po_id: poId, deleted_at: null },
       });
       if (!order) throw new NotFoundException('采购订单不存在');
-      if (![2, 3].includes(order.status))
-        throw new BadRequestException('仅采购中或部分入库订单可退回未到货数量');
+      const lifecycleBeforeReturn = await this.purchaseOrderLifecycle(tx, poId);
+      if (!lifecycleBeforeReturn.lifecycle.canCancelUnarrived)
+        throw new BadRequestException('当前订单没有可退回的未到货数量');
       const orderLines = await tx.hspsi_purchase_order_detail.findMany({
         where: { po_id: BigInt(id) },
       });
       const receiptHeaders = await tx.hspsi_purchase_order_input.findMany({
-        where: { po_id: poId, comfirm_status: { in: [0, 1] }, deleted_at: null },
+        where: {
+          po_id: poId,
+          input_type: { not: 2 },
+          comfirm_status: { in: [0, 1] },
+          deleted_at: null,
+        },
         select: { po_input_id: true },
       });
       const receiptDetails = receiptHeaders.length
@@ -2143,7 +2629,6 @@ export class PurchaseService {
         orderLine.cancel_qty += cancelQty;
         returnLines.push({ orderLine, quantity: cancelQty });
       }
-      await this.assertProductionShortageOrderCapacity(tx, order.pur_id);
       const businessNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_RETURN);
       const header = await tx.hspsi_purchase_order_input_exit.create({
         data: {
@@ -2196,45 +2681,105 @@ export class PurchaseService {
       );
       await this.createRefundTask(tx, header.po_exit_id, userId);
       await this.recalcOrderStatus(tx, poId);
+      await this.syncProductionShortageState(tx, order.pur_id, userId);
       await tx.hspsi_purchase_order.update({
         where: { po_id: poId },
         data: { updated_by: BigInt(userId), updated_at: new Date() },
       });
+      await this.logOrderTransition(tx, poId, 'return-unarrived', '退回未到货', userId, `生成退货单 ${businessNo}`);
       return { id: header.po_exit_id, businessNo, message: '未到货数量已退回，退货记录已生成' };
     });
   }
 
-  async generateReceipt(id: string, userId: string, warehouseId?: unknown) {
-    const order = await this.order(id);
-    if (Number(order.status) === 1) throw new BadRequestException('请先开始采购，再生成采购入库单');
-    const existing = await this.prisma.hspsi_purchase_order_input.findFirst({
-      where: { po_id: BigInt(id), comfirm_status: 0, deleted_at: null },
-      orderBy: { po_input_id: 'desc' },
-    });
-    if (existing) {
-      await this.documentTrace.link({
-        upstreamType: 'purchase_order',
-        upstreamId: order.po_id,
-        upstreamNo: order.orderNo,
-        downstreamType: 'purchase_receipt',
-        downstreamId: existing.po_input_id,
-        downstreamNo: existing.po_input_no,
-        createdBy: userId,
+  async generateReceipt(
+    id: string,
+    userId: string,
+    warehouseId?: unknown,
+    inputTypeValue: unknown = 1,
+  ) {
+    const poId = BigInt(id);
+    const inputType = Number(inputTypeValue ?? 1);
+    if (![1, 2].includes(inputType)) throw new BadRequestException('采购入库类型无效');
+    return this.guardedTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${poId} FOR UPDATE`;
+      const order = await tx.hspsi_purchase_order.findFirst({
+        where: { po_id: poId, deleted_at: null },
       });
-      return {
-        id: existing.po_input_id,
-        businessNo: existing.po_input_no,
-        created: false,
-        message: '该订单已有待办理入库单',
-      };
-    }
-    const lines = order.details.filter((line: Body) => Number(line.remainingQuantity ?? 0) > 0);
-    if (!lines.length) throw new BadRequestException('该订单没有剩余可入库商品');
-    const quantity = lines.reduce(
-      (sum: number, line: Body) => sum + Number(line.remainingQuantity),
-      0,
-    );
-    return this.prisma.$transaction(async (tx) => {
+      if (!order) throw new NotFoundException('采购订单不存在');
+      if (Number(order.status) === 1)
+        throw new BadRequestException('请先开始采购，再生成采购入库单');
+      const existing = await tx.hspsi_purchase_order_input.findFirst({
+        where: { po_id: poId, comfirm_status: 0, deleted_at: null },
+        orderBy: { po_input_id: 'desc' },
+      });
+      if (existing) {
+        if (Number(existing.input_type) !== inputType)
+          throw new BadRequestException('该订单已有待办理入库单，请先办理或撤销后再继续');
+        await this.documentTrace.link(
+          {
+            upstreamType: 'purchase_order',
+            upstreamId: order.po_id,
+            upstreamNo: order.po_no,
+            downstreamType: 'purchase_receipt',
+            downstreamId: existing.po_input_id,
+            downstreamNo: existing.po_input_no,
+            createdBy: userId,
+          },
+          tx,
+        );
+        return {
+          id: existing.po_input_id,
+          businessNo: existing.po_input_no,
+          created: false,
+          message: inputType === 2 ? '该订单已有待办理换货入库单' : '该订单已有待办理入库单',
+        };
+      }
+      const lifecyclePosition = await this.purchaseOrderLifecycle(tx, poId);
+      if (lifecyclePosition.lifecycle.status === 6)
+        throw new BadRequestException('已结束采购订单不能生成入库单');
+      const orderDetails = await tx.hspsi_purchase_order_detail.findMany({
+        where: { po_id: poId },
+        orderBy: { id: 'asc' },
+      });
+      const lines = orderDetails.flatMap((line) => {
+        const progress = lifecyclePosition.lineProgress.get(`${line.goods_id}:${line.sku_id}`);
+        if (!progress) return [];
+        const available =
+          inputType === 2
+            ? Math.max(
+                0,
+                progress.exchangeReturned -
+                  progress.confirmedExchange -
+                  progress.pendingExchange,
+              )
+            : Math.max(
+                0,
+                progress.ordered -
+                  progress.cancelled -
+                  progress.confirmedNormal -
+                  progress.pendingNormal,
+              );
+        return available > 0
+          ? [
+              {
+                goodsId: line.goods_id,
+                skuId: line.sku_id,
+                quantity: line.qty,
+                remainingQuantity: available,
+                unitType: line.unit_type,
+                remark: line.remark,
+              },
+            ]
+          : [];
+      });
+      if (!lines.length)
+        throw new BadRequestException(
+          inputType === 2 ? '该订单没有剩余可换货入库商品' : '该订单没有剩余可入库商品',
+        );
+      const quantity = lines.reduce(
+        (sum: number, line: Body) => sum + Number(line.remainingQuantity),
+        0,
+      );
       const requestedWarehouseId = warehouseId ? BigInt(String(warehouseId)) : 0n;
       const targetWarehouseId = await this.resolvePurchaseWarehouse(
         tx,
@@ -2252,7 +2797,7 @@ export class PurchaseService {
           org_id: order.org_id,
           warehouse_id: targetWarehouseId,
           dept_id: order.dept_id,
-          input_type: 1,
+          input_type: inputType,
           po_qty: order.pcs_qty,
           input_qty: quantity,
           remark: '',
@@ -2288,7 +2833,7 @@ export class PurchaseService {
         {
           upstreamType: 'purchase_order',
           upstreamId: order.po_id,
-          upstreamNo: order.orderNo,
+          upstreamNo: order.po_no,
           downstreamType: 'purchase_receipt',
           downstreamId: header.po_input_id,
           downstreamNo: businessNo,
@@ -2300,7 +2845,10 @@ export class PurchaseService {
         id: header.po_input_id,
         businessNo,
         created: true,
-        message: '采购入库单已生成，请补充验收及批次信息',
+        message:
+          inputType === 2
+            ? '采购换货入库单已生成，请补充验收及批次信息'
+            : '采购入库单已生成，请补充验收及批次信息',
       };
     });
   }
@@ -2324,7 +2872,16 @@ export class PurchaseService {
     const orders = poIds.length
       ? await this.prisma.hspsi_purchase_order.findMany({
           where: { po_id: { in: poIds } },
-          select: { po_id: true, po_no: true, pur_id: true },
+          select: { po_id: true, po_no: true, pur_id: true, vendor_id: true },
+        })
+      : [];
+    const vendorIds = [
+      ...new Set(orders.map((item) => item.vendor_id).filter((id) => id > 0n)),
+    ];
+    const vendors = vendorIds.length
+      ? await this.prisma.hspsi_basic_vendor.findMany({
+          where: { vendor_id: { in: vendorIds } },
+          select: { vendor_id: true, conpany_name: true },
         })
       : [];
     const purIds = [...new Set(orders.map((item) => item.pur_id).filter((id) => id > 0n))];
@@ -2337,6 +2894,7 @@ export class PurchaseService {
     return {
       items: items.map((item) => {
         const ord = orders.find((o) => o.po_id === item.po_id);
+        const vendor = vendors.find((v) => v.vendor_id === ord?.vendor_id);
         return {
           id: item.po_input_id,
           receiptNo: item.po_input_no,
@@ -2344,6 +2902,8 @@ export class PurchaseService {
           orderNo: ord?.po_no ?? null,
           applicationNo:
             applications.find((application) => application.pur_id === ord?.pur_id)?.pur_no ?? null,
+          vendorId: ord?.vendor_id ?? null,
+          vendorName: vendor?.conpany_name ?? '',
           orgId: item.org_id,
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
@@ -2376,6 +2936,57 @@ export class PurchaseService {
       where: { po_input_id: header.po_input_id, deleted_at: null },
     });
     const order = await this.order(String(header.po_id));
+    // 临时采购入库：入库单关联的采购申请由系统反向生成（source_type=temporary_receipt）
+    const sourceApplication = order.applicationId
+      ? await this.prisma.hspsi_purchase_approve.findFirst({
+          where: { pur_id: BigInt(String(order.applicationId)), deleted_at: null },
+          select: { source_type: true },
+        })
+      : null;
+
+    const mappedDetails = details.map((line) => {
+      const source = order.details.find(
+        (item: Body) =>
+          String(item.goodsId) === String(line.goods_id) &&
+          String(item.skuId) === String(line.sku_id),
+      );
+      const pendingQuantity = header.comfirm_status === 0 ? Number(line.input_qty) : 0;
+      return {
+        id: line.id,
+        batchNo: line.batch_no,
+        goodsId: line.goods_id,
+        goodsCode: source?.goodsCode ?? '',
+        goodsName: source?.goodsName ?? '',
+        categoryName: source?.categoryName ?? '',
+        skuId: line.sku_id,
+        orderQuantity: line.po_qty,
+        arrivedQuantity: source?.arrivedQuantity ?? line.input_qty,
+        unarrivedQuantity: source?.unarrivedQuantity ?? 0,
+        inputtedQuantity: source?.inputtedQuantity ?? 0,
+        uninputtedQuantity: source?.uninputtedQuantity ?? 0,
+        baseArrivedQuantity: Math.max(
+          0,
+          Number(source?.arrivedQuantity ?? line.input_qty) - pendingQuantity,
+        ),
+        baseUnarrivedQuantity: Number(source?.unarrivedQuantity ?? 0) + pendingQuantity,
+        baseUninputtedQuantity: Math.max(
+          0,
+          Number(source?.uninputtedQuantity ?? 0) - pendingQuantity,
+        ),
+        remainingQuantity: Number(source?.remainingQuantity ?? 0) + Number(line.input_qty),
+        latestArrivalDate: source?.latestArrivalDate ?? line.arrive_at,
+        inputQuantity: line.input_qty,
+        unitType: line.unit_type,
+        unitPrice: source?.unitPrice ?? 0,
+        amount: Number(line.input_qty) * Number(source?.unitPrice ?? 0),
+        position: line.input_position,
+        productionDate: line.produce_period,
+        validityPeriod: line.validity_period,
+        arrivalDate: line.arrive_at,
+        remark: line.remark,
+      };
+    });
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       id: header.po_input_id,
@@ -2383,54 +2994,14 @@ export class PurchaseService {
       orderId: header.po_id,
       orderNo: order.orderNo,
       applicationNo: order.applicationNo,
+      directReceipt: sourceApplication?.source_type === 'temporary_receipt',
       orgId: header.org_id,
       warehouseId: header.warehouse_id,
       deptId: header.dept_id,
       receiverId: header.receiver_id,
       inputType: header.input_type,
       confirmStatus: header.comfirm_status,
-      details: details.map((line) => {
-        const source = order.details.find(
-          (item: Body) =>
-            String(item.goodsId) === String(line.goods_id) &&
-            String(item.skuId) === String(line.sku_id),
-        );
-        const pendingQuantity = header.comfirm_status === 0 ? Number(line.input_qty) : 0;
-        return {
-          id: line.id,
-          batchNo: line.batch_no,
-          goodsId: line.goods_id,
-          goodsCode: source?.goodsCode ?? '',
-          goodsName: source?.goodsName ?? '',
-          categoryName: source?.categoryName ?? '',
-          skuId: line.sku_id,
-          orderQuantity: line.po_qty,
-          arrivedQuantity: source?.arrivedQuantity ?? line.input_qty,
-          unarrivedQuantity: source?.unarrivedQuantity ?? 0,
-          inputtedQuantity: source?.inputtedQuantity ?? 0,
-          uninputtedQuantity: source?.uninputtedQuantity ?? 0,
-          baseArrivedQuantity: Math.max(
-            0,
-            Number(source?.arrivedQuantity ?? line.input_qty) - pendingQuantity,
-          ),
-          baseUnarrivedQuantity: Number(source?.unarrivedQuantity ?? 0) + pendingQuantity,
-          baseUninputtedQuantity: Math.max(
-            0,
-            Number(source?.uninputtedQuantity ?? 0) - pendingQuantity,
-          ),
-          remainingQuantity: Number(source?.remainingQuantity ?? 0) + Number(line.input_qty),
-          latestArrivalDate: source?.latestArrivalDate ?? line.arrive_at,
-          inputQuantity: line.input_qty,
-          unitType: line.unit_type,
-          unitPrice: source?.unitPrice ?? 0,
-          amount: Number(line.input_qty) * Number(source?.unitPrice ?? 0),
-          position: line.input_position,
-          productionDate: line.produce_period,
-          validityPeriod: line.validity_period,
-          arrivalDate: line.arrive_at,
-          remark: line.remark,
-        };
-      }),
+      details: enrichedDetails,
     };
   }
   async saveReceipt(id: string | null, body: Body, userId: string) {
@@ -2754,12 +3325,13 @@ export class PurchaseService {
         deleted_at: null,
         NOT: { po_input_id: receipt.po_input_id },
       },
-      select: { po_input_id: true },
+      select: { po_input_id: true, input_type: true },
     });
-    const otherDetails = otherHeaders.length
+    const normalOtherHeaders = otherHeaders.filter((item) => Number(item.input_type) !== 2);
+    const otherDetails = normalOtherHeaders.length
       ? await tx.hspsi_purchase_order_input_detail.findMany({
           where: {
-            po_input_id: { in: otherHeaders.map((item) => item.po_input_id) },
+            po_input_id: { in: normalOtherHeaders.map((item) => item.po_input_id) },
             deleted_at: null,
           },
         })
@@ -2769,7 +3341,7 @@ export class PurchaseService {
       skuId: line.sku_id,
       inputQuantity: line.input_qty,
     }));
-    if (direction > 0) effective.push(...receipt.details);
+    if (direction > 0 && Number(receipt.input_type) !== 2) effective.push(...receipt.details);
     const receivedByKey = new Map<string, number>();
     for (const line of effective) {
       const key = `${line.goodsId}:${line.skuId}`;
@@ -2795,12 +3367,17 @@ export class PurchaseService {
       where: { po_id: receipt.po_id },
       data: { arrival_qty: arrived, is_all_arrival: arrived >= receivable ? 1 : 0 },
     });
-    await this.recalcOrderStatus(tx, receipt.po_id);
   }
   async confirmReceipt(id: string, confirmed: boolean, comment: string, userId: string) {
     if (!confirmed) throw new BadRequestException('已入库单不能撤销，请从采购入库单发起采购退货');
     const receiptId = BigInt(id);
     let alreadyConfirmed = false;
+    let receiptContext: {
+      poId: bigint;
+      receiptNo: string;
+      orderNo: string;
+      quantity: number;
+    } | null = null;
     await this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT po_input_id FROM hspsi_purchase_order_input WHERE po_input_id=${receiptId} FOR UPDATE`;
       const header = await tx.hspsi_purchase_order_input.findFirst({
@@ -2820,9 +3397,6 @@ export class PurchaseService {
       const sourceOrder = await tx.hspsi_purchase_order.findUniqueOrThrow({
         where: { po_id: header.po_id },
       });
-      const orderDetails = await tx.hspsi_purchase_order_detail.findMany({
-        where: { po_id: header.po_id },
-      });
       const details = await tx.hspsi_purchase_order_input_detail.findMany({
         where: { po_input_id: receiptId, deleted_at: null },
       });
@@ -2838,38 +3412,20 @@ export class PurchaseService {
           validityPeriod: line.validity_period,
         })),
       };
+      receiptContext = {
+        poId: sourceOrder.po_id,
+        receiptNo: header.po_input_no,
+        orderNo: sourceOrder.po_no,
+        quantity: Number(header.input_qty),
+      };
       if (
         confirmed &&
         postingReceipt.details.some((line: Body) => !String(line.batchNo ?? '').trim())
       )
         throw new BadRequestException('请先办理入库并填写全部商品批号，再执行确认入库');
       if (confirmed) {
-        const confirmedHeaders = await tx.hspsi_purchase_order_input.findMany({
-          where: { po_id: header.po_id, comfirm_status: 1, deleted_at: null },
-          select: { po_input_id: true },
-        });
-        const confirmedDetails = confirmedHeaders.length
-          ? await tx.hspsi_purchase_order_input_detail.findMany({
-              where: {
-                po_input_id: { in: confirmedHeaders.map((item) => item.po_input_id) },
-                deleted_at: null,
-              },
-            })
-          : [];
-        const allowedQty = new Map<string, number>(),
-          confirmedQty = new Map<string, number>(),
-          currentQty = new Map<string, number>();
-        for (const line of orderDetails) {
-          const key = `${line.goods_id}:${line.sku_id}`;
-          allowedQty.set(
-            key,
-            (allowedQty.get(key) ?? 0) + Math.max(0, Number(line.qty) - Number(line.cancel_qty)),
-          );
-        }
-        for (const line of confirmedDetails) {
-          const key = `${line.goods_id}:${line.sku_id}`;
-          confirmedQty.set(key, (confirmedQty.get(key) ?? 0) + Number(line.input_qty));
-        }
+        const lifecyclePosition = await this.purchaseOrderLifecycle(tx, header.po_id);
+        const currentQty = new Map<string, number>();
         for (const line of details) {
           const key = `${line.goods_id}:${line.sku_id}`,
             qty = Number(line.input_qty);
@@ -2877,11 +3433,22 @@ export class PurchaseService {
           currentQty.set(key, (currentQty.get(key) ?? 0) + qty);
         }
         for (const [key, qty] of currentQty) {
-          const allowed = allowedQty.get(key);
-          if (allowed === undefined)
+          const progress = lifecyclePosition.lineProgress.get(key);
+          if (!progress)
             throw new BadRequestException('采购入库明细不属于来源采购订单');
-          if ((confirmedQty.get(key) ?? 0) + qty > allowed + 0.000001)
-            throw new BadRequestException('累计确认入库数量超过采购订单可收数量');
+          const exchange = Number(header.input_type) === 2;
+          const allowed = exchange
+            ? progress.exchangeReturned
+            : Math.max(0, progress.ordered - progress.cancelled);
+          const alreadyConfirmed = exchange
+            ? progress.confirmedExchange
+            : progress.confirmedNormal;
+          if (alreadyConfirmed + qty > allowed + 0.000001)
+            throw new BadRequestException(
+              exchange
+                ? '累计换货入库数量超过已生效换货退回数量'
+                : '累计确认入库数量超过采购订单可收数量',
+            );
         }
       }
       await this.documentTrace.link(
@@ -2944,7 +3511,18 @@ export class PurchaseService {
           updated_at: new Date(),
         },
       });
+      await this.recalcOrderStatus(tx, header.po_id);
     });
+    if (confirmed && !alreadyConfirmed && receiptContext) {
+      try {
+        await this.message.sendPurchaseReceiptNotification(receiptContext);
+      } catch (error) {
+        // 通知失败不影响入库结果，仅记录应用日志
+        PurchaseService.logger.error(
+          `采购入库通知发送失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     return {
       id,
       message: alreadyConfirmed
@@ -3001,6 +3579,14 @@ export class PurchaseService {
           select: { po_id: true, po_no: true },
         })
       : [];
+    const receiptIds = [...new Set(items.map((i) => i.po_input_id).filter((x) => x > 0n))];
+    const receipts = receiptIds.length
+      ? await this.prisma.hspsi_purchase_order_input.findMany({
+          where: { po_input_id: { in: receiptIds } },
+          select: { po_input_id: true, po_input_no: true },
+        })
+      : [];
+    const receiptNoById = new Map(receipts.map((r) => [String(r.po_input_id), r.po_input_no]));
     const exitIds = items.map((i) => i.po_exit_id);
     const qtySums = exitIds.length
       ? await this.prisma.hspsi_purchase_order_input_exit_detail.groupBy({
@@ -3018,6 +3604,7 @@ export class PurchaseService {
           id: item.po_exit_id,
           returnNo: item.po_exit_no,
           receiptId: item.po_input_id,
+          receiptNo: item.po_input_id > 0n ? (receiptNoById.get(String(item.po_input_id)) ?? null) : null,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
           sourceType: fromReceipt ? 'receipt' : 'order',
@@ -3057,26 +3644,36 @@ export class PurchaseService {
       where: { po_exit_id: header.po_exit_id, deleted_at: null },
     });
     const fromReceipt = header.po_input_id > 0n;
+    const sourceReceipt = fromReceipt
+      ? await this.prisma.hspsi_purchase_order_input.findFirst({
+          where: { po_input_id: header.po_input_id, deleted_at: null },
+          select: { po_input_no: true },
+        })
+      : null;
+
+    const mappedDetails = details.map((line) => ({
+      id: line.serial_number,
+      goodsId: line.goods_id,
+      skuId: line.sku_id,
+      batchNo: line.batch_no,
+      unitType: line.unit_type,
+      orderQuantity: line.po_qty,
+      inputQuantity: line.input_qty,
+      returnQuantity: line.exit_qty,
+      remark: line.remark,
+    }));
+    const enrichedDetails = await this.references.enrichGoods(mappedDetails);
     return {
       ...header,
       returnNo: header.po_exit_no,
+      receiptNo: sourceReceipt?.po_input_no ?? null,
       sourceType: fromReceipt ? 'receipt' : 'order',
       sourceTypeLabel: fromReceipt ? '已入库退货' : '未入库退货',
       affectsInventory: fromReceipt,
       autoCreated: header.auto_created === 1,
       sourceDocumentType: header.source_document_type,
       sourceDocumentId: header.source_document_id,
-      details: details.map((line) => ({
-        id: line.serial_number,
-        goodsId: line.goods_id,
-        skuId: line.sku_id,
-        batchNo: line.batch_no,
-        unitType: line.unit_type,
-        orderQuantity: line.po_qty,
-        inputQuantity: line.input_qty,
-        returnQuantity: line.exit_qty,
-        remark: line.remark,
-      })),
+      details: enrichedDetails,
     };
   }
   async saveReturn(id: string | null, body: Body, userId: string, submit = false) {
@@ -3369,8 +3966,8 @@ export class PurchaseService {
       });
     }
     if (approved) {
-      await this.recalcOrderStatus(tx, item.po_id);
       await this.createRefundTask(tx, item.po_exit_id, businessActor);
+      await this.recalcOrderStatus(tx, item.po_id);
     }
     return { id, message: approved ? '退货审批通过，库存已扣减' : '退货已驳回' };
   }
@@ -3700,6 +4297,7 @@ export class PurchaseService {
       });
       await this.recalcRefundTask(tx, refundId, userId);
       await this.recalcPayment(tx, task.po_id);
+      await this.recalcOrderStatus(tx, task.po_id);
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_refund',
@@ -3734,6 +4332,7 @@ export class PurchaseService {
         where: { refund_id: flow.refund_id },
       });
       await this.recalcPayment(tx, task.po_id);
+      await this.recalcOrderStatus(tx, task.po_id);
       await this.documentTrace.removeForDocument('purchase_refund_flow', flowId, tx);
     });
     return { id, message: '采购退款流水已作废，任务状态已重算' };
@@ -3759,6 +4358,7 @@ export class PurchaseService {
           updated_at: new Date(),
         },
       });
+      await this.recalcOrderStatus(tx, task.po_id);
     });
     return { id, message: '采购退款任务已关闭' };
   }
@@ -3782,6 +4382,53 @@ export class PurchaseService {
       else created += 1;
     }
     return { scanned: returns.length, created, skipped };
+  }
+
+  async backfillOrderLifecycles(userId = '1') {
+    const category = await this.prisma.hspsi_sys_dictionary_category.findFirst({
+      where: { dict_catg_code: 'purchase_order_status', deleted_at: null },
+      select: { dict_catg_id: true },
+    });
+    if (!category) throw new BadRequestException('采购订单状态字典不存在');
+    const dictionary = await this.prisma.hspsi_sys_dictionary.updateMany({
+      where: {
+        dict_catg_id: category.dict_catg_id,
+        dict_value: '5',
+        deleted_at: null,
+      },
+      data: { dict_name: '退货处理中', updated_by: Number(userId), updated_at: new Date() },
+    });
+    if (!dictionary.count) throw new BadRequestException('采购订单状态 5 字典项不存在');
+    const orders = await this.prisma.hspsi_purchase_order.findMany({
+      where: { deleted_at: null },
+      select: { po_id: true, po_no: true },
+      orderBy: { po_id: 'asc' },
+    });
+    let updated = 0;
+    const failures: Array<{ id: string; orderNo: string; reason: string }> = [];
+    for (const order of orders) {
+      try {
+        await this.guardedTransaction(async (tx) => {
+          await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${order.po_id} FOR UPDATE`;
+          await this.recalcPayment(tx, order.po_id);
+          await this.recalcOrderStatus(tx, order.po_id);
+        });
+        updated += 1;
+      } catch (error) {
+        failures.push({
+          id: String(order.po_id),
+          orderNo: order.po_no,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return {
+      scanned: orders.length,
+      updated,
+      failed: failures.length,
+      dictionaryUpdated: dictionary.count,
+      failures,
+    };
   }
 
   private async purchaseMoneyPosition(tx: PurchaseDb, poId: bigint) {
@@ -3966,6 +4613,42 @@ export class PurchaseService {
       },
     });
   }
+
+  /**
+   * 采购订单「完成付款且处于采购中（status=2）」时，给订单收货人写入待办提醒。
+   * 幂等由 TodoService 保证（同一业务+接收人的未完成记录不重复写）。
+   * 在 savePayment（付款完成）与 startOrder（进入采购中）两个时机调用，覆盖两种操作顺序。
+   */
+  private async ensurePurchasePaidTodo(tx: Prisma.TransactionClient, poId: bigint) {
+    const order = await tx.hspsi_purchase_order.findFirst({
+      where: { po_id: poId, deleted_at: null },
+      select: {
+        status: true,
+        pay_status: true,
+        receiver_id: true,
+        po_no: true,
+        org_id: true,
+        created_by: true,
+      },
+    });
+    if (!order || Number(order.status) !== 2 || Number(order.pay_status) !== 1) return;
+    if (!order.receiver_id || order.receiver_id <= 0n) return;
+    // 与「待收货」合并为同一条待办：付款完成后更新文案为「已完成付款，请关注到货/收货」
+    await this.syncPurchaseOrderTodo(
+      tx,
+      {
+        po_id: poId,
+        po_no: order.po_no,
+        org_id: order.org_id,
+        receiver_id: order.receiver_id,
+        status: Number(order.status),
+        created_by: order.created_by ?? 0n,
+      },
+      String(order.receiver_id),
+      false,
+      true,
+    );
+  }
   async savePayment(id: string | null, body: Body, userId: string) {
     const poId = BigInt(String(body.orderId));
     const amount = new Prisma.Decimal(String(body.paymentAmount));
@@ -4015,6 +4698,8 @@ export class PurchaseService {
             },
           });
       await this.recalcPayment(tx, poId);
+      await this.recalcOrderStatus(tx, poId);
+      await this.ensurePurchasePaidTodo(tx, poId);
       await this.documentTrace.link(
         {
           upstreamType: 'purchase_order',
@@ -4047,10 +4732,35 @@ export class PurchaseService {
         data: { deleted_at: new Date(), updated_by: BigInt(userId) },
       });
       await this.recalcPayment(tx, payment.po_id);
+      await this.recalcOrderStatus(tx, payment.po_id);
       await this.documentTrace.removeForDocument('purchase_payment', payment.pay_id, tx);
     });
     return { id, message: '付款已撤销，订单累计已付已重算' };
   }
+  /** 记录采购订单级状态迁移（开始采购/退回未到货等），供操作记录展示。 */
+  private async logOrderTransition(
+    tx: Prisma.TransactionClient,
+    poId: bigint,
+    action: string,
+    label: string,
+    userId: string,
+    detail = '',
+  ) {
+    await tx.hspsi_sys_oper_log.create({
+      data: {
+        method: 'POST',
+        router: `purchase/orders/${poId}/${action}`,
+        url: `purchase/orders/${poId}/${action}`,
+        service_name: 'purchase-order-transition',
+        request_data: detail || null,
+        response_code: '200',
+        response_data: label,
+        created_by: Number(userId),
+        updated_by: Number(userId),
+      },
+    });
+  }
+
   async operationHistory(resource: string, id: string) {
     const documentId = BigInt(id);
     const items: OperationHistoryItem[] = [];
@@ -4159,6 +4869,24 @@ export class PurchaseService {
           '付款金额',
           '',
           Number(item.fact_pay_amount),
+        ),
+      );
+      const transitions = await this.prisma.hspsi_sys_oper_log.findMany({
+        where: {
+          service_name: 'purchase-order-transition',
+          router: { startsWith: `purchase/orders/${row.po_id}/` },
+          deleted_at: null,
+        },
+        orderBy: { id: 'asc' },
+      });
+      transitions.forEach((log) =>
+        add(
+          `transition-${log.id}`,
+          log.response_data ?? '订单状态变更',
+          '已执行',
+          log.created_by,
+          log.created_at,
+          log.request_data ?? '',
         ),
       );
     } else if (resource === 'receipts') {

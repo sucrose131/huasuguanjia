@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { NestFactory } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
 import { AppModule } from '../app.module';
+import { AuthUser } from '../auth/auth.types';
 import { BaseDataService } from '../base-data/base-data.service';
 import { GoodsService } from '../goods/goods.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -21,6 +22,21 @@ const deptId = 11n;
 const finishedWarehouseId = 1n;
 const transferWarehouseId = 2n;
 const today = '2026-07-31';
+const actorUser: AuthUser = {
+  id: actorId,
+  username: 'admin',
+  orgId: orgId.toString(),
+  orgName: null,
+  deptId: deptId.toString(),
+  staffId: null,
+  positionId: null,
+  positionName: null,
+  roleName: null,
+  currentOrgId: orgId.toString(),
+  authorizedOrganizations: [{ id: orgId.toString(), name: '' }],
+  isSuperAdmin: true,
+  permissions: ['*'],
+};
 
 function json(value: unknown) {
   return JSON.stringify(
@@ -1219,7 +1235,7 @@ async function main() {
                   quantity: Number(line.quantity),
                 })),
               },
-              actorId,
+              actorUser,
             );
           }
           await requisitions.confirmOutput(
@@ -1322,7 +1338,7 @@ async function main() {
               quantity: Number(line.quantity),
             })),
           },
-          actorId,
+          actorUser,
         );
       }
       await requisitions.confirmOutput(String(output.id), '领用人身份核验通过，样品出库', actorId);

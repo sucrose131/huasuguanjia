@@ -59,6 +59,15 @@ export const requisitionOutputConfig: BusinessDocumentConfig = {
       kind: 'success',
       primary: false,
       show: (row) => Number(row.confirmStatus) === 0,
+      verify: async (row) => {
+        const detail: any = await api.get(`/requisitions/outputs/${String(row.id)}`);
+        const missing = (detail.details ?? []).some(
+          (line: any) => !String(line.batchNo ?? '').trim(),
+        );
+        return missing
+          ? '部分出库明细未选择库存批次，请先编辑并选择全部批次后再确认'
+          : null;
+      },
       confirm: '确认后会立即改变真实库存，是否继续？',
       handler: async (row) => {
         await api.post(`/requisitions/outputs/${row.id}/confirm`, { comment: '确认' });

@@ -19,7 +19,6 @@ const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
   units: [],
-  goods: [],
   boms: [],
   plans: [],
   planOrders: [],
@@ -28,9 +27,30 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 
-function goodsOf(row: any) {
-  return options.goods.find((g: any) => String(g.id) === String(row.goodsId)) ?? {};
+function dictLabel(code: string, value: unknown) {
+  return (
+    (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—'
+  );
 }
+
+const shortageRows = computed(() =>
+  (form.value.shortages ?? []).map((shortage: any) => {
+    const material = (form.value.details ?? []).find(
+      (line: any) =>
+        String(line.goodsId) === String(shortage.goods_id ?? shortage.goodsId) &&
+        String(line.skuId) === String(shortage.sku_id ?? shortage.skuId),
+    );
+    return {
+      ...shortage,
+      shortageNo: shortage.shortage_no ?? shortage.shortageNo,
+      goodsName: material?.goodsName ?? shortage.goodsName ?? '—',
+      requireQty: shortage.require_qty ?? shortage.requireQty ?? 0,
+      factQty: shortage.fact_qty ?? shortage.factQty ?? 0,
+      purchaseQty: shortage.suggest_purchase_qty ?? shortage.purchaseQty ?? 0,
+    };
+  }),
+);
+
 function unitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
@@ -42,9 +62,12 @@ async function loadDicts() {
     'production_material_status',
     'production_stock_check_status',
     'production_outbound_status',
+    'production_shortage_status',
     'approval_status',
   ];
-  const values = await Promise.all(codes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])));
+  const values = await Promise.all(
+    codes.map((code) => api.get(`/dictionaries/${code}`).catch(() => [])),
+  );
   codes.forEach((code, index) => (dicts[code] = values[index] as any[]));
 }
 
@@ -148,11 +171,7 @@ function blankLine() {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  if (!String(keyword ?? '').trim())
-    return options.goods.map((g: any) => ({
-      value: g.id,
-      label: `${g.queryCode || ''} ${g.goodsName ?? ''}`.trim(),
-    }));
+  // 成品选择始终走远程搜索，不再依赖 onMounted 全量商品列表
   const r: any = await api.get('/goods', { params: { keyword, pageSize: 50, status: 1 } });
   return (r.items ?? []).map((g: any) => ({
     value: g.id,
@@ -205,19 +224,17 @@ async function save() {
 }
 
 onMounted(async () => {
-  const [orgs, warehouses, units, goodsResult, boms] = await Promise.all([
+  const [orgs, warehouses, units, boms] = await Promise.all([
     api.get('/base-data/organizations/options').catch(() => []),
     api.get('/base-data/warehouses/options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api
-      .get('/goods', { params: { pageSize: 100, status: 1 } })
-      .catch(() => ({ items: [] as any[] })),
-    api.get('/production/boms', { params: { pageSize: 100, status: 1 } }).catch(() => ({ items: [] })),
+      .get('/production/boms', { params: { pageSize: 100, status: 1 } })
+      .catch(() => ({ items: [] })),
   ]);
   options.orgs = orgs;
   options.warehouses = warehouses;
   options.units = units;
-  options.goods = (goodsResult as any).items ?? [];
   options.boms = (boms as any).items ?? [];
   await loadDicts();
 
@@ -237,7 +254,14 @@ onMounted(async () => {
     });
   } else if (form.value.id) {
     const detail: any = await api.get(`/production/plans/${form.value.id}`).catch(() => null);
-    if (detail) Object.assign(form.value, detail);
+    if (detail)
+      Object.assign(form.value, detail, {
+        orgId: String(detail.orgId ?? ''),
+        warehouseId: String(detail.warehouseId ?? ''),
+        productWarehouseId: String(detail.productWarehouseId ?? ''),
+        sourceId: detail.sourceId == null ? '' : String(detail.sourceId),
+        maxPlanQty: detail.maxPlanQty ?? detail.planQty ?? 0,
+      });
     form.value.details = (form.value.details ?? []).map((x: any) => ({
       ...blankLine(),
       ...x,
@@ -261,7 +285,7 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item v-if="form.bomId" label="成品">
-        <el-input :model-value="form.goodsName || goodsOf(form).goodsName || form.goodsId" readonly />
+        <el-input :model-value="form.goodsName || form.goodsId" readonly />
       </el-form-item>
       <el-form-item label="关联销售订单" required>
         <el-select
@@ -279,7 +303,10 @@ onMounted(async () => {
         </el-select>
       </el-form-item>
       <el-form-item label="销售订单剩余可计划">
-        <el-input :model-value="form.sourceId ? form.maxPlanQty : '请先选择BOM和销售订单'" readonly />
+        <el-input
+          :model-value="form.sourceId ? form.maxPlanQty : '请先选择BOM和销售订单'"
+          readonly
+        />
       </el-form-item>
       <el-form-item label="生产数量" required>
         <el-input-number
@@ -293,11 +320,31 @@ onMounted(async () => {
         />
       </el-form-item>
       <el-form-item label="计划日期">
-        <el-date-picker v-model="form.planDate" type="date" value-format="YYYY-MM-DD" :disabled="isView" />
+        <el-date-picker
+          v-model="form.planDate"
+          type="date"
+          value-format="YYYY-MM-DD"
+          :disabled="isView"
+        />
       </el-form-item>
       <el-form-item label="成品仓库">
         <el-select v-model="form.productWarehouseId" disabled>
-          <el-option v-for="x in options.warehouses" :key="x.value" :label="x.label" :value="x.value" />
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="原料仓库">
+        <el-select v-model="form.warehouseId" disabled>
+          <el-option
+            v-for="x in options.warehouses"
+            :key="x.value"
+            :label="x.label"
+            :value="x.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="操作人">
@@ -308,7 +355,7 @@ onMounted(async () => {
     <div class="details-title">BOM原料明细</div>
     <el-table :data="form.details ?? []" border size="small">
       <el-table-column label="商品" min-width="220">
-        <template #default="s">{{ s.row.goodsName || goodsOf(s.row).goodsName || s.row.goodsId }}</template>
+        <template #default="s">{{ s.row.goodsName || s.row.goodsId || '—' }}</template>
       </el-table-column>
       <el-table-column label="商品编码" width="125">
         <template #default="s">{{ s.row.goodsCode || '—' }}</template>
@@ -342,21 +389,46 @@ onMounted(async () => {
 
     <div v-if="isView" class="status-grid">
       <el-form-item label="计划状态">
-        <el-input :model-value="form.planStatusName || '—'" readonly />
+        <el-input :model-value="dictLabel('production_plan_status', form.planStatus)" readonly />
       </el-form-item>
       <el-form-item label="物料状态">
-        <el-input :model-value="form.materialStatusName || '—'" readonly />
+        <el-input
+          :model-value="dictLabel('production_material_status', form.materialStatus)"
+          readonly
+        />
       </el-form-item>
       <el-form-item label="库存校验">
-        <el-input :model-value="form.stockCheckStatusName || '—'" readonly />
+        <el-input
+          :model-value="dictLabel('production_stock_check_status', form.stockCheckStatus)"
+          readonly
+        />
       </el-form-item>
       <el-form-item label="出库状态">
-        <el-input :model-value="form.outboundStatusName || '—'" readonly />
+        <el-input
+          :model-value="dictLabel('production_outbound_status', form.outboundStatus)"
+          readonly
+        />
       </el-form-item>
       <el-form-item label="审批状态">
-        <el-input :model-value="form.approveStatusName || '—'" readonly />
+        <el-input :model-value="dictLabel('approval_status', form.approveStatus)" readonly />
       </el-form-item>
     </div>
+
+    <template v-if="isView && shortageRows.length">
+      <div class="details-title">关联缺料明细</div>
+      <el-table :data="shortageRows" border size="small">
+        <el-table-column prop="shortageNo" label="缺料清单编号" min-width="155" />
+        <el-table-column prop="goodsName" label="原料" min-width="160" />
+        <el-table-column prop="requireQty" label="总需求" width="100" />
+        <el-table-column prop="factQty" label="当前库存" width="100" />
+        <el-table-column prop="purchaseQty" label="建议采购" width="100" />
+        <el-table-column label="状态" width="110">
+          <template #default="s">
+            {{ dictLabel('production_shortage_status', s.row.status) }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
 
     <div class="form-grid" style="margin-top: 12px">
       <el-form-item label="备注" class="span-2">

@@ -5,6 +5,7 @@ import type { TableInstance } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { api } from '@/api';
 import StatusTag from '@/components/StatusTag.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, moneyText } from '@/utils/format';
 
 type PreviewMode = 'all' | 'partial' | 'related';
@@ -28,13 +29,17 @@ const submitting = ref(false);
 const application = ref<any>({ details: [], generatedOrders: [] });
 const tableRef = ref<TableInstance>();
 const selectedRows = ref<any[]>([]);
-const form = reactive({ vendorId: '' as string | number });
+const form = reactive({
+  vendorId: '' as string | number,
+  receiverId: '' as string | number,
+});
 const options = reactive<Record<string, Option[]>>({
   organizations: [],
   departments: [],
   warehouses: [],
   vendors: [],
   units: [],
+  receivers: [],
 });
 const orderStatuses = ref<Option[]>([]);
 
@@ -84,6 +89,7 @@ async function load() {
   loading.value = true;
   selectedRows.value = [];
   form.vendorId = '';
+  form.receiverId = '';
   try {
     const [data, organizations, departments, warehouses, vendors, units, statuses] =
       (await Promise.all([
@@ -129,6 +135,11 @@ async function load() {
       };
     });
     application.value = data;
+    options.receivers = isGeneration.value
+      ? ((await api.get('/purchase/receiver-options', {
+          params: { orgId: data.orgId, deptId: data.deptId },
+        })) as Option[])
+      : [];
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message ?? '采购申请生成界面加载失败');
   } finally {
@@ -153,6 +164,10 @@ async function submitOrder() {
     ElMessage.warning('请选择本次采购订单的供应商');
     return;
   }
+  if (!form.receiverId) {
+    ElMessage.warning('请选择本次采购订单的收货人');
+    return;
+  }
   if (!effectiveRows.value.length) {
     ElMessage.warning('请至少选择一条采购明细');
     return;
@@ -167,6 +182,7 @@ async function submitOrder() {
     const result = (await api.post(`/purchase/applications/${props.applicationId}/generate-order`, {
       generationMode: props.mode,
       vendorId: form.vendorId,
+      receiverId: form.receiverId,
       details: effectiveRows.value.map((item: any) => ({
         applicationDetailId: String(item.applicationDetailId),
         totalAmount: Number(item.totalAmount),
@@ -222,8 +238,12 @@ watch(
           class="generation-table"
         >
           <el-table-column prop="orderNo" label="采购订单号" min-width="166" />
-          <el-table-column label="供应商" min-width="180" show-overflow-tooltip>
-            <template #default="scope">{{ lookup('vendors', scope.row.vendorId) }}</template>
+          <el-table-column label="供应商" min-width="180">
+            <template #default="scope">
+              <OverflowTooltipCell :content="lookup('vendors', scope.row.vendorId)">{{
+                lookup('vendors', scope.row.vendorId)
+              }}</OverflowTooltipCell>
+            </template>
           </el-table-column>
           <el-table-column prop="itemCount" label="商品种类" width="96" align="right" />
           <el-table-column prop="quantity" label="采购数量" width="104" align="right" />
@@ -284,8 +304,8 @@ watch(
             >
           </div>
         </div>
-        <el-form label-position="top">
-          <el-form-item label="本次采购供应商" required class="vendor-field">
+        <el-form label-position="top" class="generation-form-grid">
+          <el-form-item label="本次采购供应商" required>
             <el-select
               v-model="form.vendorId"
               clearable
@@ -294,6 +314,21 @@ watch(
             >
               <el-option
                 v-for="item in options.vendors"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="收货人" required>
+            <el-select
+              v-model="form.receiverId"
+              clearable
+              filterable
+              placeholder="请选择申请部门下的收货人"
+            >
+              <el-option
+                v-for="item in options.receivers"
                 :key="item.value"
                 :label="item.label"
                 :value="item.value"
@@ -319,13 +354,20 @@ watch(
             :selectable="canSelect"
           />
           <el-table-column prop="goodsCode" label="商品编码" width="126" fixed="left" />
-          <el-table-column
-            prop="goodsName"
-            label="商品名称"
-            min-width="168"
-            show-overflow-tooltip
-          />
-          <el-table-column prop="skuName" label="SKU/规格" min-width="136" show-overflow-tooltip />
+          <el-table-column prop="goodsName" label="商品名称" min-width="168">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.goodsName">{{
+                scope.row.goodsName
+              }}</OverflowTooltipCell>
+            </template>
+          </el-table-column>
+          <el-table-column prop="skuName" label="SKU/规格" min-width="136">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.skuName">{{
+                scope.row.skuName
+              }}</OverflowTooltipCell>
+            </template>
+          </el-table-column>
           <el-table-column label="单位" width="72">
             <template #default="scope">{{ lookup('units', scope.row.unitType) }}</template>
           </el-table-column>
@@ -340,8 +382,12 @@ watch(
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="对应订单" min-width="150" show-overflow-tooltip>
-            <template #default="scope">{{ scope.row.generatedOrderNo || '—' }}</template>
+          <el-table-column label="对应订单" min-width="150">
+            <template #default="scope">
+              <OverflowTooltipCell :content="scope.row.generatedOrderNo || '—'">{{
+                scope.row.generatedOrderNo || '—'
+              }}</OverflowTooltipCell>
+            </template>
           </el-table-column>
           <el-table-column label="参考价格" width="112" align="right">
             <template #default="scope">{{ protectedMoneyText(scope.row.referencePrice) }}</template>
@@ -447,11 +493,13 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vendor-field {
-  width: 360px;
+.generation-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 360px));
+  gap: 16px;
   margin-bottom: 12px;
 }
-.vendor-field :deep(.el-select) {
+.generation-form-grid :deep(.el-select) {
   width: 100%;
 }
 .generation-table {
@@ -523,8 +571,8 @@ watch(
   .generation-master-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .vendor-field {
-    width: 100%;
+  .generation-form-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

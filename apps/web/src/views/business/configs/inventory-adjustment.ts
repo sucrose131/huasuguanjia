@@ -5,20 +5,21 @@ import InventoryAdjustmentForm from '../forms/InventoryAdjustmentForm.vue';
 
 export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
   key: 'inventory/adjustments',
-  title: '库存调整',
+  title: '库存调整记录',
   subtitle: '通过审批流程修正账面库存并保留调整依据',
   endpoint: '/inventory/adjustments',
   documentType: 'inventory_adjust',
+  keywordPlaceholder: '商品编码 / 名称 / SKU',
   no: 'adjustNo',
   columns: [
-    { prop: 'adjustNo', label: '调整单号', minWidth: 150 },
+    { prop: 'adjustNo', label: '调整单号', minWidth: 150, link: true },
+    { prop: 'applicantDate', label: '申请日期', minWidth: 105, kind: 'date' },
     { prop: 'reason', label: '调整原因', minWidth: 180, tooltip: true },
-    { prop: 'applicantDate', label: '申请日期', minWidth: 110, kind: 'date' },
     { prop: 'detailCount', label: '明细数', minWidth: 80, kind: 'number', align: 'right' },
-    { prop: 'quantity', label: '调整数量', minWidth: 100, kind: 'number', align: 'right' },
-    { prop: 'approveStatus', label: '审批状态', minWidth: 100, kind: 'status' },
-    { prop: 'createdByName', label: '创建人', minWidth: 100 },
-    { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
+    { prop: 'quantity', label: '调整总量', minWidth: 100, kind: 'number', align: 'right' },
+    { prop: 'approveStatus', label: '审批状态', minWidth: 90, kind: 'status', statusDict: 'approval_status' },
+    { prop: 'createdByName', label: '创建人', minWidth: 90 },
+    { prop: 'createdAt', label: '创建时间', minWidth: 145, kind: 'datetime' },
   ],
   dictionaries: ['approval_status', 'inventory_adjust_type'],
   optionBags: ['orgs'],
@@ -29,17 +30,18 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       label: '仓库',
       type: 'select',
       dependsOn: 'orgId',
+      loadOnEmptyDep: true,
       width: 180,
       loadOptions: async (deps) => {
-        if (!deps.orgId) return [];
         return (await api.get('/base-data/warehouses/options', {
-          params: { orgId: deps.orgId },
+          params: deps.orgId ? { orgId: deps.orgId } : {},
         })) as any[];
       },
     },
   ],
   creatable: true,
-  createText: '新增调整单',
+  createText: '新增库存调整',
+  dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryAdjustmentForm,
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
@@ -53,7 +55,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {
@@ -61,8 +63,9 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       label: '提交',
       kind: 'success',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 0,
+      show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '提交后进入审批，是否继续？',
+      confirmTitle: '提交审批',
       handler: async (row) => {
         await api.post(`/inventory/adjustments/${row.id}/submit`);
         ElMessage.success('已提交审批');
@@ -75,6 +78,7 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       primary: false,
       show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
       confirm: '通过后立即调整库存，是否继续？',
+      confirmTitle: '确认审批',
       handler: async (row) => {
         await api.post(`/inventory/adjustments/${row.id}/approve`, { approved: true, comment: '' });
         ElMessage.success('审批已通过');
@@ -102,8 +106,9 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       label: '删除',
       kind: 'danger',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0,
+      show: (row) => Number(row.status) === 0 && [0, 2].includes(Number(row.approveStatus)),
       confirm: '确认删除该调整单？',
+      confirmTitle: '删除确认',
       handler: async (row) => {
         await api.delete(`/inventory/adjustments/${row.id}`);
         ElMessage.success('删除成功');

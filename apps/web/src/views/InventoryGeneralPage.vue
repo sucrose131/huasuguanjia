@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
@@ -10,6 +10,7 @@ import { dateText, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { createRequestId } from '@/utils/random-id';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
+import { fetchScopedStockOptions } from './business/use-scoped-stock-options';
 
 type Row = Record<string, any>;
 type Option = { value: string | number; label: string; raw?: Row };
@@ -28,8 +29,8 @@ const saving = ref(false);
 const dialog = ref(false);
 const viewing = ref(false);
 const initialInputEnabled = ref(false);
-const canManageInitialInput = computed(
-  () => canPageAction(auth.user, '/inventory/general-inputs', 'configure-initial'),
+const canManageInitialInput = computed(() =>
+  canPageAction(auth.user, '/inventory/general-inputs', 'configure-initial'),
 );
 const organizations = ref<Option[]>([]);
 const organizationTree = computed(() =>
@@ -122,9 +123,7 @@ async function loadSelectableRows() {
   })) as Row[];
   stocks.value = isInput.value
     ? []
-    : ((await api.get('/inventory/stock-options', {
-        params: { orgId: form.orgId, warehouseId: form.warehouseId },
-      })) as Row[]);
+    : ((await fetchScopedStockOptions(form.orgId, form.warehouseId)) as Row[]);
 }
 
 async function organizationChanged() {
@@ -155,10 +154,12 @@ function selectableKey(item: Row) {
 }
 
 function selectableLabel(item: Row) {
+  const aliases = [item.shortName, item.brandName].filter(Boolean).join(' · ');
+  const aliasesText = aliases ? ` · ${aliases}` : '';
   const stockText = isInput.value
     ? ''
     : ` · 批次 ${item.batchNo || '无'} · 可用 ${item.inventoryQty}`;
-  return `${item.goodsCode || ''} ${item.goodsName} · ${item.skuSpec || '默认规格'}${stockText}`;
+  return `${item.goodsCode || ''} ${item.goodsName}${aliasesText} · ${item.skuSpec || '默认规格'}${stockText}`;
 }
 
 function selectProduct(line: Row) {
@@ -232,10 +233,6 @@ async function toggleInitialInput(value: boolean) {
   ElMessage.success(result.message);
 }
 
-watch(resource, async () => {
-  query.page = 1;
-  await load();
-});
 onMounted(async () => {
   await Promise.all([loadOptions(), load()]);
 });
@@ -257,7 +254,9 @@ onMounted(async () => {
             @change="toggleInitialInput"
           />
         </template>
-        <el-button v-if="canAction('create')" type="primary" @click="openCreate">新增{{ title }}</el-button>
+        <el-button v-if="canAction('create')" type="primary" @click="openCreate"
+          >新增{{ title }}</el-button
+        >
       </div>
     </header>
     <el-card shadow="never">
@@ -468,7 +467,11 @@ onMounted(async () => {
       />
       <template #footer
         ><el-button @click="dialog = false">关闭</el-button
-        ><el-button v-if="!viewing && canAction('create')" type="primary" :loading="saving" @click="save"
+        ><el-button
+          v-if="!viewing && canAction('create')"
+          type="primary"
+          :loading="saving"
+          @click="save"
           >保存并过账</el-button
         ></template
       >

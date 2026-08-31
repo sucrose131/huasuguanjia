@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { api } from '@/api';
@@ -7,6 +7,7 @@ import SummaryStrip from '@/components/SummaryStrip.vue';
 import StatusTag from '@/components/StatusTag.vue';
 import DataState from '@/components/DataState.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { dateText, display } from '@/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { canPageAction } from '@/utils/permission';
@@ -520,10 +521,6 @@ function cell(row: any, col: Column) {
   }
   return display(row[col.key]);
 }
-watch(resource, async () => {
-  reset();
-  await loadOptions();
-});
 onMounted(async () => {
   await loadOptions();
   await load();
@@ -635,18 +632,19 @@ onMounted(async () => {
             :label="column.label"
             :width="column.width"
             :min-width="column.min"
-            show-overflow-tooltip
             ><template #default="scope"
-              ><StatusTag
-                v-if="column.kind === 'status'"
-                :value="scope.row[column.key]"
-                kind="enabled"
-                :label="
-                  resource === 'organizations'
-                    ? dictLabel(column.key, scope.row[column.key])
-                    : undefined
-                "
-              /><span v-else>{{ cell(scope.row, column) }}</span></template
+              ><OverflowTooltipCell :content="cell(scope.row, column)"
+                ><StatusTag
+                  v-if="column.kind === 'status'"
+                  :value="scope.row[column.key]"
+                  kind="enabled"
+                  :label="
+                    resource === 'organizations'
+                      ? dictLabel(column.key, scope.row[column.key])
+                      : undefined
+                  "
+                /><span v-else>{{ cell(scope.row, column) }}</span></OverflowTooltipCell
+              ></template
             ></el-table-column
           ><el-table-column label="操作" width="176" fixed="right" align="center"
             ><template #default="scope"

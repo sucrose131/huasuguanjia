@@ -7,6 +7,7 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
+import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import ScheduledTaskPanel from '@/views/ScheduledTaskPanel.vue';
 
@@ -151,7 +152,6 @@ watch(
       menuExpandedKeys.value = tree.map((row) => String(row.id));
   },
 );
-
 
 // 树形节点计数（含子级，供底部统计/空态判断）
 const menuRowCount = computed(() => {
@@ -398,7 +398,9 @@ function open(nextMode: Mode, row?: any) {
         menuIds: (row.menuIds ?? [])
           .map(String)
           .filter((id: string) => pageMenus.value.some((menu) => String(menu.id) === id)),
-        actionPermissionCodes: row.actionPermissionCodes ?? [],
+        actionPermissionCodes: [
+          ...new Set([...(row.actionPermissionCodes ?? []), ...(row.dashboardWidgetCodes ?? [])]),
+        ],
       });
     else if (resource.value === 'users')
       Object.assign(form, {
@@ -564,11 +566,6 @@ async function removeMenu(row: any) {
   await load();
 }
 
-watch(resource, () => {
-  keyword.value = '';
-  statusFilter.value = '';
-  if (resource.value !== 'tasks') load();
-});
 watch(
   () => form.staffId,
   () => {
@@ -749,13 +746,19 @@ onMounted(async () => {
             <el-table-column prop="department" label="所属部门" min-width="130"
               ><template #default="{ row }">{{ row.department || '—' }}</template></el-table-column
             >
-            <el-table-column label="岗位" min-width="130" show-overflow-tooltip
-              ><template #default="{ row }">{{
-                row.positionName || '—'
-              }}</template></el-table-column
+            <el-table-column label="岗位" min-width="130"
+              ><template #default="{ row }"
+                ><OverflowTooltipCell :content="row.positionName || '—'">{{
+                  row.positionName || '—'
+                }}</OverflowTooltipCell></template
+              ></el-table-column
             >
-            <el-table-column label="所属角色" min-width="150" show-overflow-tooltip
-              ><template #default="{ row }">{{ row.roleName || '—' }}</template></el-table-column
+            <el-table-column label="所属角色" min-width="150"
+              ><template #default="{ row }"
+                ><OverflowTooltipCell :content="row.roleName || '—'">{{
+                  row.roleName || '—'
+                }}</OverflowTooltipCell></template
+              ></el-table-column
             >
             <el-table-column label="金额权限" width="104" align="center"
               ><template #default="{ row }"
@@ -764,10 +767,12 @@ onMounted(async () => {
                 }}</el-tag></template
               ></el-table-column
             >
-            <el-table-column label="数据访问组织" min-width="180" show-overflow-tooltip
-              ><template #default="{ row }">{{
-                row.authorizedOrgNames?.join('、') || '未授权'
-              }}</template></el-table-column
+            <el-table-column label="数据访问组织" min-width="180"
+              ><template #default="{ row }"
+                ><OverflowTooltipCell :content="row.authorizedOrgNames?.join('、') || '未授权'">{{
+                  row.authorizedOrgNames?.join('、') || '未授权'
+                }}</OverflowTooltipCell></template
+              ></el-table-column
             >
             <el-table-column prop="phone" label="联系电话" width="130"
               ><template #default="{ row }">{{ row.phone || '—' }}</template></el-table-column
@@ -814,13 +819,11 @@ onMounted(async () => {
           </el-table>
 
           <el-table
-          <el-table
             v-else
             :data="menuTree"
             row-key="id"
             :tree-props="{ children: 'children' }"
             :default-expanded-keys="menuExpandedKeys"
-
             min-width="1180"
           >
             <el-table-column prop="name" label="菜单名称" min-width="200">
@@ -863,7 +866,13 @@ onMounted(async () => {
               <template #default="{ row }">
                 <TableRowActions :show-more="can('system:config:delete')">
                   <el-button link type="primary" @click="open('view', row)">查看</el-button>
-                  <el-button v-if="can('system:config:update')" link type="primary" @click="open('edit', row)">编辑</el-button>
+                  <el-button
+                    v-if="can('system:config:update')"
+                    link
+                    type="primary"
+                    @click="open('edit', row)"
+                    >编辑</el-button
+                  >
                   <template #more>
                     <el-dropdown-item
                       v-if="can('system:config:delete')"

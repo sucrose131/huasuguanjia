@@ -12,19 +12,33 @@ function createService(
   production: Record<string, any> = {},
   trace: Record<string, any> = { link: vi.fn() },
 ) {
+  const masterData = { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn(), goodsOptions: vi.fn() };
   return {
     service: new SalesService(
       prisma as never,
       posting as never,
       production as never,
-      { enrich: vi.fn(async (items: unknown) => items) } as never,
+      { enrich: vi.fn(async (items: unknown) => items), enrichGoods: vi.fn(async (items: unknown) => items) } as never,
       trace as never,
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
-      { assertGoodsLines: vi.fn(), assertGoodsActive: vi.fn() } as never,
+      masterData as never,
     ),
     posting,
+    masterData,
   };
 }
+
+describe('SalesService mapped product options', () => {
+  it('delegates sales-order candidates to organization and warehouse mapping', async () => {
+    const { service, masterData } = createService({});
+    masterData.goodsOptions.mockResolvedValue([{ goodsId: 101n, goodsName: '康复训练弹力带' }]);
+
+    await expect(service.productOptions('6', '15')).resolves.toEqual([
+      { goodsId: 101n, goodsName: '康复训练弹力带' },
+    ]);
+    expect(masterData.goodsOptions).toHaveBeenCalledWith(6n, 15n);
+  });
+});
 
 describe('SalesService after-sales progress', () => {
   it('creates an independent progress and updates the main service status with an audit log', async () => {
