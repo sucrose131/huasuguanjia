@@ -1450,10 +1450,22 @@ export class InventoryService {
 
   async checks(query: Body) {
     const { page, pageSize } = this.page(query);
+    // 仅统计/展示启用仓库（status=1）的盘点单；停用仓库的单据不计入「全部」与各仓库统计
+    const enabledWarehouseIds = (
+      await this.prisma.hspsi_basic_warehouse.findMany({
+        where: {
+          status: 1,
+          deleted_at: null,
+          ...(query.orgId ? { org_id: BigInt(query.orgId) } : {}),
+        },
+        select: { warehouse_id: true },
+      })
+    ).map((warehouse) => warehouse.warehouse_id);
     const where: Prisma.hspsi_inventory_checkWhereInput = { deleted_at: null };
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    // 仓库筛选统计：按组织统计各仓库盘点单数（不受已选仓库影响，供「全部」与仓库 Tab 展示）
+    else where.warehouse_id = { in: enabledWarehouseIds };
+    // 仓库筛选统计：按组织统计各启用仓库盘点单数（不受已选仓库影响，供「全部」与仓库 Tab 展示）
     const warehouseCounts = Object.fromEntries(
       (
         await this.prisma.hspsi_inventory_check.groupBy({
@@ -1461,7 +1473,7 @@ export class InventoryService {
           where: {
             deleted_at: null,
             ...(query.orgId ? { org_id: BigInt(query.orgId) } : {}),
-            warehouse_id: { not: 0n },
+            warehouse_id: { in: enabledWarehouseIds },
           },
           _count: { _all: true },
         })
