@@ -151,9 +151,21 @@ export class PurchaseService {
       throw new BadRequestException(`${label}必须为${allowZero ? '非负' : '正'}整数`);
     return quantity;
   }
+  /** 业务 id 安全转 BigInt：非数字(如快捷新增行的临时 token)一律返回 fallback，避免直接抛 500 */
+  private toBigInt(value: unknown, fallback = 0n) {
+    const text = String(value ?? '').trim();
+    return /^\d+$/.test(text) ? BigInt(text) : fallback;
+  }
   /** sku_id 缺失(0)的明细回填商品默认/第一个有效 SKU，保证下游单据可过账 */
   private async resolveLineSkus(lines: Body[], db: PurchaseDb = this.prisma) {
-    const missing = lines.filter((line) => BigInt(String(line.skuId ?? line.sku_id ?? 0)) <= 0n);
+    // 快捷新增行(goodsId/skuId 为临时 token，档案尚未落库)由 materializeQuickCatalog 统一创建并回填，
+    // 既不能参与这里的默认 SKU 回填判断，也不能对其做数字解析
+    const missing = lines.filter(
+      (line) =>
+        !line.newGoods &&
+        !line.newSku &&
+        this.toBigInt(line.skuId ?? line.sku_id ?? 0) <= 0n,
+    );
     if (!missing.length) return;
     const goodsIds = [...new Set(missing.map((line) => String(line.goodsId ?? line.goods_id)))];
     const goodsList = await db.hspsi_goods_info.findMany({
@@ -229,7 +241,7 @@ export class PurchaseService {
     return fallback.dept_id;
   }
   private lineGoodsId(line: Body) {
-    return BigInt(String(line.goodsId ?? line.goods_id ?? 0));
+    return this.toBigInt(line.goodsId ?? line.goods_id ?? 0);
   }
   private async materializeQuickCatalog(
     tx: Prisma.TransactionClient,

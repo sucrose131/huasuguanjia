@@ -205,6 +205,64 @@ describe('PurchaseService quick catalog materialization', () => {
     expect(trace.link).toHaveBeenCalledTimes(2);
     expect(result).toEqual(expect.objectContaining({ id: 501n, message: '入库单已创建' }));
   });
+
+  it('暂存采购申请时跳过快捷新增行的临时 token，落库后回填真实商品与SKU ID', async () => {
+    const goodsCreate = vi.fn().mockResolvedValue({ goods_id: 101n });
+    const skuCreate = vi.fn().mockResolvedValue({ sku_id: 202n });
+    const applicationCreate = vi.fn().mockResolvedValue({ pur_id: 301n });
+    const detailCreateMany = vi.fn();
+    const tx = {
+      hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null), create: goodsCreate },
+      hspsi_goods_info_category: {
+        findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      hspsi_goods_info_sku: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        create: skuCreate,
+      },
+      hspsi_purchase_approve: { create: applicationCreate },
+      hspsi_purchase_approve_detail: { deleteMany: vi.fn(), createMany: detailCreateMany },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+
+    const result = await service.saveApplication(
+      null,
+      {
+        orgId: 1,
+        deptId: 2,
+        warehouseId: 3,
+        details: [
+          {
+            goodsId: 'quick-goods-1788234477561-0.271316286386609',
+            skuId: 'quick-goods-1788234477561-0.271316286386609-sku',
+            goodsName: '快捷新增商品',
+            skuSpec: '默认规格',
+            quantity: 2,
+            unitType: 5,
+            newGoods: { goodsName: '快捷新增商品', categoryId: 3, unitType: 5 },
+            newSku: { specModels: '默认规格', unitType: 5, pcsQty: 1 },
+          },
+        ],
+      },
+      '9',
+      false,
+      '1',
+    );
+
+    expect(goodsCreate).toHaveBeenCalledOnce();
+    expect(skuCreate).toHaveBeenCalledOnce();
+    expect(detailCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, qty: 2 })],
+    });
+    expect(result).toEqual(expect.objectContaining({ id: 301n, message: '草稿已保存' }));
+  });
 });
 
 describe('PurchaseService receiver assignment and todo', () => {
