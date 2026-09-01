@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import BusinessDocumentPage from './BusinessDocumentPage.vue';
 import WarehouseTabs from '@/components/business/WarehouseTabs.vue';
 import InventoryLedgerDialog from '@/components/inventory/InventoryLedgerDialog.vue';
+import { sumWarehouseCounts } from '@/utils/warehouse-counts';
 import { inventoryExpiryAlertConfig } from './configs/inventory-expiry-alert';
 
 const ledgerRef = ref<InstanceType<typeof InventoryLedgerDialog>>();
@@ -13,11 +14,11 @@ function showLedger(row: any) {
 
 <template>
   <BusinessDocumentPage :config="inventoryExpiryAlertConfig">
-    <template #query-tools="{ query, load, total, warehouseCounts }">
+    <template #query-tools="{ query, load, warehouseCounts }">
       <WarehouseTabs
         :query="query"
         :load="load"
-        :total="total"
+        :total="sumWarehouseCounts(warehouseCounts)"
         :warehouse-counts="warehouseCounts"
       />
     </template>

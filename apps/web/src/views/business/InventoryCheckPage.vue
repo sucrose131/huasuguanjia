@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { api } from '@/api';
 import BusinessDocumentPage from './BusinessDocumentPage.vue';
 import WarehouseTabs from '@/components/business/WarehouseTabs.vue';
+import { sumWarehouseCounts } from '@/utils/warehouse-counts';
 import { inventoryCheckConfig } from './configs/inventory-check';
 
 const pageRef = ref<InstanceType<typeof BusinessDocumentPage>>();
@@ -13,10 +14,6 @@ const historyLoading = ref(false);
 const quantity = (value: unknown) =>
   Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
 const dateText = (value: unknown) => (value ? String(value).slice(0, 10) : '—');
-
-// 仓库筛选「全部」统计 = 各仓库盘点单数之和（与仓库 Tab 口径一致，不随选中仓库变化）
-const orgWarehouseCheckTotal = (counts: Record<string, number>) =>
-  Object.values(counts ?? {}).reduce((sum, value) => sum + Number(value ?? 0), 0);
 
 function checkListSummary(rows: any[], total: number) {
   return {
@@ -86,7 +83,7 @@ async function viewDetail(row: any) {
       <WarehouseTabs
         :query="query"
         :load="load"
-        :total="orgWarehouseCheckTotal(warehouseCounts)"
+        :total="sumWarehouseCounts(warehouseCounts)"
         :warehouse-counts="warehouseCounts"
       />
     </template>

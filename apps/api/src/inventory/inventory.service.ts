@@ -3721,9 +3721,21 @@ export class InventoryService {
     ).length;
   }
   async quantityAlerts(query: Body) {
+    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计
+    const enabledWarehouseIds = (
+      await this.prisma.hspsi_basic_warehouse.findMany({
+        where: {
+          status: 1,
+          deleted_at: null,
+          ...(query.orgId ? { org_id: BigInt(query.orgId) } : {}),
+        },
+        select: { warehouse_id: true },
+      })
+    ).map((warehouse) => warehouse.warehouse_id);
     const where: Prisma.hspsi_inventory_totalWhereInput = { deleted_at: null };
-    if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
     if (query.orgId) where.org_id = BigInt(query.orgId);
+    // 查询组织级全量（启用仓库范围内），warehouseId 在内存中过滤，保证 warehouseCounts 稳定不随选中仓库变化
+    where.warehouse_id = { in: enabledWarehouseIds };
     const keywordIds = await this.inventoryKeywordIds(query.keyword);
     if (keywordIds)
       where.OR = [{ goods_id: { in: keywordIds.goodsIds } }, { sku_id: { in: keywordIds.skuIds } }];
@@ -3773,13 +3785,16 @@ export class InventoryService {
         warning: fact < safe,
       };
     });
-    const items = filterQuantityAlertsByStatus(allItems, query.status);
+    const statusItems = filterQuantityAlertsByStatus(allItems, query.status);
     const warehouseCounts = Object.fromEntries(
-      [...new Set(items.map((item) => String(item.warehouseId)))].map((warehouseId) => [
+      [...new Set(statusItems.map((item) => String(item.warehouseId)))].map((warehouseId) => [
         warehouseId,
-        items.filter((item) => String(item.warehouseId) === warehouseId).length,
+        statusItems.filter((item) => String(item.warehouseId) === warehouseId).length,
       ]),
     );
+    const items = query.warehouseId
+      ? statusItems.filter((item) => String(item.warehouseId) === String(query.warehouseId))
+      : statusItems;
     return {
       items,
       total: items.length,
@@ -3835,19 +3850,21 @@ export class InventoryService {
     return { id: item.id, message: '安全库存与建议补货量已更新' };
   }
   async expiryAlerts(query: Body) {
-    const where: Prisma.hspsi_inventory_alert_periodWhereInput = { end_day: { not: null } };
-    if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.orgId) {
-      const warehouses = await this.prisma.hspsi_basic_warehouse.findMany({
-        where: { org_id: BigInt(query.orgId), status: 1, deleted_at: null },
+    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计
+    const enabledWarehouseIds = (
+      await this.prisma.hspsi_basic_warehouse.findMany({
+        where: {
+          status: 1,
+          deleted_at: null,
+          ...(query.orgId ? { org_id: BigInt(query.orgId) } : {}),
+        },
         select: { warehouse_id: true },
-      });
-      const warehouseIds = warehouses.map((item) => item.warehouse_id);
-      where.warehouse_id =
-        query.warehouseId && warehouseIds.includes(BigInt(query.warehouseId))
-          ? BigInt(query.warehouseId)
-          : { in: query.warehouseId ? [] : warehouseIds };
-    }
+      })
+    ).map((warehouse) => warehouse.warehouse_id);
+    const where: Prisma.hspsi_inventory_alert_periodWhereInput = {
+      end_day: { not: null },
+      warehouse_id: { in: enabledWarehouseIds },
+    };
     const keywordIds = await this.inventoryKeywordIds(query.keyword);
     if (keywordIds)
       where.OR = [{ goods_id: { in: keywordIds.goodsIds } }, { sku_id: { in: keywordIds.skuIds } }];
@@ -3876,7 +3893,7 @@ export class InventoryService {
       })),
     );
     const types = await this.dictionary('expiry_alert_type');
-    const items = configs.flatMap((config) => {
+    const allItems = configs.flatMap((config) => {
       const stock = stocks.find(
         (item) =>
           item.goods_id === config.goods_id &&
@@ -3917,11 +3934,14 @@ export class InventoryService {
       ];
     });
     const warehouseCounts = Object.fromEntries(
-      [...new Set(items.map((item) => String(item.warehouseId)))].map((warehouseId) => [
+      [...new Set(allItems.map((item) => String(item.warehouseId)))].map((warehouseId) => [
         warehouseId,
-        items.filter((item) => String(item.warehouseId) === warehouseId).length,
+        allItems.filter((item) => String(item.warehouseId) === warehouseId).length,
       ]),
     );
+    const items = query.warehouseId
+      ? allItems.filter((item) => String(item.warehouseId) === String(query.warehouseId))
+      : allItems;
     return { items, total: items.length, warehouseCounts };
   }
 }
