@@ -14,6 +14,10 @@ const quantity = (value: unknown) =>
   Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
 const dateText = (value: unknown) => (value ? String(value).slice(0, 10) : '—');
 
+// 仓库筛选「全部」统计 = 各仓库盘点单数之和（与仓库 Tab 口径一致，不随选中仓库变化）
+const orgWarehouseCheckTotal = (counts: Record<string, number>) =>
+  Object.values(counts ?? {}).reduce((sum, value) => sum + Number(value ?? 0), 0);
+
 function checkListSummary(rows: any[], total: number) {
   return {
     total,
@@ -78,8 +82,13 @@ async function viewDetail(row: any) {
       </div>
     </template>
 
-    <template #query-tools="{ query, load, total }">
-      <WarehouseTabs :query="query" :load="load" :total="total" />
+    <template #query-tools="{ query, load, warehouseCounts }">
+      <WarehouseTabs
+        :query="query"
+        :load="load"
+        :total="orgWarehouseCheckTotal(warehouseCounts)"
+        :warehouse-counts="warehouseCounts"
+      />
     </template>
 
     <template #page-actions>

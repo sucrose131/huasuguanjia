@@ -1453,6 +1453,20 @@ export class InventoryService {
     const where: Prisma.hspsi_inventory_checkWhereInput = { deleted_at: null };
     if (query.orgId) where.org_id = BigInt(query.orgId);
     if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
+    // 仓库筛选统计：按组织统计各仓库盘点单数（不受已选仓库影响，供「全部」与仓库 Tab 展示）
+    const warehouseCounts = Object.fromEntries(
+      (
+        await this.prisma.hspsi_inventory_check.groupBy({
+          by: ['warehouse_id'],
+          where: {
+            deleted_at: null,
+            ...(query.orgId ? { org_id: BigInt(query.orgId) } : {}),
+            warehouse_id: { not: 0n },
+          },
+          _count: { _all: true },
+        })
+      ).map((group) => [String(group.warehouse_id), group._count._all]),
+    );
     const [items, total] = await this.prisma.$transaction([
       this.prisma.hspsi_inventory_check.findMany({
         where,
@@ -1634,6 +1648,7 @@ export class InventoryService {
       total,
       page,
       pageSize,
+      warehouseCounts,
     };
   }
 
