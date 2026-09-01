@@ -82,6 +82,14 @@ async function loadOrgScopedOptions(orgId: unknown) {
   options.warehouses = warehouses as any[];
 }
 
+async function organizationChanged() {
+  form.value.deptId = '';
+  form.value.warehouseId = '';
+  form.value.details = [blankLine()];
+  await loadOrgScopedOptions(form.value.orgId);
+  await loadContextGoods();
+}
+
 /** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
 async function loadContextGoods() {
   if (!form.value.orgId) {
@@ -285,7 +293,7 @@ async function save(submit = false) {
 
 onMounted(async () => {
   const [orgs, units, users] = await Promise.all([
-    api.get('/base-data/organizations/options').catch(() => []),
+    api.get('/purchase/application-organization-options').catch(() => []),
     api.get('/base-data/units/options').catch(() => []),
     api.get('/base-data/users/options').catch(() => []),
   ]);
@@ -294,8 +302,12 @@ onMounted(async () => {
   options.users = users as any[];
 
   if (props.mode === 'create') {
+    const primaryOrgId = String(auth.user?.orgId ?? '');
+    const defaultOrg = (options.orgs as any[]).find(
+      (item: any) => String(item.value) === primaryOrgId,
+    );
     Object.assign(form.value, {
-      orgId: auth.user?.orgId ?? '',
+      orgId: defaultOrg?.value ?? options.orgs[0]?.value ?? '',
       deptId: auth.user?.deptId ?? '',
       warehouseId: '',
       reason: '',
@@ -339,9 +351,17 @@ onMounted(async () => {
   <el-form label-position="top" :disabled="isView">
     <div class="form-grid">
       <el-form-item label="所属组织" required>
-        <el-select v-model="form.orgId" disabled>
+        <el-select
+          v-model="form.orgId"
+          filterable
+          :disabled="isView || options.orgs.length <= 1"
+          @change="organizationChanged"
+        >
           <el-option v-for="x in options.orgs" :key="x.value" :label="x.label" :value="x.value" />
         </el-select>
+        <div v-if="!isView && options.orgs.length > 1" class="warehouse-hint">
+          可选择当前账号已授权的组织，并以该组织身份提交 OA 审批
+        </div>
       </el-form-item>
       <el-form-item label="目标部门" required>
         <el-select v-model="form.deptId" filterable :disabled="isView">

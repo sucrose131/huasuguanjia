@@ -199,7 +199,7 @@ export class PurchaseOaApprovalService {
       }),
       this.prisma.hspsi_basic_organization.findFirst({
         where: { org_id: application.org_id, deleted_at: null },
-        select: { account_set_id: true },
+        select: { org_id: true, account_set_id: true, outer_ref_id: true },
       }),
       application.source_type === 'production_plan' && application.source_id > 0n
         ? this.prisma.hspsi_production_plan.findFirst({
@@ -234,27 +234,78 @@ export class PurchaseOaApprovalService {
     if (!staff?.outer_ref_id || !staff.out_staff_id) {
       throw new BadRequestException('提交人尚未关联有效OA账号，请先同步OA组织人员');
     }
-    const membership = await this.prisma.hspsi_basic_staff_organizations.findFirst({
+    const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
       where: {
         staff_id: staff.id,
         account_set_id: organization.account_set_id,
-        type: 1,
         deleted_at: null,
       },
-      orderBy: [{ org_type: 'desc' }, { id: 'asc' }],
+      orderBy: [{ type: 'asc' }, { org_type: 'desc' }, { id: 'asc' }],
     });
-    if (!membership) throw new BadRequestException('提交人没有有效的OA主部门');
-    const starterOrg =
-      membership.org_type === 2
-        ? await this.prisma.hspsi_basic_dept.findFirst({
-            where: { dept_id: membership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          })
-        : await this.prisma.hspsi_basic_organization.findFirst({
-            where: { org_id: membership.org_id, deleted_at: null },
-            select: { outer_ref_id: true },
-          });
-    if (!starterOrg?.outer_ref_id) throw new BadRequestException('提交人的OA主部门标识缺失');
+    const departmentMembershipIds = memberships
+      .filter((item) => item.org_type === 2)
+      .map((item) => item.org_id);
+    const departments = departmentMembershipIds.length
+      ? await this.prisma.hspsi_basic_dept.findMany({
+          where: {
+            dept_id: { in: departmentMembershipIds },
+            status: 1,
+            deleted_at: null,
+          },
+          select: { dept_id: true, org_id: true, outer_ref_id: true },
+        })
+      : [];
+    const departmentMap = new Map(departments.map((department) => [String(department.dept_id), department]));
+    const membershipOrganizationIds = [
+      ...new Set([
+        ...memberships
+          .filter((item) => item.org_type === 1)
+          .map((item) => String(item.org_id)),
+        ...departments.map((department) => String(department.org_id)),
+      ]),
+    ].map(BigInt);
+    const membershipOrganizations = membershipOrganizationIds.length
+      ? await this.prisma.hspsi_basic_organization.findMany({
+          where: {
+            org_id: { in: membershipOrganizationIds },
+            operation_status: 1,
+            deleted_at: null,
+          },
+          select: { org_id: true, path: true },
+        })
+      : [];
+    const membershipOrganizationMap = new Map(
+      membershipOrganizations.map((item) => [String(item.org_id), item]),
+    );
+    const selectedOrganizationId = String(application.org_id);
+    const isSelectedOrganizationOrDescendant = (organizationId: bigint) => {
+      if (organizationId === application.org_id) return true;
+      const membershipOrganization = membershipOrganizationMap.get(String(organizationId));
+      return (membershipOrganization?.path ?? '')
+        .split('/')
+        .filter(Boolean)
+        .includes(selectedOrganizationId);
+    };
+    const selectedMembership = memberships.find(
+      (item) => {
+        if (item.org_type === 1) return isSelectedOrganizationOrDescendant(item.org_id);
+        if (item.org_type !== 2) return false;
+        const department = departmentMap.get(String(item.org_id));
+        return Boolean(department && isSelectedOrganizationOrDescendant(department.org_id));
+      },
+    );
+    if (!selectedMembership) {
+      throw new BadRequestException('提交人在采购申请所选组织下没有有效的OA组织关系');
+    }
+    const selectedDepartment =
+      selectedMembership.org_type === 2
+        ? departmentMap.get(String(selectedMembership.org_id))
+        : null;
+    const starterOrgId =
+      selectedDepartment?.org_id === application.org_id
+        ? selectedDepartment.outer_ref_id
+        : organization.outer_ref_id;
+    if (!starterOrgId) throw new BadRequestException('采购申请所选OA组织标识缺失');
 
     const goodsIds = [...new Set(details.map((item) => item.goods_id))];
     const skuIds = [...new Set(details.map((item) => item.sku_id))];
@@ -295,7 +346,7 @@ export class PurchaseOaApprovalService {
     return {
       accountSetId: organization.account_set_id,
       starterId: staff.outer_ref_id,
-      starterOrgId: starterOrg.outer_ref_id,
+      starterOrgId,
       busKey: `${BUSINESS_TYPE}:${purId}`,
       formData: {
         [f.reason!]: application.pur_reson,

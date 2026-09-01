@@ -7,13 +7,18 @@ function serviceWith(
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
   message: Record<string, any> = { sendPurchaseReceiptNotification: vi.fn() },
 ) {
+  const prismaWithDefaults = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    hspsi_basic_organization: { findMany: vi.fn().mockResolvedValue([]) },
+    ...prisma,
+  };
   const todoService = {
     create: vi.fn().mockResolvedValue({ created: true }),
     completeByBusiness: vi.fn().mockResolvedValue(0),
     resolveRecipients: vi.fn().mockResolvedValue([]),
   };
   const service = new PurchaseService(
-    prisma as never,
+    prismaWithDefaults as never,
     { goodsOptions: vi.fn(), assertGoodsLines: vi.fn() } as never,
     { enrichGoods: vi.fn(async (rows: unknown[]) => rows) } as never,
     { post: vi.fn() } as never,
@@ -406,7 +411,30 @@ describe('PurchaseService receipt confirmation', () => {
 });
 
 describe('PurchaseService production-shortage guards', () => {
-  it('采购申请忽略客户端伪造组织并固定使用发起人OA所属组织', async () => {
+  it('采购申请组织选项包含直接授权组织的有效上级组织', async () => {
+    const service = serviceWith({
+      $queryRaw: vi.fn().mockResolvedValue([
+        { org_id: 13n, parent_id: 0n, name: '华溯生物科技（深圳）有限公司' },
+        { org_id: 14n, parent_id: 13n, name: '华溯云（深圳）科技有限公司' },
+      ]),
+    });
+
+    await expect(
+      service.applicationOrganizationOptions({
+        id: '58',
+        username: '18922946273',
+        orgId: '14',
+        orgName: '华溯云（深圳）科技有限公司',
+        authorizedOrganizations: [{ id: '14', name: '华溯云（深圳）科技有限公司' }],
+        permissions: ['purchase'],
+      }),
+    ).resolves.toEqual([
+      { value: '14', label: '华溯云（深圳）科技有限公司' },
+      { value: '13', label: '华溯生物科技（深圳）有限公司' },
+    ]);
+  });
+
+  it('采购申请允许使用当前账号已授权的额外组织', async () => {
     const create = vi.fn().mockResolvedValue({ pur_id: 7n });
     const tx = {
       hspsi_purchase_approve: { create },
@@ -427,14 +455,45 @@ describe('PurchaseService production-shortage guards', () => {
         warehouseId: 3,
         details: [{ goodsId: 10, skuId: 11, quantity: 1, unitType: 1 }],
       },
-      '9',
-      false,
-      '1',
+      {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [
+          { id: '1', name: '主组织' },
+          { id: '999', name: '额外授权组织' },
+        ],
+        permissions: ['purchase'],
+      },
     );
 
     expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ org_id: 1n, created_by: 9n }),
+      data: expect.objectContaining({ org_id: 999n, created_by: 9n }),
     });
+  });
+
+  it('采购申请拒绝使用当前账号未授权的组织', async () => {
+    const service = serviceWith({});
+    await expect(
+      service.saveApplication(
+        null,
+        {
+          orgId: 999,
+          deptId: 2,
+          warehouseId: 3,
+          details: [{ goodsId: 10, skuId: 11, quantity: 1, unitType: 1 }],
+        },
+        {
+          id: '9',
+          username: 'applicant',
+          orgId: '1',
+          deptId: '2',
+          authorizedOrganizations: [{ id: '1', name: '主组织' }],
+          permissions: ['purchase'],
+        },
+      ),
+    ).rejects.toThrow('采购申请所属组织不在当前账号授权组织范围内');
   });
 
   it('creates one pending purchase-refund task for an effective paid return', async () => {
@@ -981,7 +1040,14 @@ describe('PurchaseService production-shortage guards', () => {
           warehouseId: 3,
           details: [{ goodsId: 10, skuId: 11, quantity: 1, unitType: 1, referencePrice: 5 }],
         },
-        '9',
+        {
+          id: '9',
+          username: 'applicant',
+          orgId: '1',
+          deptId: '2',
+          authorizedOrganizations: [{ id: '1', name: '主组织' }],
+          permissions: ['purchase'],
+        },
       ),
     ).rejects.toThrow('当前状态不能编辑');
 
@@ -1008,9 +1074,16 @@ describe('PurchaseService production-shortage guards', () => {
       $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
 
-    await expect(serviceWith(prisma).submitApplication('7', '9')).rejects.toThrow(
-      '当前状态不能提交',
-    );
+    await expect(
+      serviceWith(prisma).submitApplication('7', {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [{ id: '1', name: '主组织' }],
+        permissions: ['purchase'],
+      }),
+    ).rejects.toThrow('当前状态不能提交');
 
     expect(tx.$queryRaw).toHaveBeenCalledOnce();
     expect(tx.hspsi_purchase_approve.update).not.toHaveBeenCalled();

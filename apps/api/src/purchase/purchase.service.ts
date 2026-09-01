@@ -17,6 +17,7 @@ import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { MessageService } from '../message/message.service';
+import type { AuthUser } from '../auth/auth.types';
 
 import { TodoService } from '../database/todo.service';
 import { generateBatchNo } from '../common/batch-number';
@@ -63,6 +64,56 @@ export class PurchaseService {
       page: Math.max(1, Number(query.page ?? 1)),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize ?? 20))),
     };
+  }
+  /**
+   * 采购申请所属组织：当前账号已经生效的数据权限组织，以及这些组织的有效上级组织。
+   *
+   * OA 中人员经常挂在子公司/下级组织，但采购申请需要允许其以上级法人组织身份发起；
+   * 因此这里只扩展祖先组织，不扩展同级或其他下级组织。
+   */
+  private async applicationOrganizations(user: AuthUser) {
+    const organizations = new Map<string, string>();
+    if (user.orgId) organizations.set(String(user.orgId), user.orgName ?? '当前所属组织');
+    for (const organization of user.authorizedOrganizations ?? []) {
+      organizations.set(String(organization.id), organization.name);
+    }
+
+    // 组织层级查询必须能看见授权范围之外的父节点。这里用只读原生查询绕过
+    // 通用数据权限中间件；最终返回值仍只保留直接授权组织及其祖先。
+    const activeOrganizations = await this.prisma.$queryRaw<
+      Array<{ org_id: bigint; parent_id: bigint; name: string }>
+    >`SELECT org_id, parent_id, name
+      FROM hspsi_basic_organization
+      WHERE operation_status = 1 AND deleted_at IS NULL`;
+    const byId = new Map(activeOrganizations.map((item) => [String(item.org_id), item]));
+    for (const organizationId of [...organizations.keys()]) {
+      let current = byId.get(organizationId);
+      const visited = new Set<string>();
+      while (current?.parent_id && current.parent_id > 0n) {
+        const parentId = String(current.parent_id);
+        if (visited.has(parentId)) break;
+        visited.add(parentId);
+        const parent = byId.get(parentId);
+        if (!parent) break;
+        organizations.set(parentId, parent.name);
+        current = parent;
+      }
+    }
+    return organizations;
+  }
+
+  async applicationOrganizationOptions(user: AuthUser) {
+    const organizations = await this.applicationOrganizations(user);
+    return [...organizations].map(([value, label]) => ({ value, label }));
+  }
+
+  /** 采购申请可代组织发起，但所选组织必须属于直接授权组织或其有效上级组织。 */
+  private async assertApplicationOrganization(user: AuthUser, orgId: bigint) {
+    if (user.isSuperAdmin) return;
+    const authorized = await this.applicationOrganizations(user);
+    if (!authorized.has(String(orgId))) {
+      throw new ForbiddenException('采购申请所属组织不在当前账号授权组织范围内');
+    }
   }
   /** 采购单据商品选项：按单据组织+仓库，仅返回分类 warehouse_type 匹配的启用商品 */
   async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
@@ -1325,17 +1376,19 @@ export class PurchaseService {
   async saveApplication(
     id: string | null,
     body: Body,
-    userId: string,
+    user: AuthUser,
     submit = false,
-    fixedOrgId?: string | null,
   ) {
+    if (!body.orgId) throw new BadRequestException('请选择采购申请所属组织');
+    const orgId = BigInt(String(body.orgId));
+    await this.assertApplicationOrganization(user, orgId);
     const lines = this.details(body.details);
     await this.resolveLineSkus(lines);
     let purId = id ? BigInt(id) : 0n;
     let businessNo = '';
     for (const line of lines) this.quantity(line.quantity, '采购申请数量');
     const data = {
-      org_id: BigInt(String(fixedOrgId ?? body.orgId)),
+      org_id: orgId,
       dept_id: BigInt(String(body.deptId)),
       pur_reson: String(body.reason ?? ''),
       warehouse_id: BigInt(String(body.warehouseId)),
@@ -1345,11 +1398,11 @@ export class PurchaseService {
       approve_by: 0n,
       approve_date: null,
       remark: String(body.remark ?? ''),
-      updated_by: BigInt(userId),
+      updated_by: BigInt(user.id),
       updated_at: new Date(),
     };
     return this.guardedTransaction(async (tx) => {
-      await this.materializeQuickCatalog(tx, lines, userId);
+      await this.materializeQuickCatalog(tx, lines, user.id);
       if (id) {
         await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
         const existing = await tx.hspsi_purchase_approve.findFirst({
@@ -1361,10 +1414,8 @@ export class PurchaseService {
           throw new BadRequestException('生产缺料采购申请由系统生成，不允许手工编辑');
         if (!([0, 2].includes(Number(existing.status)) || Number(existing.approve_status) === 2))
           throw new BadRequestException('当前状态不能编辑');
-        if (existing.created_by !== BigInt(userId))
+        if (existing.created_by !== BigInt(user.id))
           throw new ForbiddenException('个人无权修改他人发起的采购申请');
-        if (existing.org_id !== data.org_id)
-          throw new ForbiddenException('采购申请的所属组织必须与发起人的OA所属组织一致');
         await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
         await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, lines);
         await tx.hspsi_purchase_approve.update({ where: { pur_id: purId }, data });
@@ -1376,7 +1427,7 @@ export class PurchaseService {
           data: {
             pur_no: businessNo,
             ...data,
-            created_by: BigInt(userId),
+            created_by: BigInt(user.id),
             created_at: new Date(),
           },
         });
@@ -1401,7 +1452,7 @@ export class PurchaseService {
       };
     });
   }
-  async submitApplication(id: string, userId: string) {
+  async submitApplication(id: string, user: AuthUser) {
     const purId = BigInt(id);
     await this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
@@ -1413,15 +1464,16 @@ export class PurchaseService {
         throw new BadRequestException('生产缺料采购申请已由系统提交，不允许手工再次提交');
       if (![0, 2].includes(Number(application.status)) && Number(application.approve_status) !== 2)
         throw new BadRequestException('当前状态不能提交');
-      if (application.created_by !== BigInt(userId))
+      if (application.created_by !== BigInt(user.id))
         throw new ForbiddenException('个人无权提交他人发起的采购申请');
+      await this.assertApplicationOrganization(user, application.org_id);
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
         data: {
           status: 1,
           approve_status: 0,
           approve_comment: '',
-          updated_by: BigInt(userId),
+          updated_by: BigInt(user.id),
           updated_at: new Date(),
         },
       });
