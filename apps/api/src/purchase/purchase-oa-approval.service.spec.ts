@@ -70,16 +70,27 @@ function fixture(existingStatus?: string) {
       findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
     },
     hspsi_basic_organization: {
-      findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }),
+      findFirst: vi.fn().mockResolvedValue({
+        org_id: 2n,
+        account_set_id: 1n,
+        outer_ref_id: 'ORG-2',
+      }),
+      findMany: vi.fn().mockResolvedValue([{ org_id: 2n, path: '/' }]),
     },
     hspsi_production_plan: { findFirst: vi.fn() },
     hspsi_basic_staff: {
       findFirst: vi.fn().mockResolvedValue({ id: 9n, outer_ref_id: 'MEMBER-9', out_staff_id: '0000000009' }),
     },
     hspsi_basic_staff_organizations: {
-      findFirst: vi.fn().mockResolvedValue({ id: 1n, org_id: 6n, org_type: 2 }),
+      findMany: vi
+        .fn()
+        .mockResolvedValue([{ id: 1n, org_id: 6n, org_type: 2, type: 2 }]),
     },
-    hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ outer_ref_id: 'DEPT-6' }) },
+    hspsi_basic_dept: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([{ dept_id: 6n, org_id: 2n, outer_ref_id: 'DEPT-6' }]),
+    },
     hspsi_goods_info: {
       findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, goods_name: '复印纸' }]),
     },
@@ -154,6 +165,17 @@ describe('PurchaseOaApprovalService', () => {
           '8avk96xhktxy': 'A4纸',
         },
       ],
+    });
+  });
+
+  it('uses the OA organization relation matching the organization selected on the application', async () => {
+    const { service, approval } = fixture();
+
+    await service.submit(7n, '5');
+
+    expect(approval.startFormProcess.mock.calls[0]![1]).toMatchObject({
+      starterId: 'MEMBER-9',
+      starterOrgId: 'DEPT-6',
     });
   });
 

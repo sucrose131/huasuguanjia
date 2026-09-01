@@ -51,6 +51,11 @@ export class PurchaseController {
     return this.service.operationHistory(resource, id);
   }
   @RequirePermissions('purchase')
+  @Get('application-organization-options')
+  applicationOrganizationOptions(@CurrentUser() u: AuthUser) {
+    return this.service.applicationOrganizationOptions(u);
+  }
+  @RequirePermissions('purchase')
   @Get('applications')
   applications(@Query() q: Record<string, string>) {
     return this.service.applications(q);
@@ -78,7 +83,7 @@ export class PurchaseController {
   @RequirePermissions('purchase')
   @Post('applications')
   createApplication(@Body() b: Record<string, unknown>, @CurrentUser() u: AuthUser) {
-    return this.service.saveApplication(null, b, u.id, false, u.orgId);
+    return this.service.saveApplication(null, b, u);
   }
   @RequirePermissions('purchase')
   @Patch('applications/:id')
@@ -87,12 +92,12 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    return this.service.saveApplication(id, b, u.id, false, u.orgId);
+    return this.service.saveApplication(id, b, u);
   }
   @RequirePermissions('purchase')
   @Post('applications/:id/submit')
   async submitApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    await this.service.submitApplication(id, u.id);
+    await this.service.submitApplication(id, u);
     const oa = await this.oaApproval.submit(BigInt(id), u.id);
     return {
       id,
