@@ -54,22 +54,23 @@ export class PurchaseOaApprovalService {
         errorMessage: 'OA审批已暂停，单据保留在系统内审批',
       };
     }
-    // 先解析账套：采购申请的 account_set_id 取所属组织
+    // 先解析账套：人工采购申请按明确选择的 OA 发起组织，历史/系统单据兼容回退成本组织。
     const appBrief = await this.prisma.hspsi_purchase_approve.findFirst({
       where: { pur_id: purId, deleted_at: null },
-      select: { org_id: true },
+      select: { org_id: true, oa_org_id: true },
     });
     if (!appBrief) throw new BadRequestException('采购申请不存在');
+    const oaOrgId = appBrief.oa_org_id > 0n ? appBrief.oa_org_id : appBrief.org_id;
     const orgBrief = await this.prisma.hspsi_basic_organization.findFirst({
-      where: { org_id: appBrief.org_id, deleted_at: null },
+      where: { org_id: oaOrgId, operation_status: 1, deleted_at: null },
       select: { account_set_id: true },
     });
-    if (!orgBrief?.account_set_id) throw new BadRequestException('采购申请所属组织未关联OA账套');
+    if (!orgBrief?.account_set_id) throw new BadRequestException('推送OA组织未关联有效OA账套');
     const form = await this.mappingService.getMapping(BUSINESS_TYPE, orgBrief.account_set_id);
     const f = oaFields(form);
     const context = await this.buildContext(purId, userId, form);
     const credential = await this.credentials.getById(context.accountSetId);
-    if (!credential) throw new BadRequestException('采购申请所属OA账套未启用');
+    if (!credential) throw new BadRequestException('推送OA组织所属账套未启用');
 
     const instance = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe(
@@ -188,7 +189,9 @@ export class PurchaseOaApprovalService {
       where: { pur_id: purId, deleted_at: null },
     });
     if (!application) throw new BadRequestException('采购申请不存在');
-    const [details, warehouse, organization, sourcePlan] = await Promise.all([
+    const oaOrganizationId =
+      application.oa_org_id > 0n ? application.oa_org_id : application.org_id;
+    const [details, warehouse, oaOrganization, sourcePlan] = await Promise.all([
       this.prisma.hspsi_purchase_approve_detail.findMany({
         where: { pur_id: purId },
         orderBy: { id: 'asc' },
@@ -198,7 +201,7 @@ export class PurchaseOaApprovalService {
         select: { name: true },
       }),
       this.prisma.hspsi_basic_organization.findFirst({
-        where: { org_id: application.org_id, deleted_at: null },
+        where: { org_id: oaOrganizationId, operation_status: 1, deleted_at: null },
         select: { org_id: true, account_set_id: true, outer_ref_id: true },
       }),
       application.source_type === 'production_plan' && application.source_id > 0n
@@ -210,13 +213,13 @@ export class PurchaseOaApprovalService {
     ]);
     if (!details.length) throw new BadRequestException('采购申请没有商品明细');
     if (!warehouse) throw new BadRequestException('目标仓库不存在或已停用');
-    if (!organization?.account_set_id)
-      throw new BadRequestException('采购申请所属组织未关联OA账套');
+    if (!oaOrganization?.account_set_id)
+      throw new BadRequestException('推送OA组织未关联有效OA账套');
 
     // 提交人身份按 (登录用户, 单据组织账套) 解析，不依赖 username=mobile 猜测，
     // 与领用申请一致，避免多账套/非手机号账号错配或取不到 OA 身份。
     const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
-      where: { user_id: BigInt(userId), account_set_id: organization.account_set_id },
+      where: { user_id: BigInt(userId), account_set_id: oaOrganization.account_set_id },
       select: { staff_id: true },
     });
     if (!identity?.staff_id) {
@@ -225,7 +228,7 @@ export class PurchaseOaApprovalService {
     const staff = await this.prisma.hspsi_basic_staff.findFirst({
       where: {
         id: identity.staff_id,
-        account_set_id: organization.account_set_id,
+        account_set_id: oaOrganization.account_set_id,
         status: 1,
         deleted_at: null,
       },
@@ -237,7 +240,7 @@ export class PurchaseOaApprovalService {
     const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
       where: {
         staff_id: staff.id,
-        account_set_id: organization.account_set_id,
+        account_set_id: oaOrganization.account_set_id,
         deleted_at: null,
       },
       orderBy: [{ type: 'asc' }, { org_type: 'desc' }, { id: 'asc' }],
@@ -255,12 +258,12 @@ export class PurchaseOaApprovalService {
           select: { dept_id: true, org_id: true, outer_ref_id: true },
         })
       : [];
-    const departmentMap = new Map(departments.map((department) => [String(department.dept_id), department]));
+    const departmentMap = new Map(
+      departments.map((department) => [String(department.dept_id), department]),
+    );
     const membershipOrganizationIds = [
       ...new Set([
-        ...memberships
-          .filter((item) => item.org_type === 1)
-          .map((item) => String(item.org_id)),
+        ...memberships.filter((item) => item.org_type === 1).map((item) => String(item.org_id)),
         ...departments.map((department) => String(department.org_id)),
       ]),
     ].map(BigInt);
@@ -277,23 +280,21 @@ export class PurchaseOaApprovalService {
     const membershipOrganizationMap = new Map(
       membershipOrganizations.map((item) => [String(item.org_id), item]),
     );
-    const selectedOrganizationId = String(application.org_id);
+    const selectedOrganizationId = String(oaOrganizationId);
     const isSelectedOrganizationOrDescendant = (organizationId: bigint) => {
-      if (organizationId === application.org_id) return true;
+      if (organizationId === oaOrganizationId) return true;
       const membershipOrganization = membershipOrganizationMap.get(String(organizationId));
       return (membershipOrganization?.path ?? '')
         .split('/')
         .filter(Boolean)
         .includes(selectedOrganizationId);
     };
-    const selectedMembership = memberships.find(
-      (item) => {
-        if (item.org_type === 1) return isSelectedOrganizationOrDescendant(item.org_id);
-        if (item.org_type !== 2) return false;
-        const department = departmentMap.get(String(item.org_id));
-        return Boolean(department && isSelectedOrganizationOrDescendant(department.org_id));
-      },
-    );
+    const selectedMembership = memberships.find((item) => {
+      if (item.org_type === 1) return isSelectedOrganizationOrDescendant(item.org_id);
+      if (item.org_type !== 2) return false;
+      const department = departmentMap.get(String(item.org_id));
+      return Boolean(department && isSelectedOrganizationOrDescendant(department.org_id));
+    });
     if (!selectedMembership) {
       throw new BadRequestException('提交人在采购申请所选组织下没有有效的OA组织关系');
     }
@@ -302,9 +303,9 @@ export class PurchaseOaApprovalService {
         ? departmentMap.get(String(selectedMembership.org_id))
         : null;
     const starterOrgId =
-      selectedDepartment?.org_id === application.org_id
+      selectedDepartment?.org_id === oaOrganizationId
         ? selectedDepartment.outer_ref_id
-        : organization.outer_ref_id;
+        : oaOrganization.outer_ref_id;
     if (!starterOrgId) throw new BadRequestException('采购申请所选OA组织标识缺失');
 
     const goodsIds = [...new Set(details.map((item) => item.goods_id))];
@@ -344,7 +345,7 @@ export class PurchaseOaApprovalService {
         ? `${application.source_type}:${application.source_id}`
         : '';
     return {
-      accountSetId: organization.account_set_id,
+      accountSetId: oaOrganization.account_set_id,
       starterId: staff.outer_ref_id,
       starterOrgId,
       busKey: `${BUSINESS_TYPE}:${purId}`,

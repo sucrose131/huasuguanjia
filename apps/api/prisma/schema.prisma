@@ -1132,6 +1132,8 @@ model hspsi_purchase_approve {
   pur_no          String    @unique(map: "uk_purchase_approve_no") @db.VarChar(30)
   org_id          BigInt
   dept_id         BigInt
+  oa_org_id       BigInt    @default(0)
+  receiver_id     BigInt    @default(0)
   pur_reson       String    @db.VarChar(255)
   source_type     String    @default("") @db.VarChar(30)
   source_id       BigInt    @default(0)

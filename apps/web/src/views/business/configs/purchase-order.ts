@@ -122,7 +122,11 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       render: (row, ctx) => row.createdByName || ctx.creator(row),
     },
   ],
-  dictionaries: ['purchase_settlement_type', 'purchase_order_status', 'purchase_payment_progress_status'],
+  dictionaries: [
+    'purchase_settlement_type',
+    'purchase_order_status',
+    'purchase_payment_progress_status',
+  ],
   optionBags: ['vendors', 'warehouses'],
   queryFields: [
     {
@@ -179,7 +183,10 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       kind: 'success',
       primary: false,
       show: (row) =>
-        canEditAmount() && Number(row.vendorId) > 0 && Number(row.remainingPayable ?? 0) > 0,
+        canEditAmount() &&
+        Number(row.orderStatus) !== 1 &&
+        Number(row.vendorId) > 0 &&
+        Number(row.remainingPayable ?? 0) > 0,
       handler: (row, ctx) =>
         ctx.navigate('/purchase/payments', { create: '1', orderId: String(row.id) }),
     },

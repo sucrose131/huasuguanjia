@@ -290,9 +290,11 @@ function navigate(path?: string | null) {
             ><i v-if="unreadCount">{{ unreadCount > 99 ? '99+' : unreadCount }}</i>
           </button>
           <span class="top-divider" />
-          <span class="avatar">{{ (auth.user?.username || 'U').slice(0, 1).toUpperCase() }}</span>
+          <span class="avatar">{{
+            (auth.user?.displayName || auth.user?.username || 'U').slice(0, 1).toUpperCase()
+          }}</span>
           <div class="user-copy desktop-only">
-            <strong>{{ auth.user?.username || '加载中' }}</strong
+            <strong>{{ auth.user?.displayName || auth.user?.username || '加载中' }}</strong
             ><small>{{ auth.user?.roleName || '未配置角色' }}</small>
           </div>
           <button title="修改密码" @click="openPasswordDialog">
@@ -310,13 +312,28 @@ function navigate(path?: string | null) {
   <el-dialog v-model="passwordDialog" title="修改密码" width="420px" :close-on-click-modal="false">
     <el-form label-position="top">
       <el-form-item label="旧密码">
-        <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入当前登录密码" />
+        <el-input
+          v-model="passwordForm.oldPassword"
+          type="password"
+          show-password
+          placeholder="请输入当前登录密码"
+        />
       </el-form-item>
       <el-form-item label="新密码">
-        <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="至少6个字符" />
+        <el-input
+          v-model="passwordForm.newPassword"
+          type="password"
+          show-password
+          placeholder="至少6个字符"
+        />
       </el-form-item>
       <el-form-item label="确认新密码">
-        <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="再次输入新密码" />
+        <el-input
+          v-model="passwordForm.confirmPassword"
+          type="password"
+          show-password
+          placeholder="再次输入新密码"
+        />
       </el-form-item>
     </el-form>
     <template #footer>

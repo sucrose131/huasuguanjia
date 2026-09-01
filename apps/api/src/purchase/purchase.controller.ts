@@ -56,6 +56,19 @@ export class PurchaseController {
     return this.service.applicationOrganizationOptions(u);
   }
   @RequirePermissions('purchase')
+  @Get('application-oa-organization-options')
+  applicationOaOrganizationOptions(@CurrentUser() u: AuthUser) {
+    return this.service.applicationOaOrganizationOptions(u);
+  }
+  @RequirePermissions('purchase')
+  @Get('application-receiver-options')
+  applicationReceiverOptions(
+    @Query('orgId') orgId: string | undefined,
+    @CurrentUser() u: AuthUser,
+  ) {
+    return this.service.applicationReceiverOptions(u, orgId);
+  }
+  @RequirePermissions('purchase')
   @Get('applications')
   applications(@Query() q: Record<string, string>) {
     return this.service.applications(q);

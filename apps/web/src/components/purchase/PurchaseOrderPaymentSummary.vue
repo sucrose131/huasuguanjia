@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import { moneyText } from '@/utils/format';
 import PurchaseOrderSectionHeader from './PurchaseOrderSectionHeader.vue';
 
@@ -8,7 +7,6 @@ const props = defineProps<{
   mode: 'create' | 'edit' | 'view';
   dicts: Record<string, any[]>;
   canViewAmount: boolean;
-  canEditAmount: boolean;
   orderTotal: number;
   effectivePayable: number;
   netPaidAmount: number;
@@ -16,16 +14,15 @@ const props = defineProps<{
   previewProgressStatus: number;
 }>();
 
-const isCreate = computed(() => props.mode === 'create');
-
 function protectedMoney(value: unknown) {
   return props.canViewAmount ? `¥ ${moneyText(value)}` : '****';
 }
 
 function dictLabel(code: string, value: unknown) {
-  return (props.dicts[code] ?? []).find(
-    (item: any) => String(item.value) === String(value),
-  )?.label ?? '—';
+  return (
+    (props.dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ??
+    '—'
+  );
 }
 </script>
 
@@ -33,7 +30,7 @@ function dictLabel(code: string, value: unknown) {
   <section class="purchase-order-section">
     <PurchaseOrderSectionHeader
       title="金额与付款"
-      description="订单金额自动汇总；本次付款可为0，后续仍可从订单操作列分次付款"
+      description="订单金额自动汇总；付款统一从采购订单操作列登记"
     />
 
     <div class="purchase-order-payment-grid">
@@ -52,18 +49,7 @@ function dictLabel(code: string, value: unknown) {
       <el-form-item label="净已付款">
         <el-input :model-value="protectedMoney(netPaidAmount)" disabled />
       </el-form-item>
-      <el-form-item label="本次付款金额">
-        <el-input-number
-          v-if="isCreate && canEditAmount"
-          v-model="form.currentPaymentAmount"
-          :min="0"
-          :max="orderTotal"
-          :precision="2"
-          controls-position="right"
-        />
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="付款后待付">
+      <el-form-item label="剩余应付">
         <el-input :model-value="protectedMoney(remainingAfterPayment)" disabled />
       </el-form-item>
       <el-form-item label="付款进度">
@@ -71,38 +57,6 @@ function dictLabel(code: string, value: unknown) {
           :model-value="dictLabel('purchase_payment_progress_status', previewProgressStatus)"
           disabled
         />
-      </el-form-item>
-      <el-form-item label="本次付款日期">
-        <el-date-picker
-          v-if="isCreate"
-          v-model="form.currentPaymentDate"
-          value-format="YYYY-MM-DD"
-          :disabled="!Number(form.currentPaymentAmount)"
-        />
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="本次付款渠道">
-        <el-select
-          v-if="isCreate"
-          v-model="form.currentPaymentChannel"
-          :disabled="!Number(form.currentPaymentAmount)"
-        >
-          <el-option
-            v-for="item in dicts.payment_channel || []"
-            :key="item.value"
-            :label="item.label"
-            :value="Number(item.value)"
-          />
-        </el-select>
-        <el-input v-else model-value="—" disabled />
-      </el-form-item>
-      <el-form-item label="付款备注" class="span-2">
-        <el-input
-          v-if="isCreate"
-          v-model="form.currentPaymentRemark"
-          :disabled="!Number(form.currentPaymentAmount)"
-        />
-        <el-input v-else model-value="—" disabled />
       </el-form-item>
     </div>
   </section>
@@ -140,9 +94,6 @@ function dictLabel(code: string, value: unknown) {
 .purchase-order-payment-grid :deep(.is-disabled .el-select__selected-item) {
   color: var(--hs-color-text-primary);
   -webkit-text-fill-color: var(--hs-color-text-primary);
-}
-.span-2 {
-  grid-column: span 2;
 }
 @media (max-width: 960px) {
   .purchase-order-payment-grid {

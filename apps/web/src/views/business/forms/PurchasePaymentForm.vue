@@ -37,7 +37,9 @@ const paymentProgressStatus = computed(() => {
 });
 
 function dictLabel(code: string, value: unknown) {
-  return (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—';
+  return (
+    (dicts[code] ?? []).find((item: any) => String(item.value) === String(value))?.label ?? '—'
+  );
 }
 
 /** 按组织加载部门/仓库选项（走后端），组织为空时清空 */
@@ -48,12 +50,8 @@ async function loadOrgOptions(orgId: unknown) {
     return;
   }
   const [depts, warehouses] = await Promise.all([
-    api
-      .get('/base-data/departments/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
-    api
-      .get('/base-data/warehouses/options', { params: { orgId: String(orgId) } })
-      .catch(() => []),
+    api.get('/base-data/departments/options', { params: { orgId: String(orgId) } }).catch(() => []),
+    api.get('/base-data/warehouses/options', { params: { orgId: String(orgId) } }).catch(() => []),
   ]);
   options.depts = depts;
   options.warehouses = warehouses;
@@ -92,6 +90,7 @@ async function orderChanged() {
     form.value.vendorName = '';
     form.value.effectivePayable = 0;
     form.value.orderRemaining = 0;
+    form.value.paymentAmount = 0;
     return;
   }
   const order: any = await api.get(`/purchase/orders/${form.value.orderId}`);
@@ -103,17 +102,16 @@ async function orderChanged() {
   form.value.deptId = order.deptId ?? order.dept_id ?? '';
   form.value.warehouseId = order.warehouseId ?? order.warehouse_id ?? '';
   form.value.effectivePayable = Number(order.effectivePayable ?? 0);
-  form.value.payableAmount = Number(order.payableAmount ?? order.totalAmount ?? order.effectivePayable ?? 0);
+  form.value.payableAmount = Number(
+    order.payableAmount ?? order.totalAmount ?? order.effectivePayable ?? 0,
+  );
   form.value.paidAmount = Number(order.paidAmount ?? 0);
   form.value.refundedAmount = Number(order.refundedAmount ?? 0);
   form.value.netPaidAmount = Number(
     order.netPaidAmount ?? form.value.paidAmount - form.value.refundedAmount,
   );
   form.value.orderRemaining = Number(order.remainingPayable ?? order.effectivePayable ?? 0);
-  form.value.paymentAmount = Math.min(
-    Number(form.value.paymentAmount ?? 0),
-    Number(form.value.orderRemaining ?? 0),
-  );
+  form.value.paymentAmount = Number(form.value.orderRemaining ?? 0);
   await loadOrgOptions(form.value.orgId);
 }
 
@@ -312,14 +310,32 @@ onMounted(async () => {
     </div>
 
     <div class="money-ref">
-      <span>订单总金额：<strong>{{ money(form.payableAmount) }}</strong></span>
-      <span>退货后应付：<strong>{{ money(form.effectivePayable) }}</strong></span>
-      <span>累计付款：<strong>{{ money(form.paidAmount) }}</strong></span>
-      <span>累计退款：<strong>{{ money(form.refundedAmount) }}</strong></span>
-      <span>净已付款：<strong>{{ money(form.netPaidAmount) }}</strong></span>
-      <span>剩余应付：<strong>{{ money(form.orderRemaining) }}</strong></span>
-      <span>付款后剩余：<strong>{{ money(remainingAfterPayment) }}</strong></span>
-      <span>付款后进度：<strong>{{ dictLabel('purchase_payment_progress_status', paymentProgressStatus) }}</strong></span>
+      <span
+        >订单总金额：<strong>{{ money(form.payableAmount) }}</strong></span
+      >
+      <span
+        >退货后应付：<strong>{{ money(form.effectivePayable) }}</strong></span
+      >
+      <span
+        >累计付款：<strong>{{ money(form.paidAmount) }}</strong></span
+      >
+      <span
+        >累计退款：<strong>{{ money(form.refundedAmount) }}</strong></span
+      >
+      <span
+        >净已付款：<strong>{{ money(form.netPaidAmount) }}</strong></span
+      >
+      <span
+        >剩余应付：<strong>{{ money(form.orderRemaining) }}</strong></span
+      >
+      <span
+        >付款后剩余：<strong>{{ money(remainingAfterPayment) }}</strong></span
+      >
+      <span
+        >付款后进度：<strong>{{
+          dictLabel('purchase_payment_progress_status', paymentProgressStatus)
+        }}</strong></span
+      >
     </div>
 
     <el-form-item label="备注" class="span-2">

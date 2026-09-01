@@ -81,7 +81,7 @@ const categories = ['全部消息', '审批消息', '预警消息', '业务消�
 const greeting = computed(() => {
   const hour = new Date().getHours();
   const text = hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好';
-  return `${text}，${auth.user?.username ?? '用户'}。这里是今日经营与待办概览。`;
+  return `${text}，${auth.user?.displayName || auth.user?.username || '用户'}。这里是今日经营与待办概览。`;
 });
 const noModules: DashboardModuleAccess = {
   sales: false,
