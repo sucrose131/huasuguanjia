@@ -426,13 +426,8 @@ describe('PurchaseService receipt confirmation', () => {
 });
 
 describe('PurchaseService production-shortage guards', () => {
-  it('采购申请组织选项包含直接授权组织的有效上级组织', async () => {
-    const service = serviceWith({
-      $queryRaw: vi.fn().mockResolvedValue([
-        { org_id: 13n, parent_id: 0n, name: '华溯生物科技（深圳）有限公司' },
-        { org_id: 14n, parent_id: 13n, name: '华溯云（深圳）科技有限公司' },
-      ]),
-    });
+  it('成本承担组织选项只含直接授权组织，不向上展开上级组织', async () => {
+    const service = serviceWith({});
 
     await expect(
       service.applicationOrganizationOptions({
@@ -444,10 +439,7 @@ describe('PurchaseService production-shortage guards', () => {
         authorizedOrganizations: [{ id: '14', name: '华溯云（深圳）科技有限公司' }],
         permissions: ['purchase'],
       }),
-    ).resolves.toEqual([
-      { value: '14', label: '华溯云（深圳）科技有限公司' },
-      { value: '13', label: '华溯生物科技（深圳）有限公司' },
-    ]);
+    ).resolves.toEqual([{ value: '14', label: '华溯云（深圳）科技有限公司' }]);
   });
 
   it('采购申请允许使用当前账号已授权的额外组织', async () => {

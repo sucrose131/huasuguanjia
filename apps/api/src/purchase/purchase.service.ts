@@ -69,38 +69,16 @@ export class PurchaseService {
     };
   }
   /**
-   * 采购申请所属组织：当前账号已经生效的数据权限组织，以及这些组织的有效上级组织。
+   * 采购申请成本承担组织：当前账号直接授权的组织（含登录账号所属组织）。
    *
-   * OA 中人员经常挂在子公司/下级组织，但采购申请需要允许其以上级法人组织身份发起；
-   * 因此这里只扩展祖先组织，不扩展同级或其他下级组织。
+   * 不向上展开祖先组织：成本归属必须落在账号数据权限范围内；"人员挂子公司、
+   * 以上级法人组织身份发起"的场景由推送OA组织（oa_org_id，账套内祖先展开）承担。
    */
   private async applicationOrganizations(user: AuthUser) {
     const organizations = new Map<string, string>();
     if (user.orgId) organizations.set(String(user.orgId), user.orgName ?? '当前所属组织');
     for (const organization of user.authorizedOrganizations ?? []) {
       organizations.set(String(organization.id), organization.name);
-    }
-
-    // 组织层级查询必须能看见授权范围之外的父节点。这里用只读原生查询绕过
-    // 通用数据权限中间件；最终返回值仍只保留直接授权组织及其祖先。
-    const activeOrganizations = await this.prisma.$queryRaw<
-      Array<{ org_id: bigint; parent_id: bigint; name: string }>
-    >`SELECT org_id, parent_id, name
-      FROM hspsi_basic_organization
-      WHERE operation_status = 1 AND deleted_at IS NULL`;
-    const byId = new Map(activeOrganizations.map((item) => [String(item.org_id), item]));
-    for (const organizationId of [...organizations.keys()]) {
-      let current = byId.get(organizationId);
-      const visited = new Set<string>();
-      while (current?.parent_id && current.parent_id > 0n) {
-        const parentId = String(current.parent_id);
-        if (visited.has(parentId)) break;
-        visited.add(parentId);
-        const parent = byId.get(parentId);
-        if (!parent) break;
-        organizations.set(parentId, parent.name);
-        current = parent;
-      }
     }
     return organizations;
   }
@@ -280,7 +258,7 @@ export class PurchaseService {
     });
   }
 
-  /** 采购申请可代组织发起，但所选组织必须属于直接授权组织或其有效上级组织。 */
+  /** 采购申请可代组织发起，但所选成本承担组织必须属于当前账号直接授权组织范围。 */
   private async assertApplicationOrganization(user: AuthUser, orgId: bigint) {
     if (user.isSuperAdmin) return;
     const authorized = await this.applicationOrganizations(user);
