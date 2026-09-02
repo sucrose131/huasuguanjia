@@ -191,3 +191,133 @@ describe('AttachmentsService handwritten signatures', () => {
     );
   });
 });
+
+describe('AttachmentsService staging (新建态临时附件)', () => {
+  it('issues a staged upload url without requiring an existing document', async () => {
+    const { service } = setup({ status: 0, approve_status: 0 });
+    const oss = {
+      signatureUrl: vi.fn().mockReturnValue('https://oss.example.com/put'),
+    };
+    (service as any).client = oss;
+
+    const result = await service.stageUploadUrl(
+      'purchase_application',
+      { fileName: '需求说明.pdf', contentType: 'application/pdf', size: 2048 },
+      user as never,
+    );
+
+    expect(result).toMatchObject({
+      attachmentId: expect.any(String),
+      objectKey: expect.stringMatching(/^documents\/tmp\/9\/.+\.pdf$/),
+      uploadUrl: 'https://oss.example.com/put',
+      expiresIn: expect.any(Number),
+    });
+    expect(oss.signatureUrl).toHaveBeenCalledWith(
+      result.objectKey,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
+  it('rejects staged uploads with disallowed file types', async () => {
+    const { service } = setup({ status: 0, approve_status: 0 });
+    (service as any).client = { signatureUrl: vi.fn() };
+
+    await expect(
+      service.stageUploadUrl(
+        'purchase_application',
+        { fileName: 'virus.exe', contentType: 'application/x-msdownload', size: 10 },
+        user as never,
+      ),
+    ).rejects.toThrow('附件格式、扩展名或MIME类型不允许');
+  });
+
+  it('binds staged attachments to a saved document and writes metadata', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    const oss = {
+      head: vi.fn().mockResolvedValue({
+        res: { headers: { 'content-length': '10', 'content-type': 'application/pdf' } },
+      }),
+      copy: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
+    };
+    (service as any).client = oss;
+    const attachmentId = '123e4567-e89b-42d3-a456-426614174000';
+
+    const result = await service.commitStaged(
+      'purchase_application',
+      '12',
+      [
+        {
+          attachmentId,
+          objectKey: `documents/tmp/9/${attachmentId}.pdf`,
+          fileName: 'test.pdf',
+          contentType: 'application/pdf',
+          size: 10,
+        },
+      ],
+      user as never,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: attachmentId,
+      objectKey: `documents/purchase_application/12/${attachmentId}.pdf`,
+      fileName: 'test.pdf',
+      uploadedBy: '9',
+    });
+    expect(oss.copy).toHaveBeenCalledOnce();
+    expect(oss.delete).toHaveBeenCalledOnce();
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('SET attachments = ?'),
+      expect.stringContaining(attachmentId),
+      BigInt(12),
+    );
+    expect(prisma.hspsi_sys_oper_log.create).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up copied finals when binding fails', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    const oss = {
+      head: vi.fn().mockResolvedValue({
+        res: { headers: { 'content-length': '999', 'content-type': 'application/pdf' } },
+      }),
+      delete: vi.fn().mockResolvedValue({}),
+    };
+    (service as any).client = oss;
+    const attachmentId = '123e4567-e89b-42d3-a456-426614174000';
+
+    await expect(
+      service.commitStaged(
+        'purchase_application',
+        '12',
+        [
+          {
+            attachmentId,
+            objectKey: `documents/tmp/9/${attachmentId}.pdf`,
+            fileName: 'test.pdf',
+            contentType: 'application/pdf',
+            size: 10,
+          },
+        ],
+        user as never,
+      ),
+    ).rejects.toThrow('附件与上传申请不一致');
+    expect(oss.delete).toHaveBeenCalledOnce();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('discards only the current user staging objects', async () => {
+    const { service } = setup({ status: 0, approve_status: 0 });
+    const oss = { delete: vi.fn().mockResolvedValue({}) };
+    (service as any).client = oss;
+
+    await service.discardStaged(
+      'purchase_application',
+      user as never,
+      ['documents/tmp/9/abc.pdf', 'documents/tmp/999/other.pdf'],
+    );
+
+    expect(oss.delete).toHaveBeenCalledOnce();
+    expect(oss.delete).toHaveBeenCalledWith('documents/tmp/9/abc.pdf');
+  });
+});

@@ -21,6 +21,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { runWithoutDataScope } from '../database/data-scope.context';
 
 import { TodoService } from '../database/todo.service';
+import { AttachmentsService } from '../attachments/attachments.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
@@ -54,6 +55,7 @@ export class PurchaseService {
     @Inject(MessageService) private message: MessageService,
 
     @Inject(TodoService) private readonly todoService: TodoService,
+    @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -1693,6 +1695,9 @@ export class PurchaseService {
     const orgId = BigInt(String(body.orgId));
     const oaOrgId = BigInt(String(body.oaOrgId));
     const receiverId = BigInt(String(body.receiverId));
+    const stagedAttachments = Array.isArray(body.stagedAttachments)
+      ? (body.stagedAttachments as Record<string, unknown>[])
+      : [];
     await this.assertApplicationOrganization(user, orgId);
     const oaSelection = await this.resolveApplicationOaSelection(user, oaOrgId);
     const lines = this.details(body.details);
@@ -1716,7 +1721,7 @@ export class PurchaseService {
       updated_by: BigInt(user.id),
       updated_at: new Date(),
     };
-    return this.guardedTransaction(async (tx) => {
+    const saved = await this.guardedTransaction(async (tx) => {
       await this.materializeQuickCatalog(tx, lines, user.id);
       if (id) {
         await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
@@ -1768,6 +1773,24 @@ export class PurchaseService {
         message: submit ? '已提交审批' : id ? '更新成功' : '草稿已保存',
       };
     });
+    // 新建态上传的临时附件在单据落库后绑定；绑定失败不影响单据保存，仅提示。
+    let attachmentWarning = '';
+    if (stagedAttachments.length) {
+      try {
+        await this.attachments.commitStaged(
+          'purchase_application',
+          String(saved.id),
+          stagedAttachments,
+          user,
+        );
+      } catch (error) {
+        attachmentWarning = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      ...saved,
+      message: attachmentWarning ? `${saved.message}，附件绑定失败：${attachmentWarning}` : saved.message,
+    };
   }
   async submitApplication(id: string, user: AuthUser) {
     const purId = BigInt(id);

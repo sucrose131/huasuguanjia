@@ -27,6 +27,7 @@ function serviceWith(
     { generate: vi.fn(async (prefix: string) => `${prefix}202608040001`) } as never,
     message as never,
     todoService as never,
+    { stageUploadUrl: vi.fn(), commitStaged: vi.fn(), discardStaged: vi.fn() } as never,
   );
   vi.spyOn(service as any, 'assertReceiverScope').mockResolvedValue(undefined);
   vi.spyOn(service as any, 'resolveApplicationOaSelection').mockResolvedValue({
@@ -439,6 +440,7 @@ describe('PurchaseService production-shortage guards', () => {
         username: '18922946273',
         orgId: '14',
         orgName: '华溯云（深圳）科技有限公司',
+        deptId: null,
         authorizedOrganizations: [{ id: '14', name: '华溯云（深圳）科技有限公司' }],
         permissions: ['purchase'],
       }),

@@ -64,6 +64,76 @@ function quickCatalogStaged() {
   if (form.value.warehouseId) warehouseChanged();
 }
 
+// ===== 新建态临时附件（保存单据后由后端绑定） =====
+const stagedAttachments = ref<Array<Record<string, any>>>([]);
+const stagingUploading = ref(false);
+const stagedFileInput = ref<HTMLInputElement>();
+
+function stagedSizeText(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function chooseStagedFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  stagingUploading.value = true;
+  try {
+    const signed: any = await api.post('/attachments/purchase_application/stage-url', {
+      fileName: file.name,
+      contentType: file.type,
+      size: file.size,
+    });
+    const response = await fetch(signed.uploadUrl, {
+      method: 'PUT',
+      headers: signed.headers,
+      body: file,
+    });
+    if (!response.ok) throw new Error(`OSS upload failed: ${response.status}`);
+    stagedAttachments.value.push({
+      attachmentId: signed.attachmentId,
+      objectKey: signed.objectKey,
+      fileName: file.name,
+      contentType: file.type,
+      size: file.size,
+    });
+    ElMessage.success('附件上传成功，保存单据后生效');
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message ?? error?.message ?? '附件上传失败');
+  } finally {
+    stagingUploading.value = false;
+  }
+}
+
+function removeStagedFile(index: number) {
+  const [removed] = stagedAttachments.value.splice(index, 1);
+  if (removed?.objectKey) {
+    api
+      .post('/attachments/purchase_application/discard-staged', {
+        objectKeys: [removed.objectKey],
+      })
+      .catch(() => undefined);
+  }
+}
+
+async function discardAllStaged() {
+  const keys = stagedAttachments.value.map((item) => item.objectKey);
+  stagedAttachments.value = [];
+  if (keys.length) {
+    await api
+      .post('/attachments/purchase_application/discard-staged', { objectKeys: keys })
+      .catch(() => undefined);
+  }
+}
+
+async function cancelForm() {
+  await discardAllStaged();
+  emit('cancel');
+}
+
 function blankLine() {
   return {
     goodsId: '',
@@ -300,12 +370,16 @@ async function save(submit = false) {
   saving.value = true;
   try {
     const url = '/purchase/applications';
-    const payload: Record<string, any> = { ...form.value };
+    const payload: Record<string, any> = {
+      ...form.value,
+      stagedAttachments: stagedAttachments.value,
+    };
     const result: any =
       props.mode === 'edit'
         ? await api.patch(`${url}/${form.value.id}`, payload)
         : await api.post(url, payload);
     if (submit) await api.post(`${url}/${result?.id ?? form.value.id}/submit`);
+    stagedAttachments.value = [];
     ElMessage.success(submit ? '已提交审批' : (result?.message ?? '草稿已保存'));
     emit('saved');
   } catch {
@@ -466,8 +540,46 @@ onMounted(async () => {
       </el-form-item>
     </div>
 
+    <div v-if="props.mode === 'create'" class="supplementary-section">
+      <PurchaseOrderSectionHeader title="单据附件" />
+      <div class="staged-attachments">
+        <div class="staged-upload">
+          <input
+            ref="stagedFileInput"
+            type="file"
+            class="staged-input"
+            :disabled="stagingUploading || stagedAttachments.length >= 10"
+            @change="chooseStagedFile"
+          />
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :loading="stagingUploading"
+            :disabled="stagedAttachments.length >= 10"
+            @click="stagedFileInput?.click()"
+          >
+            上传附件
+          </el-button>
+        </div>
+        <span class="staged-tip">新建阶段直接上传，保存单据后生效；已保存单据可在编辑页继续补充。</span>
+        <el-empty
+          v-if="!stagedAttachments.length"
+          description="暂无附件"
+          :image-size="48"
+        />
+        <div v-else class="staged-list">
+          <div v-for="(item, index) in stagedAttachments" :key="item.attachmentId" class="staged-row">
+            <span class="staged-name">{{ item.fileName }}</span>
+            <span class="staged-muted">{{ stagedSizeText(item.size) }}</span>
+            <el-button link type="danger" @click="removeStagedFile(index)">删除</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="!isView" class="form-actions">
-      <el-button @click="emit('cancel')">取消</el-button>
+      <el-button @click="cancelForm">取消</el-button>
       <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
       <el-button type="primary" :loading="saving" @click="save(true)">提交审批</el-button>
     </div>
@@ -504,5 +616,49 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+.staged-attachments {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+}
+.staged-upload {
+  display: flex;
+  width: fit-content;
+}
+.staged-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.staged-tip {
+  color: var(--hs-muted, #909399);
+  font-size: 12px;
+}
+.staged-list {
+  display: grid;
+  gap: 4px;
+}
+.staged-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid #ebeef5;
+}
+.staged-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.staged-muted {
+  color: #909399;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 </style>

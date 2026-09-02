@@ -16,6 +16,7 @@ const props = defineProps<{ documentType: string; documentId: string | number }>
 const items = ref<Attachment[]>([]);
 const loading = ref(false);
 const uploading = ref(false);
+const fileInput = ref<HTMLInputElement>();
 const canUpload = ref(false);
 const canDelete = ref(false);
 const limits = ref({ maxSize: 0, maxCount: 0, contentTypes: [] as string[] });
@@ -113,8 +114,9 @@ onMounted(load);
         <strong>单据附件</strong>
         <span class="muted"> {{ items.length }} / {{ limits.maxCount || '—' }}</span>
       </div>
-      <label v-if="canUpload" class="attachment-upload">
+      <div v-if="canUpload" class="attachment-upload">
         <input
+          ref="fileInput"
           type="file"
           :accept="limits.contentTypes.join(',')"
           :disabled="uploading || items.length >= limits.maxCount"
@@ -126,10 +128,11 @@ onMounted(load);
           size="small"
           :loading="uploading"
           :disabled="items.length >= limits.maxCount"
+          @click="fileInput?.click()"
         >
           上传附件
         </el-button>
-      </label>
+      </div>
     </div>
     <el-empty v-if="!items.length" description="暂无附件" :image-size="52" />
     <div v-else class="attachment-list">
@@ -168,13 +171,14 @@ onMounted(load);
   gap: 12px;
 }
 .attachment-upload {
-  position: relative;
+  display: flex;
 }
 .attachment-upload input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
+  pointer-events: none;
 }
 .attachment-list {
   margin-top: 10px;
