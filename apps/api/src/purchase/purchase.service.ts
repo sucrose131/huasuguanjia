@@ -2782,6 +2782,8 @@ export class PurchaseService {
             dept_id: order.dept_id,
             // 反向生成的申请沿用订单收货人，保证 申请→订单 链路收货人一致
             receiver_id: order.receiver_id,
+            // 未单独指定推送组织：OA 栏回显所属组织（与 oa_org_id=0 回退 org_id 语义一致）
+            oa_org_id: order.org_id,
             pur_reson: `由直接采购订单 ${order.po_no} 系统反向生成`,
             source_type: 'direct_order',
             source_id: poId,
@@ -3442,6 +3444,8 @@ export class PurchaseService {
             dept_id: deptId,
             // 收货经办人回填收货人：与同链路生成的订单/入库单保持一致
             receiver_id: chainReceiverId,
+            // 未单独指定推送组织：OA 栏回显所属组织
+            oa_org_id: finalOrgId,
             pur_reson: `由采购入库单系统生成`,
             source_type: 'temporary_receipt',
             source_id: 0n,
