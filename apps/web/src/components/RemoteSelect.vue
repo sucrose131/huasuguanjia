@@ -4,6 +4,8 @@ import { computed, ref, watch } from 'vue';
 export interface RemoteOption {
   value: string | number;
   label: string;
+  /** 调用方附带的扩展展示字段（如库存），供 option 插槽自定义渲染 */
+  [key: string]: unknown;
 }
 
 const props = withDefaults(
@@ -109,6 +111,8 @@ function onChange(value: string | number | '') {
       :key="String(item.value)"
       :label="item.label"
       :value="item.value"
-    />
+    >
+      <slot name="option" :item="item" :label="item.label">{{ item.label }}</slot>
+    </el-option>
   </el-select>
 </template>

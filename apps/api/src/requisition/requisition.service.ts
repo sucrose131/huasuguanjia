@@ -29,11 +29,12 @@ type Db = Prisma.TransactionClient | PrismaService;
 @Injectable()
 export class RequisitionService {
   /**
-   * 领用管理只允许行政类、健服类仓库。
-   * 值来自 hspsi-dev-ai-02 的 warehouse_type 字典：
-   * 礼品赠品、办公设备/家具/耗材、废旧物资、医疗耗材/器械、药品、实验用品。
+   * 领用管理只允许行政类、健服类仓库，另纳入固定资产库(14)、低值易耗品库(15)、仓储库(16)。
+   * 值来自 warehouse_type 字典：礼品赠品、办公设备/家具/耗材、废旧物资、医疗耗材/器械、
+   * 药品、实验用品、固定资产、低值易耗品、仓储。
+   * 2026-09-01 业务确认：14/15/16 为行政日常领用场景仓库，纳入领用范围（原仅 [4..12]）。
    */
-  private readonly requisitionWarehouseTypes = [4, 5, 6, 7, 8, 9, 10, 11, 12];
+  private readonly requisitionWarehouseTypes = [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16];
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -152,7 +153,7 @@ export class RequisitionService {
     if (values.deptId > 0n && !department)
       throw new BadRequestException('领用部门不属于所选组织或已停用');
     if (!warehouse)
-      throw new BadRequestException('领用仓库仅限所选组织下已启用的行政类、健服类仓库');
+      throw new BadRequestException('领用仓库仅限所选组织下已启用的行政类、健服类、固定资产/低值易耗品/仓储类仓库');
     if (values.applicantId > 0n && !applicant)
       throw new BadRequestException('领用人必须选择已启用的基础员工');
 
@@ -310,10 +311,45 @@ export class RequisitionService {
     );
   }
 
-  /** 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库 */
+  /**
+   * 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库。
+   * 候选仍按“组织→仓库类型→商品分类”主数据映射计算，不因库存收窄；
+   * 额外附带 stockByWarehouse（goods_id → { warehouse_id: 库存数量 }，仅含非零库存），
+   * 供前端在商品下拉展示可用库存：未选仓库=领用可用仓库合计，选仓库=该仓库数量。
+   */
   async allGoodsOptions(orgIdValue: unknown) {
     if (!orgIdValue) return [];
-    return this.masterData.goodsOptionsByOrg(BigInt(String(orgIdValue)));
+    const orgId = BigInt(String(orgIdValue));
+    const goods = await this.masterData.goodsOptionsByOrg(orgId);
+    const warehouses = await this.prisma.hspsi_basic_warehouse.findMany({
+      where: { org_id: orgId, status: 1, deleted_at: null },
+      select: { warehouse_id: true },
+    });
+    const stockRows = warehouses.length
+      ? await this.prisma.hspsi_inventory_total.groupBy({
+          by: ['warehouse_id', 'goods_id'],
+          where: {
+            warehouse_id: { in: warehouses.map((item) => item.warehouse_id) },
+            deleted_at: null,
+            inventory_qty: { not: 0 },
+          },
+          _sum: { inventory_qty: true },
+        })
+      : [];
+    const stockByWarehouse = new Map<string, Record<string, number>>();
+    for (const row of stockRows) {
+      const goodsKey = String(row.goods_id);
+      const warehouseKey = String(row.warehouse_id);
+      const quantity = Number(row._sum.inventory_qty ?? 0);
+      if (!quantity) continue;
+      const map = stockByWarehouse.get(goodsKey) ?? {};
+      map[warehouseKey] = (map[warehouseKey] ?? 0) + quantity;
+      stockByWarehouse.set(goodsKey, map);
+    }
+    return goods.map((item) => ({
+      ...item,
+      stockByWarehouse: stockByWarehouse.get(String(item.id)) ?? {},
+    }));
   }
 
   private aggregatePostingLines(

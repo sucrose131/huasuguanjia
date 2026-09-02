@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
+  goodsStockQty,
   warehouseTypeOf,
 } from './goods-warehouse';
 
@@ -64,5 +65,29 @@ describe('warehouseTypeOf', () => {
     expect(warehouseTypeOf(warehouses, '2')).toBe(3);
     expect(warehouseTypeOf(warehouses, '999')).toBe(0);
     expect(warehouseTypeOf([], '1')).toBe(0);
+  });
+});
+
+describe('goodsStockQty', () => {
+  const goods = { id: 1, stockByWarehouse: { '49': 5, '48': 2 } };
+
+  it('未选仓库时返回领用可用仓库合计', () => {
+    expect(goodsStockQty(goods, '', ['49', '48'])).toBe(7);
+  });
+
+  it('未选仓库时仅统计传入的可用仓库，传空则返回 0', () => {
+    expect(goodsStockQty(goods, '', ['48'])).toBe(2);
+    expect(goodsStockQty(goods, '', [])).toBe(0);
+  });
+
+  it('已选仓库时返回该仓库数量，不受其它仓库影响', () => {
+    expect(goodsStockQty(goods, '49', ['49', '48'])).toBe(5);
+    expect(goodsStockQty(goods, '48')).toBe(2);
+    expect(goodsStockQty(goods, '999')).toBe(0);
+  });
+
+  it('无库存数据或零库存返回 0', () => {
+    expect(goodsStockQty({}, '', ['49'])).toBe(0);
+    expect(goodsStockQty({ id: 1, stockByWarehouse: { '49': 0 } }, '', ['49'])).toBe(0);
   });
 });
