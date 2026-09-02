@@ -3,26 +3,33 @@ import { XinfutongOaClient } from '../core/client';
 import type { AccountSetCredential } from '../core/credential.service';
 import type { XinfutongResponse } from '../core/types';
 import {
+  ADD_SIGN_TYPES,
   FILE_UPLOAD_ALLOWED_EXTENSIONS,
   FILE_UPLOAD_FILENAME_MAX_LENGTH,
   FILE_UPLOAD_MAX_SIZE,
   FILE_UPLOAD_PATH,
   FORM_START_PATH,
+  PROC_INST_DEAL_PATH,
+  PROC_OPERATE_TYPES,
+  PROC_OPERATE_TYPES_REQUIRE_TASK_ID,
   type FileUploadParams,
   type FileUploadResult,
   type FormStartParams,
   type FormStartResult,
+  type ProcInstDealParams,
+  type ProcInstDealResult,
 } from './approval.types';
 
 /**
  * 薪福通 OA 审批域出站服务
  *
- * 职责：向薪福通 OA 发起审批流程。
+ * 职责：向薪福通 OA 发起审批流程，以及对已发起流程执行处理操作。
  *
  * 继承 XinfutongOaClient 复用基础请求层（签名/加解密/HTTP/assertSuccess）。
  *
  * 对应接口：
  * - 发起流程v2：/xft-oa/openapi/xft-newform/open/form-start
+ * - 审批流程处理：/xft-oa/openapi/xft-oa/open/operate/proc/inst/deal
  *
  * 入站回调处理见 ApprovalCallbackService。
  */
@@ -62,6 +69,58 @@ export class XinfutongOaApprovalService extends XinfutongOaClient {
     });
 
     const response = await this.post<FormStartResult>(FORM_START_PATH, credential, body);
+    this.assertSuccess(response);
+    return response;
+  }
+
+  // ==================== 审批流程处理 ====================
+
+  /**
+   * 审批流程处理
+   *
+   * 对已发起的流程执行提交（办理节点）、通过、否决、转派、加签、退回、撤销。
+   * 仅支持自定义流程及包含套件的系统表单。
+   *
+   * 条件必填（与官方错误码一致）：
+   * - 退回：backNodeId
+   * - 转派：transferApproverId
+   * - 加签：addSignType、addSignApproverIdList
+   * - 通过 / 提交 / 否决 / 转派 / 加签：taskId
+   *
+   * @param credential 账套凭证
+   * @param params 流程处理参数
+   * @returns 接口响应数据（body 含 procInstId、procStatus、todoTaskList 等）
+   * @throws 参数校验失败或接口返回错误时抛出
+   */
+  async dealProcess(
+    credential: AccountSetCredential,
+    params: ProcInstDealParams,
+  ): Promise<XinfutongResponse<ProcInstDealResult>> {
+    this.validateDealProcessParams(params);
+
+    const addSignApproverIdList = params.addSignApproverIdList?.filter((id) => Boolean(id));
+
+    const body = this.filterEmpty({
+      approverId: params.approverId,
+      operateType: params.operateType,
+      busKey: params.busKey,
+      taskId: params.taskId,
+      approveComment: params.approveComment,
+      busData: params.busData,
+      backNodeId: params.backNodeId,
+      transferApproverId: params.transferApproverId,
+      addSignType: params.addSignType,
+      addSignApproverIdList,
+      picAttachmentList: params.picAttachmentList,
+      fileAttachmentList: params.fileAttachmentList,
+      signKey: params.signKey,
+    });
+
+    const response = await this.post<ProcInstDealResult>(
+      PROC_INST_DEAL_PATH,
+      credential,
+      body,
+    );
     this.assertSuccess(response);
     return response;
   }
@@ -134,6 +193,68 @@ export class XinfutongOaApprovalService extends XinfutongOaClient {
     if (params.procStartType === 'restart' && !params.busKey) {
       throw new Error('restart 类型发起时，busKey 为必填项');
     }
+  }
+
+  /**
+   * 校验审批流程处理请求参数
+   *
+   * @param params 流程处理参数
+   * @throws 参数校验失败时抛出
+   */
+  private validateDealProcessParams(params: ProcInstDealParams): void {
+    if (!params.approverId) {
+      throw new Error('approverId 为必填项');
+    }
+
+    if (!params.operateType) {
+      throw new Error('operateType 为必填项');
+    }
+
+    if (!PROC_OPERATE_TYPES.includes(params.operateType)) {
+      throw new Error(
+        `operateType 必须为 ${PROC_OPERATE_TYPES.join('、')} 之一，当前值：${params.operateType}`,
+      );
+    }
+
+    if (!params.busKey) {
+      throw new Error('busKey 为必填项');
+    }
+
+    if (PROC_OPERATE_TYPES_REQUIRE_TASK_ID.has(params.operateType) && !this.hasTaskId(params.taskId)) {
+      throw new Error('通过、提交、否决、转派、加签操作时，taskId 为必填项');
+    }
+
+    if (params.operateType === 'back' && !params.backNodeId) {
+      throw new Error('退回操作时，backNodeId 为必填项');
+    }
+
+    if (params.operateType === 'transfer' && !params.transferApproverId) {
+      throw new Error('转派操作时，transferApproverId 为必填项');
+    }
+
+    if (params.operateType === 'addSign') {
+      if (!params.addSignType || !ADD_SIGN_TYPES.includes(params.addSignType)) {
+        throw new Error(
+          `加签操作时，addSignType 必须为 ${ADD_SIGN_TYPES.join('、')} 之一`,
+        );
+      }
+
+      const approverIds = (params.addSignApproverIdList ?? []).filter((id) => Boolean(id));
+      if (approverIds.length === 0) {
+        throw new Error('加签操作时，addSignApproverIdList 不能为空');
+      }
+    }
+  }
+
+  /** taskId 文档类型为 LONG，示例为字符串；空字符串视为未传 */
+  private hasTaskId(taskId: string | number | undefined): boolean {
+    if (taskId === undefined || taskId === null) {
+      return false;
+    }
+    if (typeof taskId === 'string') {
+      return taskId.trim() !== '';
+    }
+    return true;
   }
 
   /**
