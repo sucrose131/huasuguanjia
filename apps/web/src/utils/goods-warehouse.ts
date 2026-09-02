@@ -38,3 +38,23 @@ export function warehouseTypeOf(
   );
   return Number(current?.raw?.warehouseType ?? current?.warehouseType ?? 0);
 }
+
+/**
+ * 计算商品在领用表单内的可用库存展示值（候选不因库存收窄，仅用于展示）。
+ * - 已选仓库：返回该仓库数量（stockByWarehouse[warehouseId]）；
+ * - 未选仓库：返回领用可用仓库（eligibleWarehouseIds，即表单仓库下拉里的仓库）合计；
+ * - 无库存数据返回 0。
+ */
+export function goodsStockQty(
+  goods: Record<string, any>,
+  warehouseId: unknown,
+  eligibleWarehouseIds: Array<unknown> = [],
+) {
+  const map = (goods?.stockByWarehouse ?? {}) as Record<string, number>;
+  const selected = String(warehouseId ?? '').trim();
+  if (selected) return Number(map[selected] ?? 0);
+  return (eligibleWarehouseIds ?? []).reduce<number>(
+    (sum, id) => sum + Number(map[String(id)] ?? 0),
+    0,
+  );
+}

@@ -7,6 +7,7 @@ import { dateText } from '@/utils/format';
 import {
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
+  goodsStockQty,
   warehouseTypeOf,
 } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
@@ -138,6 +139,11 @@ const selectedWarehouseType = computed(() =>
   warehouseTypeOf(options.requisitionWarehouses ?? [], form.value.warehouseId),
 );
 
+/** 表单仓库下拉中的仓库 ID（领用可用仓库），用于未选仓库时汇总商品库存 */
+const eligibleWarehouseIds = computed(() =>
+  (options.requisitionWarehouses ?? []).map((w: any) => w.value),
+);
+
 /** 仓库选项：领用仓库范围内，按明细商品分类类型过滤（先选商品后选仓库场景） */
 const warehouseOptions = computed(() =>
   (options.requisitionWarehouses ?? []).filter(
@@ -175,10 +181,16 @@ async function searchGoodsOptions(keyword: string) {
     filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
     keyword,
   );
-  return list.map((g: any) => ({
-    value: g.id,
-    label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
-  }));
+  return list.map((g: any) => {
+    const stockQty = goodsStockQty(g, form.value.warehouseId, eligibleWarehouseIds.value);
+    return {
+      value: g.id,
+      label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
+      // 库存仅作展示（未选仓库=可用仓库合计，选仓库=该仓库数量），不参与候选过滤
+      stockQty,
+      outOfStock: stockQty <= 0,
+    };
+  });
 }
 
 async function lineGoodsChanged(line: any) {
@@ -425,7 +437,26 @@ onMounted(async () => {
             :disabled="isView || !form.orgId"
             placeholder="输入商品名称或编码搜索"
             @change="lineGoodsChanged(s.row)"
-          />
+          >
+            <template #option="{ item }">
+              <div class="goods-option">
+                <span
+                  class="goods-option-label"
+                  :class="{ 'is-out-of-stock': item.outOfStock === true }"
+                >
+                  {{ item.label }}
+                </span>
+                <template v-if="typeof item.stockQty === 'number'">
+                  <span
+                    class="goods-stock-tag"
+                    :class="{ 'is-out-of-stock': item.outOfStock === true }"
+                  >
+                    {{ item.outOfStock === true ? '暂无库存' : `库存 ${item.stockQty}` }}
+                  </span>
+                </template>
+              </div>
+            </template>
+          </RemoteSelect>
         </template>
       </el-table-column>
       <el-table-column label="SKU/规格" min-width="120">
@@ -514,6 +545,26 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--hs-muted, #909399);
   margin-top: 2px;
+}
+.goods-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.goods-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goods-stock-tag {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--hs-primary, #409eff);
+}
+.is-out-of-stock {
+  color: var(--hs-muted, #a8abb2);
 }
 .form-actions {
   display: flex;

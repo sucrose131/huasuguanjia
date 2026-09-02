@@ -59,7 +59,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
       { generate: vi.fn(async (prefix: string) => `${prefix}20260804000001`) } as never,
       oaApproval as never,
       attachmentsService as never,
-      { assertGoodsLines: vi.fn() } as never,
+      { assertGoodsLines: vi.fn(), goodsOptionsByOrg: vi.fn().mockResolvedValue([]) } as never,
       todoService as never,
     ),
     prisma,
@@ -1484,5 +1484,150 @@ describe('RequisitionService direct output cross-org options and authorization',
         user as never,
       ),
     ).rejects.toThrow('所属组织不在当前账号授权组织范围内');
+  });
+
+  it('application-form-options includes fixed-asset/low-value/storage warehouse types', async () => {
+    const root = {
+      hspsi_basic_dept: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_basic_staff_organizations: { findMany: vi.fn().mockResolvedValue([]) },
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([
+          { warehouse_id: 51n, name: '固定资产库', warehouse_type: 14, dept_id: 0n },
+          { warehouse_id: 48n, name: '低值易耗品库', warehouse_type: 15, dept_id: 0n },
+          { warehouse_id: 47n, name: '仓储库', warehouse_type: 16, dept_id: 0n },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+
+    const result = await service.applicationFormOptions('7');
+
+    expect(root.hspsi_basic_warehouse.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          org_id: 7n,
+          warehouse_type: { in: [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16] },
+          status: 1,
+          deleted_at: null,
+        }),
+      }),
+    );
+    expect(result.warehouses.map((item: any) => item.value)).toEqual([51n, 48n, 47n]);
+    expect(result.warehouses.map((item: any) => item.raw.warehouseType)).toEqual([14, 15, 16]);
+  });
+
+  it('save validation accepts fixed-asset/low-value/storage warehouses', async () => {
+    const tx = {
+      hspsi_basic_organization: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 7n }),
+      },
+      hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ dept_id: 36n }) },
+      hspsi_basic_warehouse: {
+        findFirst: vi.fn().mockResolvedValue({ warehouse_id: 48n }),
+      },
+      hspsi_basic_staff: { findFirst: vi.fn().mockResolvedValue({ id: 165n }) },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1n }),
+      },
+      hspsi_basic_staff_organizations: {
+        findFirst: vi.fn().mockResolvedValue({ id: 1n }),
+      },
+      hspsi_sys_dictionary: {
+        findFirst: vi.fn().mockResolvedValue({ dict_id: 1n }),
+      },
+    };
+    const { service } = serviceWithTransaction(tx);
+
+    await expect(
+      (service as any).validateApplicationReferences(tx, {
+        orgId: 7n,
+        deptId: 36n,
+        warehouseId: 48n,
+        applicantId: 165n,
+        drawType: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(tx.hspsi_basic_warehouse.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          warehouse_type: { in: [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16] },
+        }),
+      }),
+    );
+  });
+
+  it('save validation still rejects warehouse types outside the requisition scope', async () => {
+    const tx = {
+      hspsi_basic_organization: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 7n }),
+      },
+      hspsi_basic_dept: { findFirst: vi.fn().mockResolvedValue({ dept_id: 36n }) },
+      // 生产材料(2) 不在领用白名单内，仓库查询返回空 → 拒绝
+      hspsi_basic_warehouse: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_basic_staff: { findFirst: vi.fn().mockResolvedValue({ id: 165n }) },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1n }),
+      },
+    };
+    const { service } = serviceWithTransaction(tx);
+
+    await expect(
+      (service as any).validateApplicationReferences(tx, {
+        orgId: 7n,
+        deptId: 36n,
+        warehouseId: 45n,
+        applicantId: 165n,
+        drawType: 1,
+      }),
+    ).rejects.toThrow(
+      '领用仓库仅限所选组织下已启用的行政类、健服类、固定资产/低值易耗品/仓储类仓库',
+    );
+  });
+
+  it('all-goods-options attaches per-warehouse stock without narrowing candidates', async () => {
+    const root = {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([
+          { warehouse_id: 49n },
+          { warehouse_id: 48n },
+          { warehouse_id: 16n },
+        ]),
+      },
+      hspsi_inventory_total: {
+        groupBy: vi.fn().mockResolvedValue([
+          { warehouse_id: 49n, goods_id: 100n, _sum: { inventory_qty: 5 } },
+          { warehouse_id: 48n, goods_id: 100n, _sum: { inventory_qty: 2 } },
+          { warehouse_id: 49n, goods_id: 101n, _sum: { inventory_qty: 0 } },
+          { warehouse_id: 16n, goods_id: 102n, _sum: { inventory_qty: 8 } },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+    (service as any).masterData.goodsOptionsByOrg.mockResolvedValue([
+      { id: 100n, goodsId: 100n, goodsName: 'A4纸', categoryWarehouseType: 7 },
+      { id: 101n, goodsId: 101n, goodsName: '零库存商品', categoryWarehouseType: 7 },
+      { id: 103n, goodsId: 103n, goodsName: '无库存记录商品', categoryWarehouseType: 7 },
+    ]);
+
+    const result = await service.allGoodsOptions('7');
+
+    expect(root.hspsi_basic_warehouse.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ org_id: 7n, status: 1 }) }),
+    );
+    expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          warehouse_id: { in: [49n, 48n, 16n] },
+          deleted_at: null,
+          inventory_qty: { not: 0 },
+        }),
+      }),
+    );
+    // 候选不被库存收窄：零库存与无库存记录商品仍返回
+    expect(result.map((item: any) => item.id)).toEqual([100n, 101n, 103n]);
+    expect(result[0].stockByWarehouse).toEqual({ '49': 5, '48': 2 });
+    expect(result[1].stockByWarehouse).toEqual({});
+    expect(result[2].stockByWarehouse).toEqual({});
   });
 });
