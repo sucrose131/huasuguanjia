@@ -159,9 +159,11 @@ describe('PurchaseOaApprovalService', () => {
       starterOrgId: 'DEPT-6',
     });
     expect(JSON.parse(params.formData)).toEqual({
-      dhi6d3c7oecn: '补充办公耗材',
+      np0kahtk2860: '行政部', // 承办部门 ← 申请部门
+      dhi6d3c7oecn: '华溯控股（深圳）有限公司', // 成本承担组织 ← org_id
       iluym6g473ox: '办公用品仓',
-      jg2zwug75y3c: '',
+      jg2zwug75y3c: '收货人甲', // 收货人 ← receiver_id
+      zq6glso6x8co: '补充办公耗材', // 申请原因 ← pur_reson
       tp1teg5kd21y: '尽快采购',
       vdd3e94g4ho9: [
         {
