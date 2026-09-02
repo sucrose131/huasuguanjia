@@ -90,31 +90,34 @@ const orderQuantity = computed(() =>
     0,
   ),
 );
-const orderEffectivePayable = computed(() => Number(form.value.effectivePayable ?? orderTotal.value));
+const orderEffectivePayable = computed(() =>
+  Number(form.value.effectivePayable ?? orderTotal.value),
+);
 const orderNetPaidAmount = computed(() =>
-  Number(form.value.netPaidAmount ?? Number(form.value.paidAmount ?? 0) - Number(form.value.refundedAmount ?? 0)),
+  Number(
+    form.value.netPaidAmount ??
+      Number(form.value.paidAmount ?? 0) - Number(form.value.refundedAmount ?? 0),
+  ),
 );
 const orderRemainingAfterPayment = computed(() =>
-  Math.max(0, orderEffectivePayable.value - orderNetPaidAmount.value - Number(form.value.currentPaymentAmount ?? 0)),
+  Math.max(0, orderEffectivePayable.value - orderNetPaidAmount.value),
 );
 const orderPreviewProgressStatus = computed(() => {
   if (orderRemainingAfterPayment.value <= 0 && orderEffectivePayable.value > 0) return 2;
-  if (orderNetPaidAmount.value + Number(form.value.currentPaymentAmount ?? 0) > 0) return 1;
+  if (orderNetPaidAmount.value > 0) return 1;
   return 0;
 });
 
 async function loadDicts() {
-  const [arrivalType, deliveryType, settlementType, paymentChannel, paymentProgress] = await Promise.all([
+  const [arrivalType, deliveryType, settlementType, paymentProgress] = await Promise.all([
     api.get('/dictionaries/purchase_arrival_type').catch(() => []),
     api.get('/dictionaries/purchase_delivery_type').catch(() => []),
     api.get('/dictionaries/purchase_settlement_type').catch(() => []),
-    api.get('/dictionaries/payment_channel').catch(() => []),
     api.get('/dictionaries/purchase_payment_progress_status').catch(() => []),
   ]);
   dicts.purchase_arrival_type = arrivalType as any[];
   dicts.purchase_delivery_type = deliveryType as any[];
   dicts.purchase_settlement_type = settlementType as any[];
-  dicts.payment_channel = paymentChannel as any[];
   dicts.purchase_payment_progress_status = paymentProgress as any[];
 }
 
@@ -397,10 +400,6 @@ function validate() {
       return false;
     }
   }
-  if (props.mode === 'create' && Number(form.value.currentPaymentAmount ?? 0) > orderTotal.value) {
-    ElMessage.warning('本次付款金额不能超过订单总金额');
-    return false;
-  }
   return true;
 }
 
@@ -458,10 +457,6 @@ onMounted(async () => {
       deliveryNo: '',
       paymentType: 1,
       planPayDate: '',
-      currentPaymentAmount: 0,
-      currentPaymentDate: dateText(new Date()),
-      currentPaymentChannel: Number(dicts.payment_channel?.[0]?.value ?? 1),
-      currentPaymentRemark: '',
       remark: '',
       details: [blankLine()],
     });
@@ -523,7 +518,6 @@ onMounted(async () => {
       :mode="mode"
       :dicts="dicts"
       :can-view-amount="canViewAmount"
-      :can-edit-amount="canEditAmount"
       :order-total="orderTotal"
       :effective-payable="orderEffectivePayable"
       :net-paid-amount="orderNetPaidAmount"
@@ -553,7 +547,12 @@ onMounted(async () => {
         保存
       </el-button>
     </div>
-    <PurchaseQuickCatalogDialog ref="quickCatalogRef" :can-edit-amount="canEditAmount" @selected-existing="selectExistingGoods" @staged="quickCatalogStaged" />
+    <PurchaseQuickCatalogDialog
+      ref="quickCatalogRef"
+      :can-edit-amount="canEditAmount"
+      @selected-existing="selectExistingGoods"
+      @staged="quickCatalogStaged"
+    />
   </el-form>
 </template>
 

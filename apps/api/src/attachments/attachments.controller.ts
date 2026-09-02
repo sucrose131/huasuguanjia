@@ -46,6 +46,27 @@ export class AttachmentsController {
     return this.service.complete(type, id, body, user, this.auditContext(request));
   }
 
+  /** 新建单据（未保存）阶段的附件预签名上传地址 */
+  @Post(':documentType/stage-url')
+  stageUploadUrl(
+    @Param('documentType') type: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.stageUploadUrl(type, body, user);
+  }
+
+  /** 清理新建阶段上传但未绑定单据的临时附件（取消/放弃时调用） */
+  @Post(':documentType/discard-staged')
+  discardStaged(
+    @Param('documentType') type: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const objectKeys = Array.isArray(body?.objectKeys) ? (body.objectKeys as unknown[]) : [];
+    return this.service.discardStaged(type, user, objectKeys);
+  }
+
   @Get(':documentType/:documentId/:attachmentId/preview-url')
   previewUrl(
     @Param('documentType') type: string,

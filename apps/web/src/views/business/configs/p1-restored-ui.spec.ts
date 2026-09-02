@@ -25,7 +25,10 @@ describe('P1 restored frontend UI contract', () => {
     expect(order).toContain('物流单号');
     expect(order).toContain('金额与付款');
 
-    const application = source('../forms/PurchaseApplicationForm.vue');
+    const application = [
+      source('../forms/PurchaseApplicationForm.vue'),
+      source('../../../components/purchase/PurchaseApplicationBasicInfo.vue'),
+    ].join('\n');
     expect(application).toContain('申请人');
     expect(application).toContain('保存草稿');
     expect(application).toContain('提交审批');
@@ -36,7 +39,15 @@ describe('P1 restored frontend UI contract', () => {
     expect(purchaseReturn).toContain('保存并提交');
 
     const payment = source('../forms/PurchasePaymentForm.vue');
-    for (const label of ['订单总金额', '累计付款', '累计退款', '净已付款', '付款后剩余', '付款后进度', '付款人']) {
+    for (const label of [
+      '订单总金额',
+      '累计付款',
+      '累计退款',
+      '净已付款',
+      '付款后剩余',
+      '付款后进度',
+      '付款人',
+    ]) {
       expect(payment).toContain(label);
     }
   });
@@ -59,7 +70,8 @@ describe('P1 restored frontend UI contract', () => {
       '合计金额',
       '保存草稿',
       '保存并提交审核',
-    ]) expect(inventoryLoss).toContain(label);
+    ])
+      expect(inventoryLoss).toContain(label);
     expect(source('../configs/inventory-loss.ts')).toContain("title: '报损出库单'");
     expect(source('../configs/inventory-loss-output.ts')).toContain("title: '报亏出库单'");
 
@@ -69,10 +81,12 @@ describe('P1 restored frontend UI contract', () => {
     for (const label of ['业务模式/单据类型', '批号', '备注']) expect(stockLedger).toContain(label);
 
     const application = source('../forms/RequisitionApplicationForm.vue');
-    for (const label of ['单据状态', '审批状态', '审批人', '审批时间', '审批意见']) expect(application).toContain(label);
+    for (const label of ['单据状态', '审批状态', '审批人', '审批时间', '审批意见'])
+      expect(application).toContain(label);
 
     const requisitionReturn = source('../forms/RequisitionReturnForm.vue');
-    for (const label of ['部门', '退回人', '确认状态', '确认人', '确认时间', '确认意见']) expect(requisitionReturn).toContain(label);
+    for (const label of ['部门', '退回人', '确认状态', '确认人', '确认时间', '确认意见'])
+      expect(requisitionReturn).toContain(label);
 
     const service = source('../forms/SalesServiceForm.vue');
     expect(service).toContain('接收时间');

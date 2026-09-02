@@ -135,10 +135,9 @@ async function load() {
       };
     });
     application.value = data;
-    options.receivers = isGeneration.value
-      ? ((await api.get('/purchase/receiver-options', {
-          params: { orgId: data.orgId, deptId: data.deptId },
-        })) as Option[])
+    form.receiverId = data.receiverId ?? '';
+    options.receivers = data.receiverId
+      ? [{ value: data.receiverId, label: data.receiverName || String(data.receiverId) }]
       : [];
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message ?? '采购申请生成界面加载失败');
@@ -165,7 +164,7 @@ async function submitOrder() {
     return;
   }
   if (!form.receiverId) {
-    ElMessage.warning('请选择本次采购订单的收货人');
+    ElMessage.warning('采购申请未指定有效收货人，请先检查申请单');
     return;
   }
   if (!effectiveRows.value.length) {
@@ -182,7 +181,6 @@ async function submitOrder() {
     const result = (await api.post(`/purchase/applications/${props.applicationId}/generate-order`, {
       generationMode: props.mode,
       vendorId: form.vendorId,
-      receiverId: form.receiverId,
       details: effectiveRows.value.map((item: any) => ({
         applicationDetailId: String(item.applicationDetailId),
         totalAmount: Number(item.totalAmount),
@@ -320,20 +318,8 @@ watch(
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="收货人" required>
-            <el-select
-              v-model="form.receiverId"
-              clearable
-              filterable
-              placeholder="请选择申请部门下的收货人"
-            >
-              <el-option
-                v-for="item in options.receivers"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-              />
-            </el-select>
+          <el-form-item label="收货人">
+            <el-input :model-value="lookup('receivers', form.receiverId)" disabled />
           </el-form-item>
         </el-form>
 

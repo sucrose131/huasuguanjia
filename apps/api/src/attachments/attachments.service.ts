@@ -223,6 +223,8 @@ const DEFAULT_ALLOWED_TYPES = [
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ] as const;
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EXTENSIONS_BY_TYPE: Record<string, string[]> = {
   'application/pdf': ['.pdf'],
   'image/jpeg': ['.jpg', '.jpeg'],
@@ -278,6 +280,8 @@ export class AttachmentsService {
             stsToken: this.config.get<string>('OSS_STS_TOKEN') || undefined,
             cname: Boolean(this.config.get<string>('OSS_CNAME')),
             endpoint: this.config.get<string>('OSS_CNAME') || undefined,
+            // 签名 URL 统一使用 HTTPS，避免 https 页面下浏览器混合内容拦截上传/下载
+            secure: true,
           })
         : null;
   }
@@ -513,9 +517,7 @@ export class AttachmentsService {
     const suffix = extname(fileName).toLowerCase();
     const expectedKey = `documents/tmp/${user.id}/${attachmentId}${suffix}`;
     if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        attachmentId,
-      ) ||
+      !UUID_V4_RE.test(attachmentId) ||
       objectKey !== expectedKey
     )
       throw new BadRequestException('附件对象标识无效');
@@ -573,6 +575,150 @@ export class AttachmentsService {
         .delete(finalKey)
         .catch(() => undefined);
       throw error;
+    }
+  }
+
+  /**
+   * 新建单据（尚未保存）阶段上传附件的预签名地址（staging 模式）。
+   * 不要求单据已存在：文件上传到 OSS 临时目录，单据保存成功后由 commitStaged 绑定；
+   * 前端取消/放弃时调用 discardStaged 清理临时对象。
+   */
+  async stageUploadUrl(type: string, body: Record<string, unknown>, user: AuthUser) {
+    const config = this.document(type);
+    this.authorize(config, user);
+    const fileName = String(body.fileName ?? '').trim();
+    const contentType = String(body.contentType ?? '')
+      .trim()
+      .toLowerCase();
+    const size = Number(body.size);
+    const suffix = extname(fileName).toLowerCase();
+    if (!fileName || !this.validFileType(contentType, suffix))
+      throw new BadRequestException('附件格式、扩展名或MIME类型不允许');
+    if (!Number.isSafeInteger(size) || size <= 0 || size > this.maxSize)
+      throw new BadRequestException('附件大小无效或超过限制');
+    const attachmentId = randomUUID();
+    const objectKey = `documents/tmp/${user.id}/${attachmentId}${suffix}`;
+    const expires = Number(this.config.get('OSS_UPLOAD_URL_TTL_SECONDS') ?? 900);
+    const uploadUrl = this.oss().signatureUrl(objectKey, {
+      method: 'PUT',
+      expires,
+      'Content-Type': contentType,
+    });
+    return {
+      attachmentId,
+      objectKey,
+      uploadUrl,
+      expiresIn: expires,
+      headers: { 'Content-Type': contentType },
+    };
+  }
+
+  /**
+   * 单据保存成功后，把新建态（staging）上传的临时附件绑定到单据：
+   * 校验临时对象 → 复制到正式目录 → 追加写 attachments JSON 列。
+   * 属内部集成路径（与 listForIntegration 同级），不做审批状态拦截；
+   * 绑定失败时清理已复制的正式对象，避免产生孤儿。
+   */
+  async commitStaged(
+    type: string,
+    id: string,
+    staged: Array<Record<string, unknown>>,
+    user: AuthUser,
+    auditContext: AttachmentAuditContext = {},
+  ): Promise<Attachment[]> {
+    const config = this.document(type);
+    this.authorize(config, user);
+    if (!/^\d+$/.test(id)) throw new BadRequestException('单据ID无效');
+    if (!staged.length) return [];
+    const committed: Attachment[] = [];
+    try {
+      for (const item of staged) {
+        const attachmentId = String(item.attachmentId ?? '');
+        const objectKey = String(item.objectKey ?? '');
+        const fileName = String(item.fileName ?? '').trim();
+        const contentType = String(item.contentType ?? '')
+          .trim()
+          .toLowerCase();
+        const size = Number(item.size);
+        const suffix = extname(fileName).toLowerCase();
+        const expectedKey = `documents/tmp/${user.id}/${attachmentId}${suffix}`;
+        if (!UUID_V4_RE.test(attachmentId) || objectKey !== expectedKey)
+          throw new BadRequestException('附件对象标识无效');
+        if (!fileName || !this.validFileType(contentType, suffix))
+          throw new BadRequestException('附件格式、扩展名或MIME类型不允许');
+        if (!Number.isSafeInteger(size) || size <= 0 || size > this.maxSize)
+          throw new BadRequestException('附件大小无效或超过限制');
+        const head = await this.oss().head(objectKey);
+        const headers = (head.res.headers ?? {}) as Record<string, string | string[] | undefined>;
+        const actualSize = Number(headers['content-length']);
+        const actualType = String(headers['content-type'] ?? '')
+          .split(';')[0]!
+          .trim()
+          .toLowerCase();
+        if (actualSize !== size || actualType !== contentType) {
+          await this.oss()
+            .delete(objectKey)
+            .catch(() => undefined);
+          throw new BadRequestException('附件与上传申请不一致');
+        }
+        const finalKey = `documents/${type}/${id}/${attachmentId}${suffix}`;
+        await this.oss().copy(finalKey, objectKey);
+        await this.oss()
+          .delete(objectKey)
+          .catch(() => undefined);
+        committed.push({
+          id: attachmentId,
+          objectKey: finalKey,
+          fileName,
+          contentType,
+          size,
+          uploadedBy: user.id,
+          uploadedAt: new Date().toISOString(),
+        });
+      }
+      return await this.prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRawUnsafe<Array<Record<string, unknown>>>(
+          `SELECT * FROM \`${config.table}\` WHERE \`${config.id}\` = ? AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
+          BigInt(id),
+        );
+        if (!rows[0]) throw new NotFoundException('业务单据不存在');
+        const current = this.attachments(rows[0].attachments);
+        const existingIds = new Set(current.map((item) => item.id));
+        const toAdd = committed.filter((item) => !existingIds.has(item.id));
+        if (current.length + toAdd.length > this.maxCount)
+          throw new BadRequestException('附件数量已达到上限');
+        if (!toAdd.length) return [];
+        const next = [...current, ...toAdd];
+        await tx.$executeRawUnsafe(
+          `UPDATE \`${config.table}\` SET attachments = ? WHERE \`${config.id}\` = ?`,
+          JSON.stringify(next),
+          BigInt(id),
+        );
+        for (const item of toAdd) await this.audit('UPLOAD', type, id, item, user, auditContext, tx);
+        return toAdd;
+      });
+    } catch (error) {
+      for (const item of committed) {
+        await this.oss()
+          .delete(item.objectKey)
+          .catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  /** 清理新建态上传但未绑定单据的临时 OSS 对象（仅限当前用户自己的 tmp 对象）。 */
+  async discardStaged(type: string, user: AuthUser, objectKeys: Array<unknown>): Promise<void> {
+    const config = this.document(type);
+    this.authorize(config, user);
+    const prefix = `documents/tmp/${user.id}/`;
+    for (const key of objectKeys ?? []) {
+      const objectKey = String(key ?? '');
+      if (objectKey.startsWith(prefix)) {
+        await this.oss()
+          .delete(objectKey)
+          .catch(() => undefined);
+      }
     }
   }
 

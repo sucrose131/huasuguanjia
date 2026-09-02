@@ -51,6 +51,7 @@ export class AuthService {
     let staffId: bigint | null = null;
     let positionId: bigint | null = null;
     let positionName: string | null = null;
+    let displayName = user.nickname || user.username;
     if (user.staff_id) {
       const staff = await this.prisma.hspsi_basic_staff.findFirst({
         where: { id: user.staff_id, status: 1, deleted_at: null },
@@ -85,6 +86,7 @@ export class AuthService {
         throw new UnauthorizedException('账号人员的主组织类型无效');
       }
       staffId = staff.id;
+      displayName = staff.name || displayName;
       positionId = position?.id ?? null;
       positionName = position?.name ?? null;
     }
@@ -117,6 +119,7 @@ export class AuthService {
     const authUser: AuthUser = {
       id: user.id.toString(),
       username: user.username,
+      displayName,
       orgId: orgId.toString(),
       orgName: ownOrganization?.name ?? null,
       deptId: deptId?.toString() ?? null,
@@ -155,6 +158,7 @@ export class AuthService {
     const token = await this.jwt.signAsync({
       id: authUser.id,
       username: authUser.username,
+      displayName: authUser.displayName,
       orgId: authUser.orgId,
       orgName: authUser.orgName,
       deptId: authUser.deptId,
@@ -205,7 +209,11 @@ export class AuthService {
       throw new UnauthorizedException('新密码长度应为6至64个字符');
     await this.prisma.hspsi_sys_user.update({
       where: { id: user.id },
-      data: { password: await hash(newPassword, 12), updated_by: BigInt(userId), updated_at: new Date() },
+      data: {
+        password: await hash(newPassword, 12),
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
     });
     return { message: '密码修改成功' };
   }

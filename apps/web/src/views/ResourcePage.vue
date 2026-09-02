@@ -36,6 +36,7 @@ type Column = {
   label: string;
   width?: number;
   min?: number;
+  noCode?: boolean;
   kind?:
     | 'date'
     | 'status'
@@ -221,8 +222,8 @@ const configs: Record<
     columns: [
       { key: 'staffCode', label: '员工编号', width: 140 },
       { key: 'name', label: '员工姓名', min: 120 },
-      { key: 'position', label: '职位', min: 150, kind: 'position' },
-      { key: 'organization', label: '所属公司', min: 190, kind: 'org' },
+      { key: 'position', label: '职位', min: 150, kind: 'position', noCode: true },
+      { key: 'organization', label: '所属公司', min: 190, kind: 'org', noCode: true },
       { key: 'departmentNames', label: '所属部门', min: 150 },
       { key: 'gender', label: '性别', width: 80, kind: 'dict' },
       { key: 'mobile', label: '手机号', width: 140 },
@@ -247,7 +248,7 @@ const configs: Record<
     columns: [
       { key: 'name', label: '仓库名称', min: 150 },
       { key: 'warehouseType', label: '仓库类型', width: 110, kind: 'dict' },
-      { key: 'organization', label: '所属组织', min: 180, kind: 'org' },
+      { key: 'organization', label: '所属组织', min: 180, kind: 'org', noCode: true },
       { key: 'managerName', label: '负责人', width: 110 },
       { key: 'contactPhone', label: '联系电话', width: 130 },
       { key: 'status', label: '状态', width: 90, kind: 'status' },
@@ -497,17 +498,25 @@ function reset() {
 function cell(row: any, col: Column) {
   if (col.kind === 'date') return dateText(row[col.key], true);
   if (col.kind === 'org')
-    return row.organization ? `${row.organization.code} ${row.organization.name}` : '—';
+    return row.organization
+      ? col.noCode
+        ? row.organization.name
+        : `${row.organization.code} ${row.organization.name}`
+      : '—';
   if (col.kind === 'parent')
     return row.parentOrganization
-      ? `${row.parentOrganization.code} ${row.parentOrganization.name}`
+      ? row.parentOrganization.name
       : '顶级公司';
   if (col.kind === 'department')
     return row.parentDepartment
       ? `${row.parentDepartment.code || ''} ${row.parentDepartment.name}`.trim()
       : '顶级部门';
   if (col.kind === 'position')
-    return row.position ? `${row.position.code || ''} ${row.position.name}`.trim() : '—';
+    return row.position
+      ? col.noCode
+        ? row.position.name
+        : `${row.position.code || ''} ${row.position.name}`.trim()
+      : '—';
   if (col.kind === 'user') return row.leader?.name ?? '—';
   if (col.kind === 'customer')
     return row.relatedCustomer

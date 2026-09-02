@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { api } from '@/api';
 import BusinessDocumentPage from './BusinessDocumentPage.vue';
 import WarehouseTabs from '@/components/business/WarehouseTabs.vue';
+import { sumWarehouseCounts } from '@/utils/warehouse-counts';
 import { inventoryCheckConfig } from './configs/inventory-check';
 
 const pageRef = ref<InstanceType<typeof BusinessDocumentPage>>();
@@ -78,8 +79,13 @@ async function viewDetail(row: any) {
       </div>
     </template>
 
-    <template #query-tools="{ query, load, total }">
-      <WarehouseTabs :query="query" :load="load" :total="total" />
+    <template #query-tools="{ query, load, warehouseCounts }">
+      <WarehouseTabs
+        :query="query"
+        :load="load"
+        :total="sumWarehouseCounts(warehouseCounts)"
+        :warehouse-counts="warehouseCounts"
+      />
     </template>
 
     <template #page-actions>
