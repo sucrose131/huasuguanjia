@@ -2780,6 +2780,8 @@ export class PurchaseService {
             pur_no: applicationNo,
             org_id: order.org_id,
             dept_id: order.dept_id,
+            // 反向生成的申请沿用订单收货人，保证 申请→订单 链路收货人一致
+            receiver_id: order.receiver_id,
             pur_reson: `由直接采购订单 ${order.po_no} 系统反向生成`,
             source_type: 'direct_order',
             source_id: poId,
@@ -3378,6 +3380,8 @@ export class PurchaseService {
     for (const line of lines)
       if (!String(line.batchNo ?? '').trim()) line.batchNo = generateBatchNo();
     const qty = lines.reduce((sum, line) => sum + Number(line.inputQuantity), 0);
+    // 收货经办人（收货人）统一取值：表单未传时回退当前用户；申请/订单/入库三条链路共用同一值
+    const chainReceiverId = body.receiverId ? BigInt(String(body.receiverId)) : BigInt(userId);
     return this.guardedTransaction(async (tx) => {
       if (isDirect) await this.materializeQuickCatalog(tx, lines, userId);
       let finalPoId = BigInt(0);
@@ -3436,6 +3440,8 @@ export class PurchaseService {
             pur_no: purNo,
             org_id: finalOrgId,
             dept_id: deptId,
+            // 收货经办人回填收货人：与同链路生成的订单/入库单保持一致
+            receiver_id: chainReceiverId,
             pur_reson: `由采购入库单系统生成`,
             source_type: 'temporary_receipt',
             source_id: 0n,
@@ -3472,7 +3478,7 @@ export class PurchaseService {
             org_id: finalOrgId,
             warehouse_id: finalWhId,
             dept_id: deptId,
-            receiver_id: BigInt(userId),
+            receiver_id: chainReceiverId,
             vendor_id: resolvedVendorId,
             pcs_qty: qty,
             arrival_type: 1,
@@ -3556,7 +3562,7 @@ export class PurchaseService {
         input_type: Number(body.inputType),
         po_qty: pcsQty,
         input_qty: qty,
-        receiver_id: BigInt(String(body.receiverId)),
+        receiver_id: chainReceiverId,
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
         updated_at: new Date(),

@@ -213,6 +213,21 @@ describe('PurchaseService quick catalog materialization', () => {
     expect(skuCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ good_id: 101n, spec_models: '默认规格', is_default: 1 }),
     });
+    // 收货经办人(receiverId=9) 回填到 申请/订单/入库单 三条链路
+    expect(applicationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source_type: 'temporary_receipt',
+          receiver_id: 9n,
+        }),
+      }),
+    );
+    expect(orderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receiver_id: 9n }) }),
+    );
+    expect(receiptCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receiver_id: 9n }) }),
+    );
     expect(applicationDetailCreate).toHaveBeenCalledWith({
       data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, qty: 2 })],
     });
@@ -1115,6 +1130,7 @@ describe('PurchaseService production-shortage guards', () => {
           dept_id: 2n,
           warehouse_id: 3n,
           vendor_id: 4n,
+          receiver_id: 8n,
           status: 1,
           remark: '',
         }),
@@ -1158,6 +1174,7 @@ describe('PurchaseService production-shortage guards', () => {
         data: expect.objectContaining({
           source_type: 'direct_order',
           source_id: 20n,
+          receiver_id: 8n,
           status: 1,
           approve_status: 1,
         }),
