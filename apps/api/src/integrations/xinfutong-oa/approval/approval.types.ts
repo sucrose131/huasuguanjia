@@ -1,13 +1,16 @@
 /**
  * 薪福通 OA 审批域类型定义
  *
- * 包含：发起流程v2、流程结束事件回调
+ * 包含：发起流程v2、审批流程处理、流程结束事件回调
  */
 
 // ==================== 接口路径 ====================
 
 /** 发起流程v2 接口路径 */
 export const FORM_START_PATH = '/xft-oa/openapi/xft-newform/open/form-start';
+
+/** 审批流程处理接口路径 */
+export const PROC_INST_DEAL_PATH = '/xft-oa/openapi/xft-oa/open/operate/proc/inst/deal';
 
 /** 文件上传接口路径 */
 export const FILE_UPLOAD_PATH = '/xft-oa/openapi/xft-oa/file/upload';
@@ -125,6 +128,114 @@ export interface FormStartResult {
   busKey?: string;
   /** 流程实例 id */
   procInstId?: string;
+  /** 流程状态 */
+  procStatus?: ProcStatus;
+  /** 当前流程待处理任务列表 */
+  todoTaskList?: TodoTask[];
+}
+
+// ==================== 审批流程处理 ====================
+
+/**
+ * 流程处理类型
+ *
+ * 通过（pass）、提交（submit）、否决（reject）、转派（transfer）、
+ * 加签（addSign）、退回（back）、撤销（cancel）
+ */
+export const PROC_OPERATE_TYPES = [
+  'pass',
+  'submit',
+  'reject',
+  'transfer',
+  'addSign',
+  'back',
+  'cancel',
+] as const;
+
+export type ProcOperateType = (typeof PROC_OPERATE_TYPES)[number];
+
+/** 通过、否决、转派、加签、提交时 taskId 必填（OA00048） */
+export const PROC_OPERATE_TYPES_REQUIRE_TASK_ID: ReadonlySet<ProcOperateType> = new Set([
+  'pass',
+  'submit',
+  'reject',
+  'transfer',
+  'addSign',
+]);
+
+/**
+ * 加签类型
+ *
+ * FRONT：前加签，适用于依次审批、允许加签的单人审批
+ * BEHIND：后加签，适用于依次审批、允许加签的单人审批
+ * PARALLEL：并行加签，适用于或签、会签
+ */
+export const ADD_SIGN_TYPES = ['FRONT', 'BEHIND', 'PARALLEL'] as const;
+
+export type AddSignType = (typeof ADD_SIGN_TYPES)[number];
+
+/**
+ * 审批流程处理附件项
+ *
+ * 官方文档未展开数组元素结构；与发起流程附件控件一致，使用上传接口返回的 id / objectKey / name。
+ */
+export interface ProcDealAttachment {
+  /** 文件 id（上传接口返回的 fileId） */
+  id?: string;
+  /** 对象存储 key */
+  objectKey?: string;
+  /** 文件名 */
+  name?: string;
+}
+
+/** 审批流程处理请求参数 */
+export interface ProcInstDealParams {
+  /** 审批人用户号（必填） */
+  approverId: string;
+  /** 处理类型（必填） */
+  operateType: ProcOperateType;
+  /** 业务编号（必填） */
+  busKey: string;
+  /** 任务 id（通过、提交、否决、转派、加签时必填；文档类型为 LONG，示例为字符串） */
+  taskId?: string | number;
+  /** 审批意见（开启审批意见必填校验时必填） */
+  approveComment?: string;
+  /** 业务数据（JSON 字符串，审批时需要修改表单数据时可传） */
+  busData?: string;
+  /** 退回节点 id（退回时必填，通过可退回节点查询接口获取） */
+  backNodeId?: string;
+  /** 转派人用户号（转派时必填） */
+  transferApproverId?: string;
+  /** 加签类型（加签时必填） */
+  addSignType?: AddSignType;
+  /** 加签人用户号集合（加签时必填） */
+  addSignApproverIdList?: string[];
+  /** 审批图片附件集合 */
+  picAttachmentList?: ProcDealAttachment[];
+  /** 审批文件集合 */
+  fileAttachmentList?: ProcDealAttachment[];
+  /** 审批签名文件 id（须先调用 OA 文件上传接口获取） */
+  signKey?: string;
+}
+
+/** 审批流程处理响应 body */
+export interface ProcInstDealResult {
+  /** 业务数据（JSON 字符串） */
+  busData?: string;
+  /** 业务编号 */
+  busKey?: string;
+  /** 扩展数据 */
+  extensionData?: Record<string, unknown>;
+  /** 企业号 */
+  prjCod?: string;
+  /** 流程定义 id */
+  procDefId?: string;
+  /** 流程实例 id */
+  procInstId?: string;
+  /** 流程 Key */
+  procKey?: string;
+  /** 流程发起人 id */
+  procStarterId?: string;
   /** 流程状态 */
   procStatus?: ProcStatus;
   /** 当前流程待处理任务列表 */
