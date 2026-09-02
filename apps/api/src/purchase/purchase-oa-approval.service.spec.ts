@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { OA_FORM_MAPPINGS } from '../integrations/xinfutong-oa/form/form-mapping.constants';
 import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 
-function fixture(existingStatus?: string) {
+function fixture(existingStatus?: string, mapping?: Record<string, unknown>) {
   const application = {
     pur_id: 7n,
     pur_no: 'PA202608120001',
     org_id: 2n,
+    oa_org_id: 2n,
     dept_id: 6n,
+    receiver_id: 5n,
     warehouse_id: 3n,
     pur_reson: '补充办公耗材',
     source_type: '',
@@ -74,6 +76,7 @@ function fixture(existingStatus?: string) {
         org_id: 2n,
         account_set_id: 1n,
         outer_ref_id: 'ORG-2',
+        name: '华溯控股（深圳）有限公司',
       }),
       findMany: vi.fn().mockResolvedValue([{ org_id: 2n, path: '/' }]),
     },
@@ -90,6 +93,10 @@ function fixture(existingStatus?: string) {
       findMany: vi
         .fn()
         .mockResolvedValue([{ dept_id: 6n, org_id: 2n, outer_ref_id: 'DEPT-6' }]),
+      findFirst: vi.fn().mockResolvedValue({ name: '行政部' }),
+    },
+    hspsi_sys_user: {
+      findFirst: vi.fn().mockResolvedValue({ nickname: '收货人甲', username: 'shouhuo' }),
     },
     hspsi_goods_info: {
       findMany: vi.fn().mockResolvedValue([{ goods_id: 101n, goods_name: '复印纸' }]),
@@ -130,7 +137,7 @@ function fixture(existingStatus?: string) {
       credentials as never,
       approval as never,
       attachments as never,
-      { getMapping: vi.fn().mockResolvedValue(OA_FORM_MAPPINGS.purchase_application) } as never,
+      { getMapping: vi.fn().mockResolvedValue(mapping ?? OA_FORM_MAPPINGS.purchase_application) } as never,
       { get: vi.fn().mockReturnValue('true') } as never,
     ),
     approval,
@@ -155,6 +162,51 @@ describe('PurchaseOaApprovalService', () => {
       dhi6d3c7oecn: '补充办公耗材',
       iluym6g473ox: '办公用品仓',
       jg2zwug75y3c: '',
+      tp1teg5kd21y: '尽快采购',
+      vdd3e94g4ho9: [
+        {
+          qotb3suzfb82: '复印纸',
+          '4a0wvks0vr2o': 'A4/80g',
+          fzc9rr3c5a6e: 5,
+          '2kq65w37r24o': '箱',
+          '8avk96xhktxy': 'A4纸',
+        },
+      ],
+    });
+  });
+
+  it('maps the new test form structure (承办部门/成本承担组织/收货人/申请原因) and skips absent fields', async () => {
+    const newStructure = {
+      businessType: 'purchase_application',
+      formKey: 'AAC15400_NFORM_383901863593902089',
+      formId: '384098467868639232',
+      fields: {
+        deptName: { componentType: 'FinInput', uniqueName: 'dhi6d3c7oecn', child: false },
+        costOrgName: { componentType: 'FinInput', uniqueName: 'kpiw89hn1sqh', child: false },
+        warehouse: { componentType: 'FinInput', uniqueName: 'iluym6g473ox', child: false },
+        receiver: { componentType: 'FinInput', uniqueName: 'jg2zwug75y3c', child: false },
+        reason: { componentType: 'FinTextArea', uniqueName: 'xi5us0dyak0j', child: false },
+        remark: { componentType: 'FinTextArea', uniqueName: 'tp1teg5kd21y', child: false },
+        attachments: { componentType: 'FinUpload', uniqueName: 'pc744eoan0wp', child: false },
+        details: { componentType: 'FinTable', uniqueName: 'vdd3e94g4ho9', child: false },
+        goodsName: { componentType: 'FinInput', uniqueName: 'qotb3suzfb82', child: true },
+        skuName: { componentType: 'FinInput', uniqueName: '4a0wvks0vr2o', child: true },
+        quantity: { componentType: 'FinInputNumber', uniqueName: 'fzc9rr3c5a6e', child: true },
+        unit: { componentType: 'FinInput', uniqueName: '2kq65w37r24o', child: true },
+        detailRemark: { componentType: 'FinInput', uniqueName: '8avk96xhktxy', child: true },
+      },
+    };
+    const { service, approval } = fixture(undefined, newStructure);
+
+    await service.submit(7n, '5');
+
+    const params = approval.startFormProcess.mock.calls[0]![1];
+    expect(JSON.parse(params.formData)).toEqual({
+      dhi6d3c7oecn: '行政部', // 承办部门 ← 申请部门
+      kpiw89hn1sqh: '华溯控股（深圳）有限公司', // 成本承担组织 ← org_id
+      iluym6g473ox: '办公用品仓',
+      jg2zwug75y3c: '收货人甲', // 收货人 ← receiver_id
+      xi5us0dyak0j: '补充办公耗材', // 申请原因 ← pur_reson
       tp1teg5kd21y: '尽快采购',
       vdd3e94g4ho9: [
         {

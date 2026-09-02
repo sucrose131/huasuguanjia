@@ -191,26 +191,46 @@ export class PurchaseOaApprovalService {
     if (!application) throw new BadRequestException('采购申请不存在');
     const oaOrganizationId =
       application.oa_org_id > 0n ? application.oa_org_id : application.org_id;
-    const [details, warehouse, oaOrganization, sourcePlan] = await Promise.all([
-      this.prisma.hspsi_purchase_approve_detail.findMany({
-        where: { pur_id: purId },
-        orderBy: { id: 'asc' },
-      }),
-      this.prisma.hspsi_basic_warehouse.findFirst({
-        where: { warehouse_id: application.warehouse_id, status: 1, deleted_at: null },
-        select: { name: true },
-      }),
-      this.prisma.hspsi_basic_organization.findFirst({
-        where: { org_id: oaOrganizationId, operation_status: 1, deleted_at: null },
-        select: { org_id: true, account_set_id: true, outer_ref_id: true },
-      }),
-      application.source_type === 'production_plan' && application.source_id > 0n
-        ? this.prisma.hspsi_production_plan.findFirst({
-            where: { plan_id: application.source_id, deleted_at: null },
-            select: { plan_no: true },
-          })
-        : null,
-    ]);
+    const [details, warehouse, oaOrganization, sourcePlan, costOrganization, department, receiver] =
+      await Promise.all([
+        this.prisma.hspsi_purchase_approve_detail.findMany({
+          where: { pur_id: purId },
+          orderBy: { id: 'asc' },
+        }),
+        this.prisma.hspsi_basic_warehouse.findFirst({
+          where: { warehouse_id: application.warehouse_id, status: 1, deleted_at: null },
+          select: { name: true },
+        }),
+        this.prisma.hspsi_basic_organization.findFirst({
+          where: { org_id: oaOrganizationId, operation_status: 1, deleted_at: null },
+          select: { org_id: true, account_set_id: true, outer_ref_id: true },
+        }),
+        application.source_type === 'production_plan' && application.source_id > 0n
+          ? this.prisma.hspsi_production_plan.findFirst({
+              where: { plan_id: application.source_id, deleted_at: null },
+              select: { plan_no: true },
+            })
+          : null,
+        // 成本承担组织名称（org_id）
+        this.prisma.hspsi_basic_organization.findFirst({
+          where: { org_id: application.org_id, operation_status: 1, deleted_at: null },
+          select: { name: true },
+        }),
+        // 申请部门名称（dept_id）
+        application.dept_id > 0n
+          ? this.prisma.hspsi_basic_dept.findFirst({
+              where: { dept_id: application.dept_id, status: 1, deleted_at: null },
+              select: { name: true },
+            })
+          : null,
+        // 收货人名称（receiver_id 系统用户）
+        application.receiver_id > 0n
+          ? this.prisma.hspsi_sys_user.findFirst({
+              where: { id: application.receiver_id, status: 1, deleted_at: null },
+              select: { nickname: true, username: true },
+            })
+          : null,
+      ]);
     if (!details.length) throw new BadRequestException('采购申请没有商品明细');
     if (!warehouse) throw new BadRequestException('目标仓库不存在或已停用');
     if (!oaOrganization?.account_set_id)
@@ -344,18 +364,23 @@ export class PurchaseOaApprovalService {
       : application.source_type && application.source_id > 0n
         ? `${application.source_type}:${application.source_id}`
         : '';
+    // 按映射动态组装 formData：账套间表单结构不同（账套1 新版含 承办部门/成本承担组织/收货人；
+    // 账套2 仍为旧结构），映射中不存在的字段跳过。
+    const formData: Record<string, unknown> = {};
+    if (f.reason) formData[f.reason] = application.pur_reson;
+    if (f.warehouse) formData[f.warehouse] = warehouse.name;
+    if (f.deptName) formData[f.deptName] = department?.name ?? '';
+    if (f.costOrgName) formData[f.costOrgName] = costOrganization?.name ?? '';
+    if (f.receiver) formData[f.receiver] = receiver?.nickname || receiver?.username || '';
+    if (f.source) formData[f.source] = source;
+    if (f.remark) formData[f.remark] = application.remark;
+    if (f.details) formData[f.details] = detailData;
     return {
       accountSetId: oaOrganization.account_set_id,
       starterId: staff.outer_ref_id,
       starterOrgId,
       busKey: `${BUSINESS_TYPE}:${purId}`,
-      formData: {
-        [f.reason!]: application.pur_reson,
-        [f.warehouse!]: warehouse.name,
-        [f.source!]: source,
-        [f.remark!]: application.remark,
-        [f.details!]: detailData,
-      },
+      formData,
     };
   }
 
