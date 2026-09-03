@@ -256,6 +256,8 @@ describe('PurchaseService quick catalog materialization', () => {
       null,
       {
         orgId: 1,
+        oaOrgId: 1,
+        receiverId: 9,
         deptId: 2,
         warehouseId: 3,
         details: [
@@ -271,9 +273,15 @@ describe('PurchaseService quick catalog materialization', () => {
           },
         ],
       },
-      '9',
+      {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [{ id: '1', name: '主组织' }],
+        permissions: ['purchase'],
+      },
       false,
-      '1',
     );
 
     expect(goodsCreate).toHaveBeenCalledOnce();
