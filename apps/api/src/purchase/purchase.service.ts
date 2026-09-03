@@ -336,7 +336,7 @@ export class PurchaseService {
           status: 1,
           deleted_at: null,
         },
-        select: { id: true },
+        select: { id: true, name: true },
       }),
       this.prisma.hspsi_basic_staff_organizations.findMany({
         where: {
@@ -351,6 +351,7 @@ export class PurchaseService {
     ]);
     const activeStaffIds = new Set(staff.map((item) => String(item.id)));
     const memberStaffIds = new Set(memberships.map((item) => String(item.staff_id)));
+    const staffNameMap = new Map(staff.map((item) => [String(item.id), item.name]));
     return users
       .filter(
         (user) =>
@@ -360,7 +361,7 @@ export class PurchaseService {
       )
       .map((user) => ({
         value: user.id,
-        label: user.nickname || user.username,
+        label: staffNameMap.get(String(user.staff_id)) || user.nickname || user.username,
         raw: { username: user.username, orgId, deptId },
       }));
   }
@@ -2587,9 +2588,12 @@ export class PurchaseService {
     const orderUsers = orderUserIds.length
       ? await this.prisma.$queryRaw<Array<{ id: bigint; display_name: string }>>(
           Prisma.sql`
-            SELECT id, COALESCE(NULLIF(nickname, ''), username) AS display_name
-            FROM hspsi_sys_user
-            WHERE id IN (${Prisma.join(orderUserIds)}) AND deleted_at IS NULL
+            SELECT u.id,
+                   COALESCE(NULLIF(s.name, ''), NULLIF(u.nickname, ''), u.username) AS display_name
+            FROM hspsi_sys_user u
+            LEFT JOIN hspsi_basic_staff s
+              ON s.id = u.staff_id AND s.deleted_at IS NULL AND s.status = 1
+            WHERE u.id IN (${Prisma.join(orderUserIds)}) AND u.deleted_at IS NULL
           `,
         )
       : [];
@@ -3526,6 +3530,32 @@ export class PurchaseService {
           select: { pur_id: true, pur_no: true },
         })
       : [];
+    // 收货经办人/创建人显示具体人名：OA 账号优先取员工姓名，其次昵称，最后才是登录账号（手机号）
+    const personIds = [
+      ...new Set(
+        items.flatMap((item) => [item.created_by, item.receiver_id]).filter((id) => id > 0n),
+      ),
+    ];
+    const persons = personIds.length
+      ? await this.prisma.hspsi_sys_user.findMany({
+          where: { id: { in: personIds }, deleted_at: null },
+          select: { id: true, staff_id: true, username: true, nickname: true },
+        })
+      : [];
+    const personStaffIds = persons.flatMap((item) => (item.staff_id ? [item.staff_id] : []));
+    const personStaff = personStaffIds.length
+      ? await this.prisma.hspsi_basic_staff.findMany({
+          where: { id: { in: personStaffIds }, deleted_at: null },
+          select: { id: true, name: true },
+        })
+      : [];
+    const personStaffNames = new Map(personStaff.map((item) => [String(item.id), item.name]));
+    const personNames = new Map(
+      persons.map((item) => [
+        String(item.id),
+        personStaffNames.get(String(item.staff_id)) || item.nickname || item.username,
+      ]),
+    );
     return {
       items: items.map((item) => {
         const ord = orders.find((o) => o.po_id === item.po_id);
@@ -3543,12 +3573,15 @@ export class PurchaseService {
           warehouseId: item.warehouse_id,
           deptId: item.dept_id,
           receiverId: item.receiver_id,
+          receiverName: personNames.get(String(item.receiver_id)) ?? '',
           inputType: item.input_type,
           orderQuantity: item.po_qty,
           inputQuantity: item.input_qty,
           confirmStatus: item.comfirm_status,
           confirmComment: item.comfirm_comment,
           remark: item.remark,
+          createdBy: item.created_by,
+          createdByName: personNames.get(String(item.created_by)) ?? '',
           createdAt: item.created_at,
         };
       }),
@@ -3622,6 +3655,43 @@ export class PurchaseService {
       };
     });
     const enrichedDetails = await this.references.enrichGoods(mappedDetails);
+    // 供应商：临时/订单入库的供应商挂在关联采购订单上，详情一并返回便于展示与反向订单核对
+    const rawOrder =
+      header.po_id > 0n
+        ? await this.prisma.hspsi_purchase_order.findFirst({
+            where: { po_id: header.po_id, deleted_at: null },
+            select: { vendor_id: true },
+          })
+        : null;
+    const vendor =
+      rawOrder && rawOrder.vendor_id > 0n
+        ? await this.prisma.hspsi_basic_vendor.findFirst({
+            where: { vendor_id: rawOrder.vendor_id, deleted_at: null },
+            select: { conpany_name: true },
+          })
+        : null;
+    // 收货经办人/创建人显示具体人名（优先员工姓名，其次昵称，最后才是登录账号手机号）
+    const headerPersonIds = [header.created_by, header.receiver_id].filter((id) => id > 0n);
+    const headerUsers = headerPersonIds.length
+      ? await this.prisma.hspsi_sys_user.findMany({
+          where: { id: { in: headerPersonIds }, deleted_at: null },
+          select: { id: true, staff_id: true, username: true, nickname: true },
+        })
+      : [];
+    const headerStaffIds = headerUsers.flatMap((user) => (user.staff_id ? [user.staff_id] : []));
+    const headerStaff = headerStaffIds.length
+      ? await this.prisma.hspsi_basic_staff.findMany({
+          where: { id: { in: headerStaffIds }, deleted_at: null },
+          select: { id: true, name: true },
+        })
+      : [];
+    const headerStaffNames = new Map(headerStaff.map((staff) => [String(staff.id), staff.name]));
+    const headerPersonNames = new Map(
+      headerUsers.map((user) => [
+        String(user.id),
+        headerStaffNames.get(String(user.staff_id)) || user.nickname || user.username,
+      ]),
+    );
     return {
       ...header,
       id: header.po_input_id,
@@ -3630,10 +3700,14 @@ export class PurchaseService {
       orderNo: order.orderNo,
       applicationNo: order.applicationNo,
       directReceipt: sourceApplication?.source_type === 'temporary_receipt',
+      vendorId: rawOrder?.vendor_id ?? null,
+      vendorName: vendor?.conpany_name ?? '',
       orgId: header.org_id,
       warehouseId: header.warehouse_id,
       deptId: header.dept_id,
       receiverId: header.receiver_id,
+      receiverName: headerPersonNames.get(String(header.receiver_id)) ?? '',
+      createdByName: headerPersonNames.get(String(header.created_by)) ?? '',
       inputType: header.input_type,
       confirmStatus: header.comfirm_status,
       details: enrichedDetails,
@@ -3882,6 +3956,36 @@ export class PurchaseService {
               created_at: new Date(),
             },
           });
+      // 临时采购入库（直入）编辑：供应商/收货经办人变更同步到反向生成的订单与申请，保证链路一致
+      if (isDirect && receiptId) {
+        const linkedOrder = await tx.hspsi_purchase_order.findFirst({
+          where: { po_id: finalPoId, deleted_at: null },
+          select: { vendor_id: true, pur_id: true },
+        });
+        if (linkedOrder) {
+          const orderPatch: Record<string, unknown> = {
+            updated_by: BigInt(userId),
+            updated_at: new Date(),
+          };
+          if (body.vendorId) orderPatch.vendor_id = BigInt(String(body.vendorId));
+          if (body.receiverId) orderPatch.receiver_id = chainReceiverId;
+          await tx.hspsi_purchase_order.update({
+            where: { po_id: finalPoId },
+            data: orderPatch as never,
+          });
+          if (linkedOrder.pur_id > 0n && body.receiverId) {
+            const linkedPur = await tx.hspsi_purchase_approve.findFirst({
+              where: { pur_id: linkedOrder.pur_id, deleted_at: null },
+              select: { source_type: true },
+            });
+            if (linkedPur?.source_type === 'temporary_receipt')
+              await tx.hspsi_purchase_approve.update({
+                where: { pur_id: linkedOrder.pur_id },
+                data: { receiver_id: chainReceiverId },
+              });
+          }
+        }
+      }
       if (generatedPurId > 0n)
         await tx.hspsi_purchase_approve.update({
           where: { pur_id: generatedPurId },

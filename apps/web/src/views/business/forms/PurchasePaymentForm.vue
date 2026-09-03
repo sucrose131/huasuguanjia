@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 
@@ -14,6 +14,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const presetOrder = ref(false);
 const options = reactive<Record<string, any>>({
@@ -58,6 +60,7 @@ async function loadOrgOptions(orgId: unknown) {
 }
 
 function money(value: unknown) {
+  if (amountHidden.value) return canViewAmount.value ? '¥ ****' : '****';
   return canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
 }
 
