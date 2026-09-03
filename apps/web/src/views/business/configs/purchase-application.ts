@@ -3,6 +3,10 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import PurchaseApplicationForm from '../forms/PurchaseApplicationForm.vue';
+import {
+  approvalStatusText,
+  approvalStatusType,
+} from '@/utils/approval-status';
 
 const isCurrentApplicant = (row: Record<string, any>) =>
   String(row.createdBy ?? '') === String(useAuthStore().user?.id ?? '');
@@ -67,9 +71,10 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
     {
       prop: 'approveStatus',
       label: '审批状态',
-      width: 96,
+      width: 130,
       kind: 'status',
-      statusDict: 'approval_status',
+      statusType: approvalStatusType,
+      render: approvalStatusText,
     },
   ],
   dictionaries: ['approval_status'],

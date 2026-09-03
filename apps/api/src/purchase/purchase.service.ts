@@ -1454,6 +1454,24 @@ export class PurchaseService {
       }),
       this.prisma.hspsi_purchase_approve.count({ where }),
     ]);
+    // 最近一条未删除的 OA 审批实例状态（供前端"审批状态"列合并展示 OA 渠道）
+    const oaRows = records.length
+      ? await this.prisma.hspsi_oa_approval_instance.findMany({
+          where: {
+            business_type: 'purchase_application',
+            business_id: { in: records.map((item) => item.pur_id) },
+            deleted_at: null,
+          },
+          orderBy: { id: 'desc' },
+          select: { business_id: true, proc_status: true },
+        })
+      : [];
+    const latestOaByPur = new Map<string, string>();
+    for (const row of oaRows) {
+      if (!latestOaByPur.has(String(row.business_id))) {
+        latestOaByPur.set(String(row.business_id), row.proc_status);
+      }
+    }
     const lines = records.length
       ? await this.prisma.hspsi_purchase_approve_detail.findMany({
           where: { pur_id: { in: records.map((item) => item.pur_id) } },
@@ -1536,6 +1554,7 @@ export class PurchaseService {
               : 'partially_generated',
         status: item.status,
         approveStatus: item.approve_status,
+        oaStatus: latestOaByPur.get(String(item.pur_id)) ?? '',
         approveComment: item.approve_comment,
         approveBy: item.approve_by,
         approveDate: item.approve_date,

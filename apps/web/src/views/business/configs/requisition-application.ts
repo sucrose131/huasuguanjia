@@ -2,6 +2,13 @@ import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage } from 'element-plus';
 import RequisitionApplicationForm from '../forms/RequisitionApplicationForm.vue';
+import {
+  approvalStatusText,
+  approvalStatusType,
+} from '@/utils/approval-status';
+
+// 兼容导出（既有单元测试沿用旧名称）
+export { approvalStatusText as requisitionApprovalStatusText };
 
 const hasActiveOaApproval = (row: Record<string, any>) =>
   ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? ''));
@@ -12,32 +19,6 @@ const canApproveApplication = (row: Record<string, any>) =>
 const canRejectApplication = (row: Record<string, any>) =>
   canApproveApplication(row) ||
   (Boolean(row.reverseGenerated) && Number(row.approveStatus ?? row.approve_status) === 1);
-
-/**
- * 合并后的审批状态：终态区分 OA/系统渠道，未决态展示 OA 过程。
- * 展示仅合并两列，不改变"OA 审批单据不能系统内通过"的既有约束（前端操作与后端均拦截）。
- */
-export function requisitionApprovalStatusText(row: Record<string, any>): string {
-  const approveStatus = Number(row.approveStatus ?? row.approve_status ?? 0);
-  const oaStatus = String(row.oaStatus ?? '');
-  if (approveStatus === 1) return oaStatus === 'PASSED' ? 'OA已通过' : '已通过';
-  if (approveStatus === 2) return oaStatus === 'REJECTED' ? 'OA已驳回' : '已驳回';
-  if (oaStatus === 'RUNNING') return 'OA审批中';
-  if (oaStatus === 'BACKTOSTART') return 'OA退回发起人';
-  if (oaStatus === 'PENDING_PUSH') return '待提交OA';
-  if (oaStatus === 'PUSH_FAILED') return 'OA提交失败';
-  return '待审批';
-}
-
-function requisitionApprovalStatusType(
-  row: Record<string, any>,
-): 'success' | 'danger' | 'warning' | 'primary' | 'info' {
-  const text = requisitionApprovalStatusText(row);
-  if (text.includes('通过')) return 'success';
-  if (text === 'OA提交失败') return 'danger';
-  if (text.includes('驳回')) return 'danger';
-  return 'warning'; // 待审批 / OA审批中 / 待提交OA / OA退回发起人
-}
 
 export const requisitionApplicationConfig: BusinessDocumentConfig = {
   key: 'requisitions/applications',
@@ -59,8 +40,8 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
       label: '审批状态',
       minWidth: 130,
       kind: 'status',
-      statusType: requisitionApprovalStatusType,
-      render: requisitionApprovalStatusText,
+      statusType: approvalStatusType,
+      render: approvalStatusText,
     },
     { prop: 'createdByName', label: '创建人', minWidth: 110 },
     { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
