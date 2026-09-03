@@ -41,6 +41,28 @@ export type DocumentConfig = {
 };
 export type AttachmentAuditContext = { ip?: string };
 
+/** 登录页操作指引字典类别。字典值存放 OSS 对象键。 */
+export const LOGIN_OPERATION_GUIDE_CATEGORY = 'login_operation_guide';
+
+export function publicDocumentObjectKey(raw: unknown): string {
+  const objectKey = String(raw ?? '')
+    .trim()
+    .replace(/^\/+/, '');
+  if (
+    !objectKey ||
+    objectKey.includes('..') ||
+    objectKey.includes('\\') ||
+    objectKey.includes('//') ||
+    objectKey.includes('://')
+  ) {
+    throw new BadRequestException('操作指引文件地址无效');
+  }
+  if (!/\.pdf$/i.test(objectKey)) {
+    throw new BadRequestException('操作指引仅支持 PDF');
+  }
+  return objectKey;
+}
+
 export const ATTACHMENT_DOCUMENTS: Record<string, DocumentConfig> = {
   purchase_application: {
     table: 'hspsi_purchase_approve',
@@ -762,6 +784,90 @@ export class AttachmentsService {
     auditContext: AttachmentAuditContext = {},
   ) {
     return this.accessUrl(type, id, attachmentId, user, auditContext, 'PREVIEW');
+  }
+
+  async listPublicOperationGuides() {
+    const items = await this.publicOperationGuideRows();
+    return items.flatMap((item) => {
+      try {
+        const value = publicDocumentObjectKey(item.dict_value);
+        const label = String(item.dict_name ?? '').trim();
+        return value && label ? [{ value, label }] : [];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  /** 登录页操作指引：对象键来自字典值，不接受字典外的 OSS 路径。 */
+  async publicOperationGuidePreviewUrl(value: string) {
+    const { objectKey, fileName, label } = await this.publicOperationGuide(value);
+    await this.assertPublicGuideObject(objectKey);
+    const expires = Number(this.config.get('OSS_DOWNLOAD_URL_TTL_SECONDS') ?? 600);
+    const url = this.oss().signatureUrl(objectKey, {
+      expires,
+      response: {
+        'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      },
+    });
+    return { url, expiresIn: expires, fileName, label };
+  }
+
+  /** 同源输出 PDF，避免 OSS 禁止覆盖 content-type 导致无法在线预览。 */
+  async publicOperationGuideFile(value: string) {
+    const guide = await this.publicOperationGuide(value);
+    try {
+      const result = await this.oss().getStream(guide.objectKey);
+      return { ...guide, stream: result.stream };
+    } catch (error) {
+      this.throwIfPublicGuideMissing(error);
+      throw error;
+    }
+  }
+
+  private async publicOperationGuide(value: string) {
+    const objectKey = publicDocumentObjectKey(value);
+    const item = (await this.publicOperationGuideRows()).find((row) => {
+      try {
+        return publicDocumentObjectKey(row.dict_value) === objectKey;
+      } catch {
+        return false;
+      }
+    });
+    if (!item) throw new NotFoundException('操作指引不存在');
+    return {
+      objectKey,
+      fileName: objectKey.slice(objectKey.lastIndexOf('/') + 1),
+      label: String(item.dict_name ?? '').trim(),
+    };
+  }
+
+  private async assertPublicGuideObject(objectKey: string) {
+    try {
+      await this.oss().head(objectKey);
+    } catch (error) {
+      this.throwIfPublicGuideMissing(error);
+      throw error;
+    }
+  }
+
+  private throwIfPublicGuideMissing(error: unknown) {
+    const status = Number((error as { status?: number })?.status ?? 0);
+    const codeName = String((error as { code?: string })?.code ?? '');
+    if (status === 404 || codeName === 'NoSuchKey') {
+      throw new NotFoundException('操作指引文件不存在');
+    }
+  }
+
+  private async publicOperationGuideRows() {
+    const category = await this.prisma.hspsi_sys_dictionary_category.findFirst({
+      where: { dict_catg_code: LOGIN_OPERATION_GUIDE_CATEGORY, deleted_at: null },
+    });
+    if (!category) return [];
+    return this.prisma.hspsi_sys_dictionary.findMany({
+      where: { dict_catg_id: category.dict_catg_id, deleted_at: null },
+      orderBy: { sort: 'asc' },
+    });
   }
 
   async remove(

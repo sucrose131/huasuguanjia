@@ -1,6 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import { AttachmentsService } from './attachments.service';
+import { AttachmentsService, LOGIN_OPERATION_GUIDE_CATEGORY, publicDocumentObjectKey } from './attachments.service';
 
 const user = { id: '9', username: 'tester', orgId: '1', deptId: '2', permissions: ['purchase'] };
 
@@ -9,6 +9,8 @@ function setup(row: Record<string, unknown>) {
     $queryRawUnsafe: vi.fn().mockResolvedValue([{ attachments: null, ...row }]),
     $executeRawUnsafe: vi.fn().mockResolvedValue(1),
     hspsi_sys_oper_log: { create: vi.fn().mockResolvedValue({}) },
+    hspsi_sys_dictionary_category: { findFirst: vi.fn().mockResolvedValue(null) },
+    hspsi_sys_dictionary: { findMany: vi.fn().mockResolvedValue([]) },
   };
   prisma.$transaction = vi.fn((callback: (tx: any) => unknown) => callback(prisma));
   const config = {
@@ -319,5 +321,125 @@ describe('AttachmentsService staging (新建态临时附件)', () => {
 
     expect(oss.delete).toHaveBeenCalledOnce();
     expect(oss.delete).toHaveBeenCalledWith('documents/tmp/9/abc.pdf');
+  });
+});
+
+describe('publicDocumentObjectKey', () => {
+  it('accepts a pdf object key and strips the leading slash', () => {
+    expect(publicDocumentObjectKey('/guides/华溯管家医院业务操作培训手册-20260903.pdf')).toBe(
+      'guides/华溯管家医院业务操作培训手册-20260903.pdf',
+    );
+  });
+
+  it('rejects path traversal, urls or non-pdf keys', () => {
+    expect(() => publicDocumentObjectKey('folder/../secret.pdf')).toThrow(BadRequestException);
+    expect(() => publicDocumentObjectKey('https://oss.example.com/manual.pdf')).toThrow(
+      BadRequestException,
+    );
+    expect(() => publicDocumentObjectKey('manual.txt')).toThrow(BadRequestException);
+  });
+});
+
+describe('AttachmentsService login operation guides', () => {
+  const objectKey = 'documents/华溯管家医院业务操作培训手册-20260903.pdf';
+  const fileName = '华溯管家医院业务操作培训手册-20260903.pdf';
+  const dictionaryItem = {
+    dict_name: '医护操作指引',
+    dict_value: objectKey,
+    remark: null,
+  };
+
+  function withGuide(servicePrisma: any) {
+    servicePrisma.hspsi_sys_dictionary_category.findFirst.mockResolvedValue({
+      dict_catg_id: 8,
+      dict_catg_code: LOGIN_OPERATION_GUIDE_CATEGORY,
+    });
+    servicePrisma.hspsi_sys_dictionary.findMany.mockResolvedValue([dictionaryItem]);
+  }
+
+  it('lists the dictionary item without signing', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    withGuide(prisma);
+
+    await expect(service.listPublicOperationGuides()).resolves.toEqual([
+      { value: objectKey, label: '医护操作指引' },
+    ]);
+  });
+
+  it('signs the dictionary value for inline preview', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    withGuide(prisma);
+    const oss = {
+      head: vi.fn().mockResolvedValue({ res: { headers: {} } }),
+      signatureUrl: vi.fn().mockReturnValue('https://oss.example.com/guide.pdf?sign=1'),
+    };
+    (service as any).client = oss;
+
+    const result = await service.publicOperationGuidePreviewUrl(objectKey);
+
+    expect(result).toEqual({
+      url: 'https://oss.example.com/guide.pdf?sign=1',
+      expiresIn: 600,
+      fileName,
+      label: '医护操作指引',
+    });
+    expect(oss.head).toHaveBeenCalledWith(objectKey);
+    expect(oss.signatureUrl).toHaveBeenCalledWith(
+      objectKey,
+      expect.objectContaining({
+        expires: 600,
+        response: {
+          'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        },
+      }),
+    );
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('returns not found when the OSS object is missing', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    withGuide(prisma);
+    (service as any).client = {
+      head: vi.fn().mockRejectedValue(
+        Object.assign(new Error('missing'), { status: 404, code: 'NoSuchKey' }),
+      ),
+      signatureUrl: vi.fn(),
+    };
+
+    await expect(service.publicOperationGuidePreviewUrl(objectKey)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('returns not found when the dictionary item is missing', async () => {
+    const { service } = setup({ status: 0, approve_status: 0 });
+    (service as any).client = { head: vi.fn(), signatureUrl: vi.fn() };
+
+    await expect(service.publicOperationGuidePreviewUrl(objectKey)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('streams the dictionary pdf for same-origin preview', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    withGuide(prisma);
+    const stream = { pipe: vi.fn() };
+    const oss = { getStream: vi.fn().mockResolvedValue({ stream }) };
+    (service as any).client = oss;
+
+    const result = await service.publicOperationGuideFile(objectKey);
+
+    expect(result).toMatchObject({ fileName, label: '医护操作指引', stream });
+    expect(oss.getStream).toHaveBeenCalledWith(objectKey);
+  });
+
+  it('rejects when OSS is not configured', async () => {
+    const { service, prisma } = setup({ status: 0, approve_status: 0 });
+    withGuide(prisma);
+    (service as any).client = null;
+
+    await expect(service.publicOperationGuidePreviewUrl(objectKey)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 });
