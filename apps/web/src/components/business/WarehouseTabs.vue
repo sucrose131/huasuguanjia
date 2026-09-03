@@ -50,7 +50,11 @@ watch(
       @click="selectWarehouse(item.value)"
     >
       {{ item.label }}
-      <span>{{ warehouseCounts?.[String(item.value)] ?? item.count ?? 0 }}</span>
+      <span>{{
+        warehouseCounts != null
+          ? (warehouseCounts[String(item.value)] ?? 0)
+          : (item.count ?? 0)
+      }}</span>
     </button>
   </div>
 </template>

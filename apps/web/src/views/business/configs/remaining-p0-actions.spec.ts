@@ -29,11 +29,20 @@ vi.mock('element-plus', () => ({
   },
 }));
 
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    user: { id: '9' },
+    amountAccess: { canViewAmount: true, canEditAmount: true },
+  }),
+}));
+
 import {
   confirmPendingSupplement,
   supplementHistoryAction,
 } from '@/components/production/supplement-history-actions';
 import { productionOutputConfig } from './production-output';
+import { purchaseApplicationConfig } from './purchase-application';
+import { purchaseOrderConfig } from './purchase-order';
 import { requisitionApplicationConfig } from './requisition-application';
 import { salesOrderConfig } from './sales-order';
 
@@ -106,5 +115,38 @@ describe('remaining P0 frontend actions', () => {
     expect(edit?.show?.({ approveStatus: 0, confirmStatus: 0, oaStatus: 'RUNNING' })).toBe(false);
     await edit!.handler({ id: '51' }, ctx);
     expect(ctx.openEdit).toHaveBeenCalledWith({ id: '51' });
+  });
+
+  it('only exposes the purchase payment entry after the draft order has started', () => {
+    const payment = purchaseOrderConfig.rowActions?.find((item) => item.key === 'payment');
+
+    expect(payment?.show?.({ orderStatus: 1, vendorId: 3, remainingPayable: 100 })).toBe(false);
+    expect(payment?.show?.({ orderStatus: 2, vendorId: 3, remainingPayable: 100 })).toBe(true);
+  });
+
+  it('locks purchase application editing permanently after submission', () => {
+    const edit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'edit');
+    const submit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'submit');
+    const withdraw = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'withdraw');
+    const terminate = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'terminate');
+
+    expect(edit?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(submit?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(withdraw?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(false);
+    expect(terminate?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(false);
+    expect(edit?.show?.({ status: 0, approveStatus: 0, createdBy: '8' })).toBe(false);
+    expect(edit?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(false);
+    expect(edit?.show?.({ status: 1, approveStatus: 2, createdBy: '9' })).toBe(false);
+    expect(withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '8' })).toBe(false);
+    expect(
+      withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '9', sourceType: 'production_plan' }),
+    ).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(terminate?.show?.({ status: 1, approveStatus: 0, createdBy: '8' })).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 1, createdBy: '9' })).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 3, createdBy: '9' })).toBe(false);
+    expect(withdraw?.confirm).toBe('撤回后单据将回到草稿，可修改后重新提交，是否继续？');
+    expect(terminate?.confirm).toBe('终止后审批将结束，且不能再编辑提交，是否继续？');
   });
 });

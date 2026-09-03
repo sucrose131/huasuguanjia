@@ -96,6 +96,13 @@ async function loadWarehouseTabs(orgId: unknown) {
 function warehouseTabCount(item: any) {
   return Number(item.count ?? 0);
 }
+// 仓库筛选「全部」统计 = 当前组织各仓库有库存品项数之和（与仓库 Tab 口径一致，不随选中仓库变化）
+const orgWarehouseItemCount = computed(() =>
+  (options.warehouseTabs ?? []).reduce(
+    (sum: number, item: any) => sum + Number(item.count ?? 0),
+    0,
+  ),
+);
 
 async function load() {
   if (!stockScopeReady.value) {
@@ -294,7 +301,7 @@ onMounted(async () => {
 
       <div v-if="stockScopeReady && stockView === 'inventory'" class="warehouse-tabs">
         <button :class="{ active: !query.warehouseId }" @click="selectWarehouse('')">
-          全部 <span>{{ summary.itemCount || total }}</span>
+          全部 <span>{{ orgWarehouseItemCount }}</span>
         </button>        <button
           v-for="item in options.warehouseTabs"
           :key="item.value"

@@ -1,6 +1,7 @@
 export interface AuthUser {
   id: string;
   username: string;
+  displayName?: string;
   orgId: string | null;
   orgName?: string | null;
   deptId: string | null;

@@ -39,8 +39,10 @@ export const inventoryAdjustmentConfig: BusinessDocumentConfig = {
       },
     },
   ],
-  creatable: true,
-  createText: '新增库存调整',
+  // 2026-08-31：按业务要求暂隐藏「新增库存调整」按钮。
+  // 恢复方式：creatable 改回 true，并取消下方 createText 的注释。
+  creatable: false,
+  // createText: '新增库存调整',
   dialog: { width: '1280px', top: '4vh' },
   formComponent: InventoryAdjustmentForm,
   openFromRoute: async (query, ctx) => {

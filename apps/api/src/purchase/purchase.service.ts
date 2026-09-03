@@ -17,12 +17,16 @@ import { INVENTORY_BUSINESS_MODE } from '../inventory/inventory-dictionary';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
 import { BusinessNumberService } from '../business-number/business-number.service';
 import { MessageService } from '../message/message.service';
+import type { AuthUser } from '../auth/auth.types';
+import { runWithoutDataScope } from '../database/data-scope.context';
 
 import { TodoService } from '../database/todo.service';
+import { AttachmentsService } from '../attachments/attachments.service';
 import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { calculatePurchaseOrderLifecycle } from './purchase-order-lifecycle';
+import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
@@ -52,6 +56,8 @@ export class PurchaseService {
     @Inject(MessageService) private message: MessageService,
 
     @Inject(TodoService) private readonly todoService: TodoService,
+    @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
+    @Inject(PurchaseOaApprovalService) private readonly oaApproval: PurchaseOaApprovalService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -63,6 +69,226 @@ export class PurchaseService {
       page: Math.max(1, Number(query.page ?? 1)),
       pageSize: Math.min(100, Math.max(1, Number(query.pageSize ?? 20))),
     };
+  }
+  /**
+   * 采购申请所属组织：当前账号已经生效的数据权限组织，以及这些组织的有效上级组织。
+   *
+   * OA 中人员经常挂在子公司/下级组织，但采购申请需要允许其以上级法人组织身份发起；
+   * 因此这里只扩展祖先组织，不扩展同级或其他下级组织。
+   */
+  private async applicationOrganizations(user: AuthUser) {
+    const organizations = new Map<string, string>();
+    if (user.orgId) organizations.set(String(user.orgId), user.orgName ?? '当前所属组织');
+    for (const organization of user.authorizedOrganizations ?? []) {
+      organizations.set(String(organization.id), organization.name);
+    }
+
+    // 组织层级查询必须能看见授权范围之外的父节点。这里用只读原生查询绕过
+    // 通用数据权限中间件；最终返回值仍只保留直接授权组织及其祖先。
+    const activeOrganizations = await this.prisma.$queryRaw<
+      Array<{ org_id: bigint; parent_id: bigint; name: string }>
+    >`SELECT org_id, parent_id, name
+      FROM hspsi_basic_organization
+      WHERE operation_status = 1 AND deleted_at IS NULL`;
+    const byId = new Map(activeOrganizations.map((item) => [String(item.org_id), item]));
+    for (const organizationId of [...organizations.keys()]) {
+      let current = byId.get(organizationId);
+      const visited = new Set<string>();
+      while (current?.parent_id && current.parent_id > 0n) {
+        const parentId = String(current.parent_id);
+        if (visited.has(parentId)) break;
+        visited.add(parentId);
+        const parent = byId.get(parentId);
+        if (!parent) break;
+        organizations.set(parentId, parent.name);
+        current = parent;
+      }
+    }
+    return organizations;
+  }
+
+  async applicationOrganizationOptions(user: AuthUser) {
+    const organizations = await this.applicationOrganizations(user);
+    return [...organizations].map(([value, label]) => ({ value, label }));
+  }
+
+  /** 当前登录人在 OA 中的有效组织身份；部门随 OA 组织身份返回，不使用本地数据权限推导。 */
+  async applicationOaOrganizationOptions(user: AuthUser) {
+    return runWithoutDataScope(async () => {
+      const identities = await this.prisma.hspsi_sys_user_oa_staff.findMany({
+        where: { user_id: BigInt(user.id) },
+        select: { staff_id: true, account_set_id: true },
+      });
+      if (!identities.length) return [];
+
+      const identityKeys = new Set(
+        identities.map((item) => `${item.staff_id}:${item.account_set_id}`),
+      );
+      const staffIds = identities.map((item) => item.staff_id);
+      const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
+        where: { staff_id: { in: staffIds }, deleted_at: null },
+        orderBy: [{ type: 'asc' }, { id: 'asc' }],
+      });
+      const validMemberships = memberships.filter((item) =>
+        identityKeys.has(`${item.staff_id}:${item.account_set_id}`),
+      );
+      const departmentIds = validMemberships
+        .filter((item) => item.org_type === 2)
+        .map((item) => item.org_id);
+      const departments = departmentIds.length
+        ? await this.prisma.hspsi_basic_dept.findMany({
+            where: {
+              dept_id: { in: departmentIds },
+              status: 1,
+              deleted_at: null,
+            },
+            select: {
+              dept_id: true,
+              org_id: true,
+              name: true,
+              account_set_id: true,
+            },
+          })
+        : [];
+      const departmentMap = new Map(
+        departments.map((item) => [`${item.dept_id}:${item.account_set_id}`, item]),
+      );
+      const organizations = await this.prisma.hspsi_basic_organization.findMany({
+        where: { operation_status: 1, deleted_at: null },
+        select: {
+          org_id: true,
+          parent_id: true,
+          name: true,
+          account_set_id: true,
+          sort: true,
+        },
+        orderBy: [{ sort: 'asc' }, { org_id: 'asc' }],
+      });
+      const organizationMap = new Map(
+        organizations.map((item) => [`${item.org_id}:${item.account_set_id}`, item]),
+      );
+      const options = new Map<
+        string,
+        {
+          value: string;
+          label: string;
+          deptId: string;
+          deptName: string;
+          accountSetId: string;
+          sort: number;
+        }
+      >();
+
+      const addOrganizationAndAncestors = (
+        organizationId: bigint,
+        accountSetId: bigint,
+        department?: { dept_id: bigint; name: string },
+      ) => {
+        let current = organizationMap.get(`${organizationId}:${accountSetId}`);
+        const visited = new Set<string>();
+        while (current) {
+          const key = String(current.org_id);
+          if (visited.has(key)) break;
+          visited.add(key);
+          const old = options.get(key);
+          if (!old || (!old.deptId && department?.dept_id)) {
+            options.set(key, {
+              value: key,
+              label: current.name,
+              deptId: department?.dept_id ? String(department.dept_id) : '',
+              deptName: department?.name ?? '',
+              accountSetId: String(accountSetId),
+              sort: current.sort,
+            });
+          }
+          if (!current.parent_id || current.parent_id <= 0n) break;
+          current = organizationMap.get(`${current.parent_id}:${accountSetId}`);
+        }
+      };
+
+      for (const membership of validMemberships) {
+        if (membership.org_type === 1) {
+          addOrganizationAndAncestors(membership.org_id, membership.account_set_id);
+          continue;
+        }
+        if (membership.org_type !== 2) continue;
+        const department = departmentMap.get(`${membership.org_id}:${membership.account_set_id}`);
+        if (!department) continue;
+        addOrganizationAndAncestors(department.org_id, membership.account_set_id, department);
+      }
+
+      return [...options.values()]
+        .sort((left, right) => left.sort - right.sort || left.label.localeCompare(right.label))
+        .map(({ sort: _sort, ...item }) => item);
+    });
+  }
+
+  private async resolveApplicationOaSelection(user: AuthUser, oaOrgId: bigint) {
+    const options = await this.applicationOaOrganizationOptions(user);
+    const selected = options.find((item) => item.value === String(oaOrgId));
+    if (!selected) {
+      throw new ForbiddenException('所选推送OA组织不属于当前申请人的有效OA组织关系');
+    }
+    if (!selected.deptId) {
+      throw new BadRequestException('所选OA组织没有关联有效申请部门，请先同步OA组织人员');
+    }
+    return selected;
+  }
+
+  async applicationReceiverOptions(user: AuthUser, orgIdValue: unknown) {
+    if (!orgIdValue) return [];
+    const orgId = BigInt(String(orgIdValue));
+    await this.assertApplicationOrganization(user, orgId);
+    return runWithoutDataScope(async () => {
+      const departments = await this.prisma.hspsi_basic_dept.findMany({
+        where: { org_id: orgId, status: 1, deleted_at: null },
+        select: { dept_id: true },
+      });
+      const memberships = await this.prisma.hspsi_basic_staff_organizations.findMany({
+        where: {
+          deleted_at: null,
+          OR: [
+            { org_type: 1, org_id: orgId },
+            ...(departments.length
+              ? [{ org_type: 2, org_id: { in: departments.map((item) => item.dept_id) } }]
+              : []),
+          ],
+        },
+        select: { staff_id: true },
+      });
+      const staffIds = [...new Set(memberships.map((item) => String(item.staff_id)))].map(BigInt);
+      if (!staffIds.length) return [];
+      const [staff, users] = await Promise.all([
+        this.prisma.hspsi_basic_staff.findMany({
+          where: { id: { in: staffIds }, status: 1, deleted_at: null },
+          select: { id: true, name: true },
+        }),
+        this.prisma.hspsi_sys_user.findMany({
+          where: {
+            staff_id: { in: staffIds },
+            status: 1,
+            deleted_at: null,
+          },
+          select: { id: true, staff_id: true, username: true, nickname: true },
+        }),
+      ]);
+      const staffNameMap = new Map(staff.map((item) => [String(item.id), item.name]));
+      return users
+        .map((item) => ({
+          value: String(item.id),
+          label: staffNameMap.get(String(item.staff_id)) || item.nickname || item.username,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label));
+    });
+  }
+
+  /** 采购申请可代组织发起，但所选组织必须属于直接授权组织或其有效上级组织。 */
+  private async assertApplicationOrganization(user: AuthUser, orgId: bigint) {
+    if (user.isSuperAdmin) return;
+    const authorized = await this.applicationOrganizations(user);
+    if (!authorized.has(String(orgId))) {
+      throw new ForbiddenException('采购申请所属组织不在当前账号授权组织范围内');
+    }
   }
   /** 采购单据商品选项：按单据组织+仓库，仅返回分类 warehouse_type 匹配的启用商品 */
   async productOptions(orgIdValue: unknown, warehouseIdValue: unknown) {
@@ -464,6 +690,70 @@ export class PurchaseService {
     if (!warehouse || warehouse.org_id !== orgId)
       throw new BadRequestException('所选仓库不属于当前组织');
   }
+  /** 采购申请的部门属于申请身份，不能再用成本承担组织校验申请部门。 */
+  private async assertApplicationCostScope(
+    tx: Prisma.TransactionClient,
+    orgId: bigint,
+    warehouseId: bigint,
+  ) {
+    if (orgId <= 0n || warehouseId <= 0n)
+      throw new BadRequestException('成本承担组织和目标仓库不能为空');
+    const [organization, warehouse] = await Promise.all([
+      tx.hspsi_basic_organization.findFirst({
+        where: { org_id: orgId, operation_status: 1, deleted_at: null },
+        select: { org_id: true },
+      }),
+      tx.hspsi_basic_warehouse.findFirst({
+        where: { warehouse_id: warehouseId, status: 1, deleted_at: null },
+        select: { org_id: true },
+      }),
+    ]);
+    if (!organization) throw new BadRequestException('所选成本承担组织不存在或已停用');
+    if (!warehouse || warehouse.org_id !== orgId)
+      throw new BadRequestException('所选目标仓库不属于成本承担组织');
+  }
+
+  private async assertApplicationReceiverScope(tx: PurchaseDb, orgId: bigint, receiverId: bigint) {
+    if (receiverId <= 0n) throw new BadRequestException('请选择收货人');
+    return runWithoutDataScope(async () => {
+      const receiver = await tx.hspsi_sys_user.findFirst({
+        where: {
+          id: receiverId,
+          staff_id: { not: null },
+          status: 1,
+          deleted_at: null,
+        },
+        select: { id: true, staff_id: true, dept_id: true },
+      });
+      if (!receiver?.staff_id) throw new BadRequestException('所选收货人账号不存在或已停用');
+      const departments = await tx.hspsi_basic_dept.findMany({
+        where: { org_id: orgId, status: 1, deleted_at: null },
+        select: { dept_id: true },
+      });
+      const membership = await tx.hspsi_basic_staff_organizations.findFirst({
+        where: {
+          staff_id: receiver.staff_id,
+          deleted_at: null,
+          OR: [
+            { org_type: 1, org_id: orgId },
+            ...(departments.length
+              ? [{ org_type: 2, org_id: { in: departments.map((item) => item.dept_id) } }]
+              : []),
+          ],
+        },
+        orderBy: [{ org_type: 'desc' }, { type: 'asc' }, { id: 'asc' }],
+        select: { id: true, org_type: true, org_id: true },
+      });
+      if (!membership)
+        throw new BadRequestException('所选收货人不属于成本承担组织或OA组织关系已失效');
+      const primaryDepartment = receiver.dept_id
+        ? departments.find((item) => item.dept_id === receiver.dept_id)?.dept_id
+        : null;
+      const receiverDeptId =
+        membership.org_type === 2 ? membership.org_id : (primaryDepartment ?? 0n);
+      return { ...receiver, receiverDeptId };
+    });
+  }
   private async assertReceiverScope(
     tx: PurchaseDb,
     orgId: bigint,
@@ -626,9 +916,7 @@ export class PurchaseService {
     const receiptHeaderById = new Map(
       receiptHeaders.map((item) => [String(item.po_input_id), item]),
     );
-    const returnHeaderById = new Map(
-      returnHeaders.map((item) => [String(item.po_exit_id), item]),
-    );
+    const returnHeaderById = new Map(returnHeaders.map((item) => [String(item.po_exit_id), item]));
     const lineProgress = new Map<
       string,
       {
@@ -1198,6 +1486,31 @@ export class PurchaseService {
         .filter((item) => activeOrderIds.has(String(item.po_id)))
         .map((item) => String(item.source_application_detail_id)),
     );
+    const creatorIds = [...new Set(records.map((item) => item.created_by).filter((id) => id > 0n))];
+    const creators = creatorIds.length
+      ? await runWithoutDataScope(() =>
+          this.prisma.hspsi_sys_user.findMany({
+            where: { id: { in: creatorIds }, deleted_at: null },
+            select: { id: true, staff_id: true, username: true, nickname: true },
+          }),
+        )
+      : [];
+    const creatorStaffIds = creators.flatMap((item) => (item.staff_id ? [item.staff_id] : []));
+    const creatorStaff = creatorStaffIds.length
+      ? await runWithoutDataScope(() =>
+          this.prisma.hspsi_basic_staff.findMany({
+            where: { id: { in: creatorStaffIds }, deleted_at: null },
+            select: { id: true, name: true },
+          }),
+        )
+      : [];
+    const creatorStaffNames = new Map(creatorStaff.map((item) => [String(item.id), item.name]));
+    const creatorNames = new Map(
+      creators.map((item) => [
+        String(item.id),
+        creatorStaffNames.get(String(item.staff_id)) || item.nickname || item.username,
+      ]),
+    );
     const items = records.map((item) => {
       const itemLines = lines.filter((line) => line.pur_id === item.pur_id);
       const generatedDetailCount = itemLines.filter((line) =>
@@ -1209,6 +1522,8 @@ export class PurchaseService {
         applicationNo: item.pur_no,
         orgId: item.org_id,
         deptId: item.dept_id,
+        oaOrgId: item.oa_org_id,
+        receiverId: item.receiver_id,
         reason: item.pur_reson,
         warehouseId: item.warehouse_id,
         quantity: itemLines.reduce((sum, line) => sum + line.qty, 0),
@@ -1221,6 +1536,7 @@ export class PurchaseService {
             : generatedDetailCount === detailCount
               ? 'fully_generated'
               : 'partially_generated',
+        sourceType: item.source_type,
         status: item.status,
         approveStatus: item.approve_status,
         approveComment: item.approve_comment,
@@ -1228,6 +1544,7 @@ export class PurchaseService {
         approveDate: item.approve_date,
         remark: item.remark,
         createdBy: item.created_by,
+        createdByName: creatorNames.get(String(item.created_by)) ?? '',
         createdAt: item.created_at,
       };
     });
@@ -1293,19 +1610,70 @@ export class PurchaseService {
       remark: item.remark,
       generatedOrderId: mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? null,
       generatedOrderNo:
-        activeOrderMap.get(
-          String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''),
-        )?.po_no ?? null,
+        activeOrderMap.get(String(mappedLineByApplicationDetail.get(String(item.id))?.po_id ?? ''))
+          ?.po_no ?? null,
       generationStatus: mappedLineByApplicationDetail.has(String(item.id))
         ? 'generated'
         : 'not_generated',
     }));
     const enrichedDetails = await this.references.enrichGoods(mappedDetails);
+    const [organizations, department, users] = await runWithoutDataScope(() =>
+      Promise.all([
+        this.prisma.hspsi_basic_organization.findMany({
+          where: {
+            org_id: {
+              in: [...new Set([header.org_id, header.oa_org_id].filter((item) => item > 0n))],
+            },
+            deleted_at: null,
+          },
+          select: { org_id: true, name: true },
+        }),
+        header.dept_id > 0n
+          ? this.prisma.hspsi_basic_dept.findFirst({
+              where: { dept_id: header.dept_id, deleted_at: null },
+              select: { name: true },
+            })
+          : null,
+        this.prisma.hspsi_sys_user.findMany({
+          where: {
+            id: {
+              in: [...new Set([header.created_by, header.receiver_id].filter((item) => item > 0n))],
+            },
+            deleted_at: null,
+          },
+          select: { id: true, staff_id: true, username: true, nickname: true },
+        }),
+      ]),
+    );
+    const staffIds = users.flatMap((item) => (item.staff_id ? [item.staff_id] : []));
+    const staff = staffIds.length
+      ? await runWithoutDataScope(() =>
+          this.prisma.hspsi_basic_staff.findMany({
+            where: { id: { in: staffIds }, deleted_at: null },
+            select: { id: true, name: true },
+          }),
+        )
+      : [];
+    const organizationNames = new Map(
+      organizations.map((item) => [String(item.org_id), item.name]),
+    );
+    const staffNames = new Map(staff.map((item) => [String(item.id), item.name]));
+    const userNames = new Map(
+      users.map((item) => [
+        String(item.id),
+        staffNames.get(String(item.staff_id)) || item.nickname || item.username,
+      ]),
+    );
     return {
       id: header.pur_id,
       applicationNo: header.pur_no,
       orgId: header.org_id,
       deptId: header.dept_id,
+      deptName: department?.name ?? '',
+      oaOrgId: header.oa_org_id,
+      oaOrgName: organizationNames.get(String(header.oa_org_id)) ?? '',
+      receiverId: header.receiver_id,
+      receiverName: userNames.get(String(header.receiver_id)) ?? '',
       reason: header.pur_reson,
       sourceType: header.source_type,
       sourceId: header.source_id,
@@ -1317,6 +1685,7 @@ export class PurchaseService {
       approveDate: header.approve_date,
       remark: header.remark,
       createdBy: header.created_by,
+      createdByName: userNames.get(String(header.created_by)) ?? '',
       createdAt: header.created_at,
       details: enrichedDetails,
       generatedOrders: linkedOrders.map((order) => {
@@ -1334,21 +1703,28 @@ export class PurchaseService {
       }),
     };
   }
-  async saveApplication(
-    id: string | null,
-    body: Body,
-    userId: string,
-    submit = false,
-    fixedOrgId?: string | null,
-  ) {
+  async saveApplication(id: string | null, body: Body, user: AuthUser, submit = false) {
+    if (!body.orgId) throw new BadRequestException('请选择成本承担组织');
+    if (!body.oaOrgId) throw new BadRequestException('请选择推送OA组织');
+    if (!body.receiverId) throw new BadRequestException('请选择收货人');
+    const orgId = BigInt(String(body.orgId));
+    const oaOrgId = BigInt(String(body.oaOrgId));
+    const receiverId = BigInt(String(body.receiverId));
+    const stagedAttachments = Array.isArray(body.stagedAttachments)
+      ? (body.stagedAttachments as Record<string, unknown>[])
+      : [];
+    await this.assertApplicationOrganization(user, orgId);
+    const oaSelection = await this.resolveApplicationOaSelection(user, oaOrgId);
     const lines = this.details(body.details);
     await this.resolveLineSkus(lines);
     let purId = id ? BigInt(id) : 0n;
     let businessNo = '';
     for (const line of lines) this.quantity(line.quantity, '采购申请数量');
     const data = {
-      org_id: BigInt(String(fixedOrgId ?? body.orgId)),
-      dept_id: BigInt(String(body.deptId)),
+      org_id: orgId,
+      dept_id: BigInt(oaSelection.deptId),
+      oa_org_id: oaOrgId,
+      receiver_id: receiverId,
       pur_reson: String(body.reason ?? ''),
       warehouse_id: BigInt(String(body.warehouseId)),
       status: submit ? 1 : 0,
@@ -1357,11 +1733,11 @@ export class PurchaseService {
       approve_by: 0n,
       approve_date: null,
       remark: String(body.remark ?? ''),
-      updated_by: BigInt(userId),
+      updated_by: BigInt(user.id),
       updated_at: new Date(),
     };
-    return this.guardedTransaction(async (tx) => {
-      await this.materializeQuickCatalog(tx, lines, userId);
+    const saved = await this.guardedTransaction(async (tx) => {
+      await this.materializeQuickCatalog(tx, lines, user.id);
       if (id) {
         await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
         const existing = await tx.hspsi_purchase_approve.findFirst({
@@ -1371,24 +1747,24 @@ export class PurchaseService {
         businessNo = existing.pur_no;
         if (existing.source_type === 'production_plan')
           throw new BadRequestException('生产缺料采购申请由系统生成，不允许手工编辑');
-        if (!([0, 2].includes(Number(existing.status)) || Number(existing.approve_status) === 2))
-          throw new BadRequestException('当前状态不能编辑');
-        if (existing.created_by !== BigInt(userId))
+        if (Number(existing.status) !== 0 || Number(existing.approve_status) !== 0)
+          throw new BadRequestException('采购申请提交审核后不允许修改原单');
+        if (existing.created_by !== BigInt(user.id))
           throw new ForbiddenException('个人无权修改他人发起的采购申请');
-        if (existing.org_id !== data.org_id)
-          throw new ForbiddenException('采购申请的所属组织必须与发起人的OA所属组织一致');
-        await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
+        await this.assertApplicationCostScope(tx, data.org_id, data.warehouse_id);
+        await this.assertApplicationReceiverScope(tx, data.org_id, data.receiver_id);
         await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, lines);
         await tx.hspsi_purchase_approve.update({ where: { pur_id: purId }, data });
       } else {
-        await this.assertOrganizationScope(tx, data.org_id, data.dept_id, data.warehouse_id);
+        await this.assertApplicationCostScope(tx, data.org_id, data.warehouse_id);
+        await this.assertApplicationReceiverScope(tx, data.org_id, data.receiver_id);
         await this.assertPurchaseWarehouse(tx, data.org_id, data.warehouse_id, lines);
         businessNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_APPLICATION);
         const application = await tx.hspsi_purchase_approve.create({
           data: {
             pur_no: businessNo,
             ...data,
-            created_by: BigInt(userId),
+            created_by: BigInt(user.id),
             created_at: new Date(),
           },
         });
@@ -1412,8 +1788,26 @@ export class PurchaseService {
         message: submit ? '已提交审批' : id ? '更新成功' : '草稿已保存',
       };
     });
+    // 新建态上传的临时附件在单据落库后绑定；绑定失败不影响单据保存，仅提示。
+    let attachmentWarning = '';
+    if (stagedAttachments.length) {
+      try {
+        await this.attachments.commitStaged(
+          'purchase_application',
+          String(saved.id),
+          stagedAttachments,
+          user,
+        );
+      } catch (error) {
+        attachmentWarning = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      ...saved,
+      message: attachmentWarning ? `${saved.message}，附件绑定失败：${attachmentWarning}` : saved.message,
+    };
   }
-  async submitApplication(id: string, userId: string) {
+  async submitApplication(id: string, user: AuthUser) {
     const purId = BigInt(id);
     await this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
@@ -1423,23 +1817,150 @@ export class PurchaseService {
       if (!application) throw new NotFoundException('采购申请不存在');
       if (application.source_type === 'production_plan')
         throw new BadRequestException('生产缺料采购申请已由系统提交，不允许手工再次提交');
-      if (![0, 2].includes(Number(application.status)) && Number(application.approve_status) !== 2)
-        throw new BadRequestException('当前状态不能提交');
-      if (application.created_by !== BigInt(userId))
+      if (Number(application.status) !== 0 || Number(application.approve_status) !== 0)
+        throw new BadRequestException('采购申请已经提交，不能重复提交');
+      if (application.created_by !== BigInt(user.id))
         throw new ForbiddenException('个人无权提交他人发起的采购申请');
+      await this.assertApplicationOrganization(user, application.org_id);
+      await this.resolveApplicationOaSelection(user, application.oa_org_id);
+      await this.assertApplicationCostScope(tx, application.org_id, application.warehouse_id);
+      await this.assertApplicationReceiverScope(tx, application.org_id, application.receiver_id);
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
         data: {
           status: 1,
           approve_status: 0,
           approve_comment: '',
-          updated_by: BigInt(userId),
+          updated_by: BigInt(user.id),
           updated_at: new Date(),
         },
       });
     });
     return { id, message: '已提交审批' };
   }
+
+  async terminateApplication(id: string, userId: string) {
+    const { purId } = await this.revokeCreatorPendingOa(id, userId, 'terminate');
+    return this.guardedTransaction(async (tx) => {
+      const current = await this.lockCreatorPendingApplication(tx, purId, userId, 'terminate');
+      if (Number(current.approve_status) === 3) {
+        await this.markApplicationOaCanceled(tx, purId, userId);
+        return { id, message: '采购申请已终止' };
+      }
+      const result = await this.applyApplicationCanceled(tx, purId, '创建人终止审批', userId);
+      await this.markApplicationOaCanceled(tx, purId, userId);
+      return result;
+    });
+  }
+
+  async withdrawApplication(id: string, userId: string) {
+    const { purId } = await this.revokeCreatorPendingOa(id, userId, 'withdraw');
+    return this.guardedTransaction(async (tx) => {
+      const current = await this.lockCreatorPendingApplication(tx, purId, userId, 'withdraw');
+      if (Number(current.status) === 0 && Number(current.approve_status) === 0) {
+        await this.markApplicationOaCanceled(tx, purId, userId);
+        return { id, message: '采购申请已撤回' };
+      }
+      const result = await this.applyApplicationWithdrawn(tx, purId, userId);
+      await this.markApplicationOaCanceled(tx, purId, userId);
+      return result;
+    });
+  }
+
+  private async revokeCreatorPendingOa(
+    id: string,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    const purId = BigInt(id);
+    const application = await this.prisma.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!application) throw new NotFoundException('采购申请不存在');
+    if (application.created_by !== BigInt(userId))
+      throw new ForbiddenException(
+        action === 'withdraw'
+          ? '个人无权撤回他人发起的采购申请'
+          : '个人无权终止他人发起的采购申请',
+      );
+    if (action === 'withdraw' && application.source_type === 'production_plan')
+      throw new BadRequestException('生产缺料采购申请不能撤回，如需结束请使用终止');
+    if (Number(application.status) !== 1 || Number(application.approve_status) !== 0)
+      throw new BadRequestException(this.pendingActionError(action, application.approve_status));
+
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (instance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    if (instance && ['RUNNING', 'BACKTOSTART'].includes(instance.proc_status)) {
+      await this.oaApproval.cancelRemoteProcess(
+        instance,
+        userId,
+        action === 'withdraw' ? '创建人撤回审批' : '创建人终止审批',
+      );
+    }
+    return { purId, instance };
+  }
+
+  private pendingActionError(action: 'terminate' | 'withdraw', approveStatus: number) {
+    if (action === 'withdraw') {
+      return Number(approveStatus) === 3
+        ? '采购申请已终止，不能撤回'
+        : '仅审批中的采购申请可以撤回';
+    }
+    return Number(approveStatus) === 3
+      ? '采购申请已终止，不能重复终止'
+      : '仅审批中的采购申请可以终止';
+  }
+
+  private async lockCreatorPendingApplication(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const current = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!current) throw new NotFoundException('采购申请不存在');
+    if (current.created_by !== BigInt(userId))
+      throw new ForbiddenException(
+        action === 'withdraw'
+          ? '个人无权撤回他人发起的采购申请'
+          : '个人无权终止他人发起的采购申请',
+      );
+    const lockedInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (lockedInstance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    return current;
+  }
+
+  private async markApplicationOaCanceled(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+  ) {
+    const lockedInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (!lockedInstance) return;
+    await tx.hspsi_oa_approval_instance.update({
+      where: { id: lockedInstance.id },
+      data: {
+        proc_status: 'CANCELED',
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+  }
+
   async approveApplication(id: string, approved: boolean, comment: string, userId: string) {
     const purId = BigInt(id);
     return this.guardedTransaction((tx) =>
@@ -1483,8 +2004,14 @@ export class PurchaseService {
         data: { dept_id: effectiveDeptId, updated_by: BigInt(userId), updated_at: new Date() },
       });
     }
-    if (approved)
-      await this.assertOrganizationScope(tx, app.org_id, effectiveDeptId, app.warehouse_id);
+    if (approved) {
+      if (app.source_type === 'production_plan') {
+        await this.assertOrganizationScope(tx, app.org_id, effectiveDeptId, app.warehouse_id);
+      } else {
+        await this.assertApplicationCostScope(tx, app.org_id, app.warehouse_id);
+        await this.assertApplicationReceiverScope(tx, app.org_id, app.receiver_id);
+      }
+    }
     if (!approved) {
       await tx.hspsi_purchase_approve.update({
         where: { pur_id: purId },
@@ -1497,7 +2024,10 @@ export class PurchaseService {
         },
       });
       await this.rollbackProductionShortageApplication(tx, purId, userId);
-      return { id, message: '已驳回，生产缺料已退回待处理' };
+      return {
+        id,
+        message: app.source_type === 'production_plan' ? '已驳回，生产缺料已退回待处理' : '已驳回',
+      };
     }
     const appLines = await tx.hspsi_purchase_approve_detail.findMany({
       where: { pur_id: purId },
@@ -1534,15 +2064,97 @@ export class PurchaseService {
         tx,
       );
     }
+    if (app.receiver_id > 0n) {
+      await this.todoService.create(
+        {
+          userId: Number(app.receiver_id),
+          organizationId: Number(app.org_id),
+          title: app.pur_no,
+          content: '采购申请已审批通过，您被指定为收货人，请关注后续采购及到货入库',
+          businessType: 'purchase_application',
+          businessId: Number(purId),
+          actorUserId: userId,
+        },
+        tx,
+      );
+    }
     return { id, message: '审批通过，请由采购人员生成采购订单' };
+  }
+
+  private async applyApplicationCanceled(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    comment: string,
+    userId: string,
+  ) {
+    const id = String(purId);
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const app = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!app) throw new NotFoundException('采购申请不存在');
+    if (Number(app.approve_status) === 3) {
+      return { id, message: '采购申请已终止' };
+    }
+    if (Number(app.status) !== 1 || ![0, 2].includes(Number(app.approve_status)))
+      throw new BadRequestException('仅审批中的采购申请可以终止');
+    await tx.hspsi_purchase_approve.update({
+      where: { pur_id: purId },
+      data: {
+        approve_status: 3,
+        approve_comment: comment,
+        approve_by: BigInt(userId),
+        approve_date: new Date(),
+        updated_by: BigInt(userId),
+      },
+    });
+    await this.rollbackProductionShortageApplication(tx, purId, userId);
+    return {
+      id,
+      message:
+        app.source_type === 'production_plan' ? '采购申请已终止，生产缺料已退回待处理' : '采购申请已终止',
+    };
+  }
+
+  private async applyApplicationWithdrawn(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+  ) {
+    const id = String(purId);
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const app = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!app) throw new NotFoundException('采购申请不存在');
+    if (app.source_type === 'production_plan')
+      throw new BadRequestException('生产缺料采购申请不能撤回，如需结束请使用终止');
+    if (Number(app.status) === 0 && Number(app.approve_status) === 0) {
+      return { id, message: '采购申请已撤回' };
+    }
+    // 审批中，或 OA 回调已抢先写成已取消(3)：本次请求已成功撤销 OA，仍落成草稿。
+    if (Number(app.status) !== 1 || ![0, 3].includes(Number(app.approve_status)))
+      throw new BadRequestException('仅审批中的采购申请可以撤回');
+    await tx.hspsi_purchase_approve.update({
+      where: { pur_id: purId },
+      data: {
+        status: 0,
+        approve_status: 0,
+        approve_comment: '创建人撤回审批',
+        approve_by: 0n,
+        approve_date: null,
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+    return { id, message: '采购申请已撤回' };
   }
 
   async generateApplicationOrder(id: string, body: Body, userId: string) {
     const purId = BigInt(id);
     const vendorId = BigInt(String(body.vendorId ?? 0));
     if (vendorId <= 0n) throw new BadRequestException('请选择本次采购订单的供应商');
-    const receiverId = BigInt(String(body.receiverId ?? 0));
-    if (receiverId <= 0n) throw new BadRequestException('请选择本次采购订单的收货人');
+    let receiverId = BigInt(String(body.receiverId ?? 0));
     const generationMode = String(body.generationMode ?? 'partial');
     if (!['all', 'partial'].includes(generationMode))
       throw new BadRequestException('采购订单生成方式无效');
@@ -1573,13 +2185,16 @@ export class PurchaseService {
       if (!application) throw new NotFoundException('采购申请不存在');
       if (application.status !== 1 || application.approve_status !== 1)
         throw new BadRequestException('仅审核通过的采购申请可以生成采购订单');
-      await this.assertOrganizationScope(
+      if (application.receiver_id > 0n) receiverId = application.receiver_id;
+      if (receiverId <= 0n) throw new BadRequestException('采购申请未指定有效收货人');
+      await this.assertApplicationCostScope(tx, application.org_id, application.warehouse_id);
+      const receiver = await this.assertApplicationReceiverScope(
         tx,
         application.org_id,
-        application.dept_id,
-        application.warehouse_id,
+        receiverId,
       );
-      await this.assertReceiverScope(tx, application.org_id, application.dept_id, receiverId);
+      if (receiver.receiverDeptId <= 0n)
+        throw new BadRequestException('所选收货人在成本承担组织下没有有效接收部门');
       const vendor = await tx.hspsi_basic_vendor.findFirst({
         where: { vendor_id: vendorId, deleted_at: null },
         select: { vendor_id: true },
@@ -1686,7 +2301,7 @@ export class PurchaseService {
           pur_id: purId,
           org_id: application.org_id,
           warehouse_id: application.warehouse_id,
-          dept_id: application.dept_id,
+          dept_id: receiver.receiverDeptId,
           receiver_id: receiverId,
           vendor_id: vendorId,
           pcs_qty: totalQuantity,
@@ -1740,18 +2355,6 @@ export class PurchaseService {
         },
         tx,
       );
-      await this.syncPurchaseOrderTodo(
-        tx,
-        {
-          po_id: order.po_id,
-          po_no: orderNo,
-          org_id: application.org_id,
-          receiver_id: receiverId,
-          status: 1,
-          created_by: BigInt(userId),
-        },
-        userId,
-      );
       // 采购订单已生成，关闭「采购申请待生成订单」的待办
       await this.todoService.completeByBusiness('purchase_application', Number(purId), tx);
       return {
@@ -1792,19 +2395,34 @@ export class PurchaseService {
         where: { pur_id: current.business_id, deleted_at: null },
       });
       if (!application) throw new NotFoundException('OA审批对应的采购申请不存在');
-      const expectedStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const expectedStatus =
+        payload.procStatus === 'PASSED' ? 1 : payload.procStatus === 'CANCELED' ? 3 : 2;
+      const withdrawnLocally =
+        payload.procStatus === 'CANCELED' &&
+        Number(application.status) === 0 &&
+        Number(application.approve_status) === 0;
       const duplicate =
-        current.proc_status === payload.procStatus && application.approve_status === expectedStatus;
+        (current.proc_status === payload.procStatus &&
+          application.approve_status === expectedStatus) ||
+        withdrawnLocally;
       let result: Record<string, unknown> = { id: String(application.pur_id) };
       if (!duplicate) {
-        result = await this.applyApplicationApproval(
-          tx,
-          application.pur_id,
-          payload.procStatus === 'PASSED',
-          this.oaApprovalComment(payload.procStatus),
-          '0',
-          true,
-        );
+        result =
+          payload.procStatus === 'CANCELED'
+            ? await this.applyApplicationCanceled(
+                tx,
+                application.pur_id,
+                this.oaApprovalComment(payload.procStatus),
+                '0',
+              )
+            : await this.applyApplicationApproval(
+                tx,
+                application.pur_id,
+                payload.procStatus === 'PASSED',
+                this.oaApprovalComment(payload.procStatus),
+                '0',
+                true,
+              );
       }
       await tx.hspsi_oa_approval_instance.update({
         where: { id: current.id },
@@ -1971,7 +2589,9 @@ export class PurchaseService {
           deliveryType: item.delivery_type,
           deliveryNo: item.delivery_no,
           arrivedQuantity: lifecycle?.confirmedNormalReceiptQuantity ?? item.arrival_qty,
-          isAllArrived: lifecycle ? Number(lifecycle.normalRemainingQuantity <= 0) : item.is_all_arrival,
+          isAllArrived: lifecycle
+            ? Number(lifecycle.normalRemainingQuantity <= 0)
+            : item.is_all_arrival,
           arrivalProgress: lifecycle?.originalArrivalProgress ?? 0,
           handlingProgress: lifecycle?.handlingProgress ?? 0,
           statusProgress: lifecycle?.statusProgress ?? '',
@@ -2220,14 +2840,8 @@ export class PurchaseService {
       (sum, line) => sum.plus(line.totalAmount as Prisma.Decimal),
       new Prisma.Decimal(0),
     );
-    const currentPaymentAmount = new Prisma.Decimal(String(body.currentPaymentAmount ?? 0));
-    if (currentPaymentAmount.lessThan(0)) throw new BadRequestException('本次付款金额不能小于 0');
-    if (id && currentPaymentAmount.greaterThan(0))
-      throw new BadRequestException('已有采购订单请通过订单付款入口登记新付款');
-    if (currentPaymentAmount.greaterThan(total))
-      throw new BadRequestException('本次付款金额不能超过订单总金额');
-    if (currentPaymentAmount.greaterThan(0) && !body.vendorId)
-      throw new BadRequestException('登记本次付款前必须选择供应商');
+    if (Number(body.currentPaymentAmount ?? 0) > 0)
+      throw new BadRequestException('采购付款请通过订单操作列的“付款”入口登记');
     const data = {
       pur_id: effectiveApplicationId,
       org_id: BigInt(String(body.orgId)),
@@ -2319,56 +2933,6 @@ export class PurchaseService {
           remark: String(line.remark ?? ''),
         })),
       });
-      await this.syncPurchaseOrderTodo(
-        tx,
-        {
-          po_id: poId,
-          po_no: orderNo,
-          org_id: data.org_id,
-          receiver_id: data.receiver_id,
-          status: 1,
-          created_by: BigInt(String(existingOrder?.created_by ?? userId)),
-        },
-        userId,
-      );
-      let paymentNo = '';
-      if (currentPaymentAmount.greaterThan(0)) {
-        const paymentChannel = Number(body.currentPaymentChannel);
-        await this.assertDictionaryValue(tx, 'payment_channel', paymentChannel, '付款渠道');
-        paymentNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_PAYMENT);
-        const payment = await tx.hspsi_purchase_order_payment.create({
-          data: {
-            org_id: data.org_id,
-            dept_id: data.dept_id,
-            pay_no: paymentNo,
-            po_id: poId,
-            pay_type: paymentChannel,
-            fact_pay_amount: currentPaymentAmount,
-            pay_date: this.date(
-              body.currentPaymentDate ?? body.businessDate ?? new Date(),
-              '付款日期',
-            ),
-            remark: String(body.currentPaymentRemark ?? '采购订单提交时登记付款'),
-            created_by: BigInt(userId),
-            updated_by: BigInt(userId),
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        });
-        await this.documentTrace.link(
-          {
-            upstreamType: 'purchase_order',
-            upstreamId: poId,
-            upstreamNo: orderNo,
-            downstreamType: 'purchase_payment',
-            downstreamId: payment.pay_id,
-            downstreamNo: payment.pay_no,
-            relationKind: 'payment',
-            createdBy: userId,
-          },
-          tx,
-        );
-      }
       const paymentPosition = await this.purchaseMoneyPosition(tx, poId);
       if (paymentPosition.netPaid.greaterThan(paymentPosition.effectivePayable))
         throw new BadRequestException('订单金额不能小于当前净已付金额');
@@ -2416,12 +2980,8 @@ export class PurchaseService {
       return {
         id: poId,
         businessNo: orderNo,
-        paymentNo: paymentNo || null,
-        message: id
-          ? '更新成功'
-          : currentPaymentAmount.greaterThan(0)
-            ? '采购订单及本次付款已创建'
-            : '采购订单已创建',
+        paymentNo: null,
+        message: id ? '更新成功' : '采购订单草稿已保存',
       };
     });
   }
@@ -2514,6 +3074,18 @@ export class PurchaseService {
           createdBy: userId,
         },
         tx,
+      );
+      await this.syncPurchaseOrderTodo(
+        tx,
+        {
+          po_id: order.po_id,
+          po_no: order.po_no,
+          org_id: order.org_id,
+          receiver_id: order.receiver_id,
+          status: 2,
+          created_by: order.created_by,
+        },
+        userId,
       );
       await this.ensurePurchasePaidTodo(tx, poId);
       return { id, applicationId, applicationNo, message: '采购订单已开始采购' };
@@ -2698,7 +3270,14 @@ export class PurchaseService {
         where: { po_id: poId },
         data: { updated_by: BigInt(userId), updated_at: new Date() },
       });
-      await this.logOrderTransition(tx, poId, 'return-unarrived', '退回未到货', userId, `生成退货单 ${businessNo}`);
+      await this.logOrderTransition(
+        tx,
+        poId,
+        'return-unarrived',
+        '退回未到货',
+        userId,
+        `生成退货单 ${businessNo}`,
+      );
       return { id: header.po_exit_id, businessNo, message: '未到货数量已退回，退货记录已生成' };
     });
   }
@@ -2760,9 +3339,7 @@ export class PurchaseService {
           inputType === 2
             ? Math.max(
                 0,
-                progress.exchangeReturned -
-                  progress.confirmedExchange -
-                  progress.pendingExchange,
+                progress.exchangeReturned - progress.confirmedExchange - progress.pendingExchange,
               )
             : Math.max(
                 0,
@@ -2887,9 +3464,7 @@ export class PurchaseService {
           select: { po_id: true, po_no: true, pur_id: true, vendor_id: true },
         })
       : [];
-    const vendorIds = [
-      ...new Set(orders.map((item) => item.vendor_id).filter((id) => id > 0n)),
-    ];
+    const vendorIds = [...new Set(orders.map((item) => item.vendor_id).filter((id) => id > 0n))];
     const vendors = vendorIds.length
       ? await this.prisma.hspsi_basic_vendor.findMany({
           where: { vendor_id: { in: vendorIds } },
@@ -3446,15 +4021,12 @@ export class PurchaseService {
         }
         for (const [key, qty] of currentQty) {
           const progress = lifecyclePosition.lineProgress.get(key);
-          if (!progress)
-            throw new BadRequestException('采购入库明细不属于来源采购订单');
+          if (!progress) throw new BadRequestException('采购入库明细不属于来源采购订单');
           const exchange = Number(header.input_type) === 2;
           const allowed = exchange
             ? progress.exchangeReturned
             : Math.max(0, progress.ordered - progress.cancelled);
-          const alreadyConfirmed = exchange
-            ? progress.confirmedExchange
-            : progress.confirmedNormal;
+          const alreadyConfirmed = exchange ? progress.confirmedExchange : progress.confirmedNormal;
           if (alreadyConfirmed + qty > allowed + 0.000001)
             throw new BadRequestException(
               exchange
@@ -3616,7 +4188,8 @@ export class PurchaseService {
           id: item.po_exit_id,
           returnNo: item.po_exit_no,
           receiptId: item.po_input_id,
-          receiptNo: item.po_input_id > 0n ? (receiptNoById.get(String(item.po_input_id)) ?? null) : null,
+          receiptNo:
+            item.po_input_id > 0n ? (receiptNoById.get(String(item.po_input_id)) ?? null) : null,
           orderId: item.po_id,
           orderNo: ord?.po_no ?? null,
           sourceType: fromReceipt ? 'receipt' : 'order',
@@ -4671,6 +5244,7 @@ export class PurchaseService {
         where: { po_id: poId, deleted_at: null },
       });
       if (!order) throw new NotFoundException('采购订单不存在');
+      if (Number(order.status) === 1) throw new BadRequestException('请先开始采购，再登记采购付款');
       const current = id
         ? await tx.hspsi_purchase_order_payment.findFirst({
             where: { pay_id: BigInt(id), po_id: poId, deleted_at: null },
