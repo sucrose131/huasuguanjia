@@ -25,11 +25,15 @@ export const OA_FORM_MAPPINGS = {
   purchase_application: {
     businessType: 'purchase_application',
     formKey: 'AAC15400_NFORM_380054577920868353',
-    formId: '380224042294837248',
+    // 2026-09-02 从 OA 正式表单（华溯管家-采购申请）实时核对：新结构
+    // 承办部门/成本承担组织/目标仓库/收货人/申请原因/备注/附件/采购明细
+    formId: '384157596683534338',
     fields: {
-      reason: field('FinInput', 'dhi6d3c7oecn'),
+      deptName: field('FinInput', 'np0kahtk2860'),
+      costOrgName: field('FinInput', 'dhi6d3c7oecn'),
       warehouse: field('FinInput', 'iluym6g473ox'),
-      source: field('FinInput', 'jg2zwug75y3c'),
+      receiver: field('FinInput', 'jg2zwug75y3c'),
+      reason: field('FinTextArea', 'zq6glso6x8co'),
       remark: field('FinTextArea', 'tp1teg5kd21y'),
       attachments: field('FinUpload', 'pc744eoan0wp'),
       details: field('FinTable', 'vdd3e94g4ho9'),

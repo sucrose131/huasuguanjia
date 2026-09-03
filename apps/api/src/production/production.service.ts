@@ -130,6 +130,8 @@ export class ProductionService {
         pur_no: purNo,
         org_id: plan.org_id,
         dept_id: fallbackDept.dept_id,
+        // 未单独指定推送组织：OA 栏回显所属组织（与 oa_org_id=0 回退 org_id 语义一致）
+        oa_org_id: plan.org_id,
         pur_reson: `生产计划 ${plan.plan_no} 缺料采购`,
         source_type: 'production_plan',
         source_id: plan.plan_id,
