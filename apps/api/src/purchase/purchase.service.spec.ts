@@ -215,6 +215,22 @@ describe('PurchaseService quick catalog materialization', () => {
     expect(skuCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ good_id: 101n, spec_models: '默认规格', is_default: 1 }),
     });
+    // 收货经办人(receiverId=9) 回填到 申请/订单/入库单 三条链路；申请 OA 组织回显所属组织
+    expect(applicationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source_type: 'temporary_receipt',
+          receiver_id: 9n,
+          oa_org_id: 1n,
+        }),
+      }),
+    );
+    expect(orderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receiver_id: 9n }) }),
+    );
+    expect(receiptCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receiver_id: 9n }) }),
+    );
     expect(applicationDetailCreate).toHaveBeenCalledWith({
       data: [expect.objectContaining({ goods_id: 101n, sku_id: 202n, qty: 2 })],
     });
@@ -493,13 +509,8 @@ describe('PurchaseService receipt confirmation', () => {
 });
 
 describe('PurchaseService production-shortage guards', () => {
-  it('采购申请组织选项包含直接授权组织的有效上级组织', async () => {
-    const service = serviceWith({
-      $queryRaw: vi.fn().mockResolvedValue([
-        { org_id: 13n, parent_id: 0n, name: '华溯生物科技（深圳）有限公司' },
-        { org_id: 14n, parent_id: 13n, name: '华溯云（深圳）科技有限公司' },
-      ]),
-    });
+  it('成本承担组织选项只含直接授权组织，不向上展开上级组织', async () => {
+    const service = serviceWith({});
 
     await expect(
       service.applicationOrganizationOptions({
@@ -511,10 +522,7 @@ describe('PurchaseService production-shortage guards', () => {
         authorizedOrganizations: [{ id: '14', name: '华溯云（深圳）科技有限公司' }],
         permissions: ['purchase'],
       }),
-    ).resolves.toEqual([
-      { value: '14', label: '华溯云（深圳）科技有限公司' },
-      { value: '13', label: '华溯生物科技（深圳）有限公司' },
-    ]);
+    ).resolves.toEqual([{ value: '14', label: '华溯云（深圳）科技有限公司' }]);
   });
 
   it('采购申请允许使用当前账号已授权的额外组织', async () => {
@@ -1190,6 +1198,7 @@ describe('PurchaseService production-shortage guards', () => {
           dept_id: 2n,
           warehouse_id: 3n,
           vendor_id: 4n,
+          receiver_id: 8n,
           status: 1,
           remark: '',
         }),
@@ -1233,6 +1242,8 @@ describe('PurchaseService production-shortage guards', () => {
         data: expect.objectContaining({
           source_type: 'direct_order',
           source_id: 20n,
+          receiver_id: 8n,
+          oa_org_id: 1n,
           status: 1,
           approve_status: 1,
         }),

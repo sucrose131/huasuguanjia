@@ -71,38 +71,16 @@ export class PurchaseService {
     };
   }
   /**
-   * 采购申请所属组织：当前账号已经生效的数据权限组织，以及这些组织的有效上级组织。
+   * 采购申请成本承担组织：当前账号直接授权的组织（含登录账号所属组织）。
    *
-   * OA 中人员经常挂在子公司/下级组织，但采购申请需要允许其以上级法人组织身份发起；
-   * 因此这里只扩展祖先组织，不扩展同级或其他下级组织。
+   * 不向上展开祖先组织：成本归属必须落在账号数据权限范围内；"人员挂子公司、
+   * 以上级法人组织身份发起"的场景由推送OA组织（oa_org_id，账套内祖先展开）承担。
    */
   private async applicationOrganizations(user: AuthUser) {
     const organizations = new Map<string, string>();
     if (user.orgId) organizations.set(String(user.orgId), user.orgName ?? '当前所属组织');
     for (const organization of user.authorizedOrganizations ?? []) {
       organizations.set(String(organization.id), organization.name);
-    }
-
-    // 组织层级查询必须能看见授权范围之外的父节点。这里用只读原生查询绕过
-    // 通用数据权限中间件；最终返回值仍只保留直接授权组织及其祖先。
-    const activeOrganizations = await this.prisma.$queryRaw<
-      Array<{ org_id: bigint; parent_id: bigint; name: string }>
-    >`SELECT org_id, parent_id, name
-      FROM hspsi_basic_organization
-      WHERE operation_status = 1 AND deleted_at IS NULL`;
-    const byId = new Map(activeOrganizations.map((item) => [String(item.org_id), item]));
-    for (const organizationId of [...organizations.keys()]) {
-      let current = byId.get(organizationId);
-      const visited = new Set<string>();
-      while (current?.parent_id && current.parent_id > 0n) {
-        const parentId = String(current.parent_id);
-        if (visited.has(parentId)) break;
-        visited.add(parentId);
-        const parent = byId.get(parentId);
-        if (!parent) break;
-        organizations.set(parentId, parent.name);
-        current = parent;
-      }
     }
     return organizations;
   }
@@ -282,7 +260,7 @@ export class PurchaseService {
     });
   }
 
-  /** 采购申请可代组织发起，但所选组织必须属于直接授权组织或其有效上级组织。 */
+  /** 采购申请可代组织发起，但所选成本承担组织必须属于当前账号直接授权组织范围。 */
   private async assertApplicationOrganization(user: AuthUser, orgId: bigint) {
     if (user.isSuperAdmin) return;
     const authorized = await this.applicationOrganizations(user);
@@ -3024,6 +3002,10 @@ export class PurchaseService {
             pur_no: applicationNo,
             org_id: order.org_id,
             dept_id: order.dept_id,
+            // 反向生成的申请沿用订单收货人，保证 申请→订单 链路收货人一致
+            receiver_id: order.receiver_id,
+            // 未单独指定推送组织：OA 栏回显所属组织（与 oa_org_id=0 回退 org_id 语义一致）
+            oa_org_id: order.org_id,
             pur_reson: `由直接采购订单 ${order.po_no} 系统反向生成`,
             source_type: 'direct_order',
             source_id: poId,
@@ -3622,6 +3604,8 @@ export class PurchaseService {
     for (const line of lines)
       if (!String(line.batchNo ?? '').trim()) line.batchNo = generateBatchNo();
     const qty = lines.reduce((sum, line) => sum + Number(line.inputQuantity), 0);
+    // 收货经办人（收货人）统一取值：表单未传时回退当前用户；申请/订单/入库三条链路共用同一值
+    const chainReceiverId = body.receiverId ? BigInt(String(body.receiverId)) : BigInt(userId);
     return this.guardedTransaction(async (tx) => {
       if (isDirect) await this.materializeQuickCatalog(tx, lines, userId);
       let finalPoId = BigInt(0);
@@ -3680,6 +3664,10 @@ export class PurchaseService {
             pur_no: purNo,
             org_id: finalOrgId,
             dept_id: deptId,
+            // 收货经办人回填收货人：与同链路生成的订单/入库单保持一致
+            receiver_id: chainReceiverId,
+            // 未单独指定推送组织：OA 栏回显所属组织
+            oa_org_id: finalOrgId,
             pur_reson: `由采购入库单系统生成`,
             source_type: 'temporary_receipt',
             source_id: 0n,
@@ -3716,7 +3704,7 @@ export class PurchaseService {
             org_id: finalOrgId,
             warehouse_id: finalWhId,
             dept_id: deptId,
-            receiver_id: BigInt(userId),
+            receiver_id: chainReceiverId,
             vendor_id: resolvedVendorId,
             pcs_qty: qty,
             arrival_type: 1,
@@ -3800,7 +3788,7 @@ export class PurchaseService {
         input_type: Number(body.inputType),
         po_qty: pcsQty,
         input_qty: qty,
-        receiver_id: BigInt(String(body.receiverId)),
+        receiver_id: chainReceiverId,
         remark: String(body.remark ?? ''),
         updated_by: BigInt(userId),
         updated_at: new Date(),
