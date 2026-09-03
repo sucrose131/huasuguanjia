@@ -1626,8 +1626,8 @@ describe('RequisitionService direct output cross-org options and authorization',
     );
     // 候选不被库存收窄：零库存与无库存记录商品仍返回
     expect(result.map((item: any) => item.id)).toEqual([100n, 101n, 103n]);
-    expect(result[0].stockByWarehouse).toEqual({ '49': 5, '48': 2 });
-    expect(result[1].stockByWarehouse).toEqual({});
-    expect(result[2].stockByWarehouse).toEqual({});
+    expect(result[0]!.stockByWarehouse).toEqual({ '49': 5, '48': 2 });
+    expect(result[1]!.stockByWarehouse).toEqual({});
+    expect(result[2]!.stockByWarehouse).toEqual({});
   });
 });

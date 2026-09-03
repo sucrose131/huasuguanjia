@@ -2154,6 +2154,17 @@ export class PurchaseService {
         throw new BadRequestException(`第 ${index + 1} 行采购总金额最多保留2位小数`);
       amountByLineId.set(String(requestedIds[index]), amount);
     }
+    // 本次采购数量（可选）：整单/选品生成时可指定与实际采购一致的数量（可与申请数量不同，允许超量）；
+    // 未传时沿用申请数量，保持既有行为。
+    const quantityByLineId = new Map<string, number>();
+    for (const [index, line] of requestedLines.entries()) {
+      const quantity = Number(line.quantity ?? 0);
+      if (Number.isSafeInteger(quantity) && quantity > 0) {
+        quantityByLineId.set(String(requestedIds[index]), quantity);
+      } else if (String(line.quantity ?? '').trim() !== '') {
+        throw new BadRequestException(`第 ${index + 1} 行本次采购数量必须为正整数`);
+      }
+    }
 
     return this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
@@ -2257,7 +2268,8 @@ export class PurchaseService {
         selectedLines,
       );
       const pricedLines = selectedLines.map((line) => {
-        const quantity = this.quantity(line.qty, '采购申请数量');
+        const quantity =
+          quantityByLineId.get(String(line.id)) ?? this.quantity(line.qty, '采购申请数量');
         const totalAmount = amountByLineId.get(String(line.id))!;
         return {
           line,
@@ -3034,6 +3046,14 @@ export class PurchaseService {
             remark: line.remark,
           })),
         });
+        // 反向生成的申请与已有订单明细建立关联：订单明细 source_application_detail_id 指向新申请明细
+        // （订单明细按 goods+sku 唯一，见 assertUniqueOrderLines）
+        await tx.$executeRaw`
+          UPDATE hspsi_purchase_order_detail od
+          JOIN hspsi_purchase_approve_detail ad
+            ON ad.goods_id = od.goods_id AND ad.sku_id = od.sku_id AND ad.pur_id = ${applicationId}
+          SET od.source_application_detail_id = ad.id
+          WHERE od.po_id = ${poId} AND od.source_application_detail_id IS NULL`;
       }
       await tx.hspsi_purchase_order.update({
         where: { po_id: poId },
@@ -3746,6 +3766,14 @@ export class PurchaseService {
             remark: String(line.remark ?? ''),
           })),
         });
+        // 反向生成的申请与订单明细建立关联：订单明细 source_application_detail_id 指向新申请明细
+        // （订单明细由同一批 lines 生成，goods+sku 与申请明细一一对应）
+        await tx.$executeRaw`
+          UPDATE hspsi_purchase_order_detail od
+          JOIN hspsi_purchase_approve_detail ad
+            ON ad.goods_id = od.goods_id AND ad.sku_id = od.sku_id AND ad.pur_id = ${purId}
+          SET od.source_application_detail_id = ad.id
+          WHERE od.po_id = ${newPoId} AND od.source_application_detail_id IS NULL`;
         finalPoId = newPoId;
         finalPoNo = orderNo;
         pcsQty = qty;
