@@ -1981,6 +1981,17 @@ export class PurchaseService {
         throw new BadRequestException(`第 ${index + 1} 行采购总金额最多保留2位小数`);
       amountByLineId.set(String(requestedIds[index]), amount);
     }
+    // 本次采购数量（可选）：整单/选品生成时可指定与实际采购一致的数量（可与申请数量不同，允许超量）；
+    // 未传时沿用申请数量，保持既有行为。
+    const quantityByLineId = new Map<string, number>();
+    for (const [index, line] of requestedLines.entries()) {
+      const quantity = Number(line.quantity ?? 0);
+      if (Number.isSafeInteger(quantity) && quantity > 0) {
+        quantityByLineId.set(String(requestedIds[index]), quantity);
+      } else if (String(line.quantity ?? '').trim() !== '') {
+        throw new BadRequestException(`第 ${index + 1} 行本次采购数量必须为正整数`);
+      }
+    }
 
     return this.guardedTransaction(async (tx) => {
       await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
@@ -2084,7 +2095,8 @@ export class PurchaseService {
         selectedLines,
       );
       const pricedLines = selectedLines.map((line) => {
-        const quantity = this.quantity(line.qty, '采购申请数量');
+        const quantity =
+          quantityByLineId.get(String(line.id)) ?? this.quantity(line.qty, '采购申请数量');
         const totalAmount = amountByLineId.get(String(line.id))!;
         return {
           line,

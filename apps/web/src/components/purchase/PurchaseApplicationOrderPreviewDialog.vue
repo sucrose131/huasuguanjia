@@ -61,7 +61,10 @@ const effectiveRows = computed(() =>
   props.mode === 'all' ? remainingRows.value : selectedRows.value,
 );
 const selectedQuantity = computed(() =>
-  effectiveRows.value.reduce((sum: number, item: any) => sum + Number(item.quantity ?? 0), 0),
+  effectiveRows.value.reduce(
+    (sum: number, item: any) => sum + Number(item.orderQuantity ?? item.quantity ?? 0),
+    0,
+  ),
 );
 const selectedAmount = computed(() =>
   effectiveRows.value.reduce((sum: number, item: any) => sum + Number(item.totalAmount ?? 0), 0),
@@ -80,7 +83,7 @@ const protectedMoneyText = (value: unknown) =>
   props.canViewAmount ? `¥ ${moneyText(value)}` : '****';
 const canSelect = (row: any) => row.generationStatus !== 'generated';
 const rowUnitPrice = (row: any) => {
-  const quantity = Number(row.quantity ?? 0);
+  const quantity = Number(row.orderQuantity ?? row.quantity ?? 0);
   return quantity > 0 ? Number(row.totalAmount ?? 0) / quantity : 0;
 };
 
@@ -128,6 +131,8 @@ async function load() {
         skuName: sku?.specModels || sku?.skuName || sku?.skuNo || `规格 ${line.skuId}`,
         unitType: line.unitType || sku?.unitType || product?.unitType,
         referencePrice,
+        // 本次采购数量默认带出申请数量，可上下调整（实际采购量可与申请量不同，允许超量）
+        orderQuantity: Number(line.quantity ?? 0),
         totalAmount:
           referencePrice == null
             ? null
@@ -176,6 +181,13 @@ async function submitOrder() {
     ElMessage.warning(`请填写“${missingAmount.goodsName}”的采购总金额`);
     return;
   }
+  const invalidQuantity = effectiveRows.value.find(
+    (item: any) => !Number.isInteger(Number(item.orderQuantity ?? item.quantity ?? 0)) || Number(item.orderQuantity ?? item.quantity ?? 0) <= 0,
+  );
+  if (invalidQuantity) {
+    ElMessage.warning(`请填写“${invalidQuantity.goodsName}”的本次采购数量（正整数）`);
+    return;
+  }
   submitting.value = true;
   try {
     const result = (await api.post(`/purchase/applications/${props.applicationId}/generate-order`, {
@@ -184,6 +196,7 @@ async function submitOrder() {
       details: effectiveRows.value.map((item: any) => ({
         applicationDetailId: String(item.applicationDetailId),
         totalAmount: Number(item.totalAmount),
+        quantity: Number(item.orderQuantity ?? item.quantity),
       })),
     })) as any;
     ElMessage.success(result.message ?? '采购订单已生成');
@@ -358,6 +371,27 @@ watch(
             <template #default="scope">{{ lookup('units', scope.row.unitType) }}</template>
           </el-table-column>
           <el-table-column prop="quantity" label="申请数量" width="96" align="right" />
+          <el-table-column label="本次采购数量" width="150" align="right">
+            <template #default="scope">
+              <el-input-number
+                v-if="scope.row.generationStatus !== 'generated' && canEditAmount"
+                v-model="scope.row.orderQuantity"
+                :min="1"
+                :precision="0"
+                :step="1"
+                controls-position="right"
+              />
+              <span v-else>{{ scope.row.orderQuantity ?? scope.row.quantity }}</span>
+              <div
+                v-if="
+                  Number(scope.row.orderQuantity ?? 0) > Number(scope.row.quantity ?? 0)
+                "
+                class="over-qty-hint"
+              >
+                超申请量 {{ Number(scope.row.orderQuantity ?? 0) - Number(scope.row.quantity ?? 0) }}
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="生成状态" width="104">
             <template #default="scope">
               <el-tag
@@ -419,6 +453,11 @@ watch(
 </template>
 
 <style scoped>
+.over-qty-hint {
+  color: #e6a23c;
+  font-size: 12px;
+  line-height: 16px;
+}
 .generation-dialog-content {
   min-height: 220px;
   font-size: var(--hs-font-body);

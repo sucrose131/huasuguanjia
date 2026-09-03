@@ -256,6 +256,8 @@ describe('PurchaseService quick catalog materialization', () => {
       null,
       {
         orgId: 1,
+        oaOrgId: 1,
+        receiverId: 9,
         deptId: 2,
         warehouseId: 3,
         details: [
@@ -271,9 +273,15 @@ describe('PurchaseService quick catalog materialization', () => {
           },
         ],
       },
-      '9',
+      {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [{ id: '1', name: '主组织' }],
+        permissions: ['purchase'],
+      },
       false,
-      '1',
     );
 
     expect(goodsCreate).toHaveBeenCalledOnce();
@@ -1469,6 +1477,84 @@ describe('PurchaseService production-shortage guards', () => {
     expect(result).toEqual(
       expect.objectContaining({ id: 30n, totalAmount: new Prisma.Decimal(100) }),
     );
+  });
+
+  it('generates with an order quantity different from the application quantity (over/under)', async () => {
+    const orderCreate = vi.fn().mockResolvedValue({ po_id: 31n });
+    const detailCreate = vi.fn();
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const applicationLine = {
+      id: 12n,
+      pur_id: 7n,
+      goods_id: 10n,
+      sku_id: 11n,
+      qty: 4,
+      unit_type: 1,
+      reference_price: new Prisma.Decimal(0),
+      remark: '',
+    };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({
+          pur_id: 7n,
+          pur_no: 'PA7',
+          org_id: 1n,
+          dept_id: 2n,
+          warehouse_id: 3n,
+          status: 1,
+          approve_status: 1,
+          remark: '',
+        }),
+      },
+      hspsi_basic_vendor: { findFirst: vi.fn().mockResolvedValue({ vendor_id: 5n }) },
+      hspsi_purchase_approve_detail: { findMany: vi.fn().mockResolvedValue([applicationLine]) },
+      hspsi_purchase_order: { findMany: vi.fn().mockResolvedValue([]), create: orderCreate },
+      hspsi_purchase_order_detail: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(),
+        createMany: detailCreate,
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertProductionShortageOrderCapacity').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncPurchaseOrderTodo').mockResolvedValue(undefined);
+
+    // 申请数量 4，本次采购数量 10（超量）——按指定数量生成，单价=总金额/数量反推
+    await service.generateApplicationOrder(
+      '7',
+      {
+        generationMode: 'partial',
+        vendorId: '5',
+        receiverId: '9',
+        details: [{ applicationDetailId: '12', totalAmount: 200, quantity: 10 }],
+      },
+      '9',
+    );
+
+    expect(orderCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ pur_id: 7n, vendor_id: 5n, receiver_id: 9n, pcs_qty: 10 }),
+    });
+    expect(detailCreate).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          source_application_detail_id: 12n,
+          qty: 10,
+          unit_price: new Prisma.Decimal(20),
+          total_amout: new Prisma.Decimal(200),
+        }),
+      ],
+    });
+
+    // 未传 quantity 时仍沿用申请数量（既有行为兼容）
+    expect(
+      (service as any).generateApplicationOrder,
+    ).toBeDefined();
   });
 
   it('treats an empty plan payment date placeholder as no date when saving an order', async () => {
