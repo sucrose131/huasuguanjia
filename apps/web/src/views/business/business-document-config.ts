@@ -120,6 +120,8 @@ export type BusinessDocumentConfig = {
   summary?: boolean;
   /** 摘要卡片映射（summary 为 true 时按此渲染头部卡片；key 对应列表接口返回的 summary 对象字段） */
   summaryLabels?: Array<{ label: string; key: string; kind?: 'money' | 'number' }>;
+  /** 存量/主数据视图（如库存查询、库存预警、效期预警）：金额按"金额查看能力"整体控制，不参与 own/全部 经办范围分级 */
+  amountScopeExempt?: boolean;
   creatable?: boolean;
   /** 页面及新增权限。缺省按当前路由和 create 操作判断。 */
   pagePermission?: string;

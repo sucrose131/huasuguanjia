@@ -163,7 +163,9 @@ function displayCell(
 
 // 记录级金额掩码判定：无查看权（能力级）或 范围 own 且非本人创建的行，金额一律以 ¥ **** 呈现，
 // 避免后端 null（脱敏）被 render 的 ?? 0 兜成 ¥ 0.00 造成误导。
+// 存量/主数据视图（config.amountScopeExempt，如库存查询/预警）不做按行掩码，金额仅由能力级控制。
 const recordAmountMasked = (row: Record<string, any>) => {
+  if (props.config.amountScopeExempt) return false;
   const amount = useAuthStore().amountAccess;
   if (!amount.canViewAmount) return true;
   if ((amount.amountScope ?? 'all') === 'own')
