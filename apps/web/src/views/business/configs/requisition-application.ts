@@ -2,6 +2,13 @@ import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage } from 'element-plus';
 import RequisitionApplicationForm from '../forms/RequisitionApplicationForm.vue';
+import {
+  approvalStatusText,
+  approvalStatusType,
+} from '@/utils/approval-status';
+
+// 兼容导出（既有单元测试沿用旧名称）
+export { approvalStatusText as requisitionApprovalStatusText };
 
 const hasActiveOaApproval = (row: Record<string, any>) =>
   ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? ''));
@@ -28,8 +35,14 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
     { prop: 'date', label: '申请日期', minWidth: 110, kind: 'date' },
     { prop: 'quantity', label: '申请总量', minWidth: 105, kind: 'number', align: 'right' },
     { prop: 'actualQty', label: '实际领用', minWidth: 105, kind: 'number', align: 'right' },
-    { prop: 'approveStatusName', label: '审批状态', minWidth: 105, kind: 'status' },
-    { prop: 'oaStatusName', label: 'OA状态', minWidth: 105, kind: 'status' },
+    {
+      prop: 'approveStatus',
+      label: '审批状态',
+      minWidth: 130,
+      kind: 'status',
+      statusType: approvalStatusType,
+      render: approvalStatusText,
+    },
     { prop: 'createdByName', label: '创建人', minWidth: 110 },
     { prop: 'createdAt', label: '创建时间', minWidth: 150, kind: 'datetime' },
   ],
