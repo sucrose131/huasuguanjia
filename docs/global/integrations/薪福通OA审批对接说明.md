@@ -242,6 +242,8 @@ Content-Type: application/json
 ```
 
 > **条件必填**：退回需 `backNodeId`；转派需 `transferApproverId`；加签需 `addSignType` 与非空 `addSignApproverIdList`；通过/提交/否决/转派/加签需 `taskId`。撤销不要求 `taskId`。仅支持自定义流程及包含套件的系统表单。
+>
+> 采购申请创建人终止或撤回审批时，本系统在本地落账前先调用 `dealProcess(operateType=cancel)`；OA 失败则本地仍保持审批中。OA 侧取消回调仍按终止写入 `approve_status=3`；若本地已撤回成草稿则忽略该回调的单据落账。
 
 #### 2.4.6 OA审批流程结束事件回调
 

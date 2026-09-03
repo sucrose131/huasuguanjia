@@ -10,7 +10,7 @@ const isCurrentApplicant = (row: Record<string, any>) =>
 /**
  * 采购申请单：共享引擎配置。
  *
- * 说明：列表接口返回的是原始 approveStatus（0 待审批 / 1 已通过 / 2 已驳回）与
+ * 说明：列表接口返回的是原始 approveStatus（0 待审批 / 1 已通过 / 2 已驳回 / 3 已取消）与
  * generationStatus（not_generated / partially_generated / fully_generated）等数字/枚举值，
  * 列表接口提供 createdByName；组织、部门和仓库继续复用共享选项袋显示。
  */
@@ -137,6 +137,37 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       handler: async (row) => {
         const result: any = await api.post(`/purchase/applications/${row.id}/submit`, {});
         ElMessage.success(result?.message ?? '已提交审批');
+      },
+    },
+    {
+      key: 'withdraw',
+      label: '撤回',
+      kind: 'warning',
+      primary: false,
+      show: (row) =>
+        isCurrentApplicant(row) &&
+        Number(row.status) === 1 &&
+        Number(row.approveStatus) === 0 &&
+        row.sourceType !== 'production_plan',
+      confirm: '撤回后单据将回到草稿，可修改后重新提交，是否继续？',
+      confirmTitle: '撤回审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/purchase/applications/${row.id}/withdraw`, {});
+        ElMessage.success(result?.message ?? '采购申请已撤回');
+      },
+    },
+    {
+      key: 'terminate',
+      label: '终止',
+      kind: 'danger',
+      primary: false,
+      show: (row) =>
+        isCurrentApplicant(row) && Number(row.status) === 1 && Number(row.approveStatus) === 0,
+      confirm: '终止后审批将结束，且不能再编辑提交，是否继续？',
+      confirmTitle: '终止审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/purchase/applications/${row.id}/terminate`, {});
+        ElMessage.success(result?.message ?? '采购申请已终止');
       },
     },
     {

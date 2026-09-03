@@ -35,6 +35,18 @@ describe('inferRequestPermissions', () => {
         originalUrl: '/api/purchase/applications/7/approve',
       }),
     ).toEqual(['purchase:applications', 'purchase:applications:approve']);
+    expect(
+      inferRequestPermissions({
+        method: 'POST',
+        originalUrl: '/api/purchase/applications/7/terminate',
+      }),
+    ).toEqual(['purchase:applications', 'purchase:applications:terminate']);
+    expect(
+      inferRequestPermissions({
+        method: 'POST',
+        originalUrl: '/api/purchase/applications/7/withdraw',
+      }),
+    ).toEqual(['purchase:applications', 'purchase:applications:withdraw']);
   });
 
   it('处理专用操作和别名路由', () => {

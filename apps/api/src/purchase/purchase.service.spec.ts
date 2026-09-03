@@ -6,6 +6,7 @@ function serviceWith(
   prisma: Record<string, any>,
   trace: Record<string, any> = { link: vi.fn(), removeForDocument: vi.fn() },
   message: Record<string, any> = { sendPurchaseReceiptNotification: vi.fn() },
+  oaApproval: Record<string, any> = { cancelRemoteProcess: vi.fn().mockResolvedValue(undefined) },
 ) {
   const prismaWithDefaults = {
     $queryRaw: vi.fn().mockResolvedValue([]),
@@ -28,6 +29,7 @@ function serviceWith(
     message as never,
     todoService as never,
     { stageUploadUrl: vi.fn(), commitStaged: vi.fn(), discardStaged: vi.fn() } as never,
+    oaApproval as never,
   );
   vi.spyOn(service as any, 'assertReceiverScope').mockResolvedValue(undefined);
   vi.spyOn(service as any, 'resolveApplicationOaSelection').mockResolvedValue({
@@ -256,6 +258,8 @@ describe('PurchaseService quick catalog materialization', () => {
       null,
       {
         orgId: 1,
+        oaOrgId: 1,
+        receiverId: 9,
         deptId: 2,
         warehouseId: 3,
         details: [
@@ -271,9 +275,14 @@ describe('PurchaseService quick catalog materialization', () => {
           },
         ],
       },
-      '9',
-      false,
-      '1',
+      {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [{ id: '1', name: '主组织' }],
+        permissions: ['purchase'],
+      },
     );
 
     expect(goodsCreate).toHaveBeenCalledOnce();
@@ -2017,3 +2026,461 @@ describe('PurchaseService paid order todo notification', () => {
     expect(tx.hspsi_purchase_order_payment.create).not.toHaveBeenCalled();
   });
 });
+
+describe('PurchaseService terminateApplication', () => {
+  const pending = {
+    pur_id: 7n,
+    pur_no: 'PA7',
+    created_by: 9n,
+    status: 1,
+    approve_status: 0,
+    source_type: 'manual',
+  };
+
+  it('rejects terminate by a non-creator', async () => {
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn() },
+      $transaction: vi.fn(),
+    };
+
+    await expect(serviceWith(prisma).terminateApplication('7', '8')).rejects.toThrow(
+      '个人无权终止他人发起的采购申请',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects terminate when the application is not pending approval', async () => {
+    const prisma = {
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({ ...pending, status: 0 }),
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn() },
+      $transaction: vi.fn(),
+    };
+
+    await expect(serviceWith(prisma).terminateApplication('7', '9')).rejects.toThrow(
+      '仅审批中的采购申请可以终止',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second terminate after the application is already terminated', async () => {
+    const prisma = {
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({ ...pending, approve_status: 3 }),
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn() },
+      $transaction: vi.fn(),
+    };
+
+    await expect(serviceWith(prisma).terminateApplication('7', '9')).rejects.toThrow(
+      '采购申请已终止，不能重复终止',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses terminate while the OA instance is still pending push', async () => {
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue({ id: 21n, proc_status: 'PENDING_PUSH' }),
+      },
+      $transaction: vi.fn(),
+    };
+    const oaApproval = { cancelRemoteProcess: vi.fn() };
+
+    await expect(
+      serviceWith(prisma, undefined, undefined, oaApproval).terminateApplication('7', '9'),
+    ).rejects.toThrow('正在推送OA，请稍后重试');
+    expect(oaApproval.cancelRemoteProcess).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('terminates locally when there is no OA instance', async () => {
+    const update = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(pending),
+        findUnique: vi.fn().mockResolvedValue({ source_type: 'manual' }),
+        update,
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null), update: vi.fn() },
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const oaApproval = { cancelRemoteProcess: vi.fn() };
+
+    const result = await serviceWith(prisma, undefined, undefined, oaApproval).terminateApplication(
+      '7',
+      '9',
+    );
+
+    expect(oaApproval.cancelRemoteProcess).not.toHaveBeenCalled();
+    expect(result.message).toBe('采购申请已终止');
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          approve_status: 3,
+          approve_comment: '创建人终止审批',
+        }),
+      }),
+    );
+    expect(tx.hspsi_oa_approval_instance.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local document pending when OA revoke fails', async () => {
+    const running = {
+      id: 21n,
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+      bus_key: 'purchase_application:7',
+      business_id: 7n,
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(running) },
+      $transaction: vi.fn(),
+    };
+    const oaApproval = {
+      cancelRemoteProcess: vi.fn().mockRejectedValue(new Error('撤销OA审批失败：网络超时')),
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, undefined, oaApproval).terminateApplication('7', '9'),
+    ).rejects.toThrow('撤销OA审批失败：网络超时');
+    expect(oaApproval.cancelRemoteProcess).toHaveBeenCalledWith(running, '9', '创建人终止审批');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('revokes OA first then writes approve_status=3', async () => {
+    const running = {
+      id: 21n,
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+      bus_key: 'purchase_application:7',
+      business_id: 7n,
+    };
+    const update = vi.fn();
+    const instanceUpdate = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(pending),
+        findUnique: vi.fn().mockResolvedValue({ source_type: 'manual' }),
+        update,
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(running), update: instanceUpdate },
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(running) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const oaApproval = { cancelRemoteProcess: vi.fn().mockResolvedValue(undefined) };
+
+    const result = await serviceWith(prisma, undefined, undefined, oaApproval).terminateApplication(
+      '7',
+      '9',
+    );
+
+    expect(oaApproval.cancelRemoteProcess).toHaveBeenCalledWith(running, '9', '创建人终止审批');
+    expect(result.message).toBe('采购申请已终止');
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ approve_status: 3 }),
+      }),
+    );
+    expect(instanceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ proc_status: 'CANCELED' }),
+      }),
+    );
+  });
+
+  it('rolls a production shortage back when the creator terminates the application', async () => {
+    const shortageApp = { ...pending, source_type: 'production_plan' };
+    const shortageUpdate = vi.fn();
+    const planUpdate = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(shortageApp),
+        findUnique: vi.fn().mockResolvedValue({ source_type: 'production_plan' }),
+        update: vi.fn(),
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null), update: vi.fn() },
+      hspsi_purchase_approve_detail: {
+        findMany: vi.fn().mockResolvedValue([{ source_shortage_id: 8n }]),
+      },
+      hspsi_production_shortage: {
+        findMany: vi.fn().mockResolvedValue([{ shortage_id: 8n, plan_id: 9n }]),
+        updateMany: shortageUpdate,
+      },
+      hspsi_production_plan: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ plan_status: 7, outbound_status: 0, delivered_qty: 0 }),
+        update: planUpdate,
+      },
+      hspsi_production_material_out: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_production_plan_input: { count: vi.fn().mockResolvedValue(0) },
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(shortageApp) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await serviceWith(prisma).terminateApplication('7', '9');
+
+    expect(shortageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 0, pur_id: 0n }),
+      }),
+    );
+    expect(planUpdate).toHaveBeenCalled();
+  });
+});
+
+describe('PurchaseService withdrawApplication', () => {
+  const pending = {
+    pur_id: 7n,
+    pur_no: 'PA7',
+    created_by: 9n,
+    status: 1,
+    approve_status: 0,
+    source_type: 'manual',
+  };
+
+  it('rejects withdraw by a non-creator', async () => {
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn() },
+      $transaction: vi.fn(),
+    };
+
+    await expect(serviceWith(prisma).withdrawApplication('7', '8')).rejects.toThrow(
+      '个人无权撤回他人发起的采购申请',
+    );
+  });
+
+  it('rejects withdraw of a production shortage application', async () => {
+    const prisma = {
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({ ...pending, source_type: 'production_plan' }),
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn() },
+      $transaction: vi.fn(),
+    };
+
+    await expect(serviceWith(prisma).withdrawApplication('7', '9')).rejects.toThrow(
+      '生产缺料采购申请不能撤回，如需结束请使用终止',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('withdraws locally to draft when there is no OA instance', async () => {
+    const update = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(pending),
+        update,
+      },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null), update: vi.fn() },
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+
+    const result = await serviceWith(prisma).withdrawApplication('7', '9');
+
+    expect(result.message).toBe('采购申请已撤回');
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 0,
+          approve_status: 0,
+          approve_comment: '创建人撤回审批',
+        }),
+      }),
+    );
+  });
+
+  it('keeps the local document pending when OA revoke fails on withdraw', async () => {
+    const running = {
+      id: 21n,
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+      bus_key: 'purchase_application:7',
+      business_id: 7n,
+    };
+    const prisma = {
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue(pending) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(running) },
+      $transaction: vi.fn(),
+    };
+    const oaApproval = {
+      cancelRemoteProcess: vi.fn().mockRejectedValue(new Error('撤销OA审批失败：网络超时')),
+    };
+
+    await expect(
+      serviceWith(prisma, undefined, undefined, oaApproval).withdrawApplication('7', '9'),
+    ).rejects.toThrow('撤销OA审批失败：网络超时');
+    expect(oaApproval.cancelRemoteProcess).toHaveBeenCalledWith(running, '9', '创建人撤回审批');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('PurchaseService OA CANCELED callback', () => {
+  it('writes approve_status=3 for an OA CANCELED callback', async () => {
+    const instance = {
+      id: 31n,
+      business_type: 'purchase_application',
+      business_id: 7n,
+      bus_key: 'purchase_application:7',
+      proc_inst_id: 'PROC-7',
+      proc_status: 'RUNNING',
+      account_set_id: 1n,
+    };
+    const application = {
+      pur_id: 7n,
+      approve_status: 0,
+      status: 1,
+      source_type: 'manual',
+    };
+    const update = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance),
+        update: vi.fn(),
+      },
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        findUnique: vi.fn().mockResolvedValue({ source_type: 'manual' }),
+        update,
+      },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const prisma = {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const payload = {
+      prjCod: 'PRJ-1',
+      procStatus: 'CANCELED' as const,
+      busKey: 'purchase_application:7',
+      procInstId: 'PROC-7',
+      procKey: 'PROC-KEY',
+      formKey: 'PROC-KEY',
+    };
+
+    const result = await serviceWith(prisma).handleApplicationOaApprovalResult(payload, payload, 99n);
+
+    expect(result).toMatchObject({ processed: true, duplicate: false, procStatus: 'CANCELED' });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          approve_status: 3,
+          approve_comment: 'OA审批取消',
+        }),
+      }),
+    );
+  });
+
+  it('treats a repeated OA CANCELED callback as duplicate when approve_status is already 3', async () => {
+    const instance = {
+      id: 31n,
+      business_type: 'purchase_application',
+      business_id: 7n,
+      bus_key: 'purchase_application:7',
+      proc_inst_id: 'PROC-7',
+      proc_status: 'CANCELED',
+      account_set_id: 1n,
+    };
+    const application = { pur_id: 7n, approve_status: 3, status: 1, source_type: 'manual' };
+    const update = vi.fn();
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance),
+        update: vi.fn(),
+      },
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        update,
+      },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const prisma = {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const payload = {
+      prjCod: 'PRJ-1',
+      procStatus: 'CANCELED' as const,
+      busKey: 'purchase_application:7',
+      procInstId: 'PROC-7',
+      procKey: 'PROC-KEY',
+      formKey: 'PROC-KEY',
+    };
+
+    const result = await serviceWith(prisma).handleApplicationOaApprovalResult(payload, payload, 99n);
+
+    expect(result.duplicate).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a withdrawn draft when the OA CANCELED callback arrives later', async () => {
+    const instance = {
+      id: 31n,
+      business_type: 'purchase_application',
+      business_id: 7n,
+      bus_key: 'purchase_application:7',
+      proc_inst_id: 'PROC-7',
+      proc_status: 'CANCELED',
+      account_set_id: 1n,
+    };
+    const application = { pur_id: 7n, approve_status: 0, status: 0, source_type: 'manual' };
+    const update = vi.fn();
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance),
+        update: vi.fn(),
+      },
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue(application),
+        update,
+      },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const prisma = {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const payload = {
+      prjCod: 'PRJ-1',
+      procStatus: 'CANCELED' as const,
+      busKey: 'purchase_application:7',
+      procInstId: 'PROC-7',
+      procKey: 'PROC-KEY',
+      formKey: 'PROC-KEY',
+    };
+
+    const result = await serviceWith(prisma).handleApplicationOaApprovalResult(payload, payload, 99n);
+
+    expect(result.duplicate).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+

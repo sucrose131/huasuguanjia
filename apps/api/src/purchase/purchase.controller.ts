@@ -123,6 +123,16 @@ export class PurchaseController {
     };
   }
   @RequirePermissions('purchase')
+  @Post('applications/:id/terminate')
+  terminateApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.service.terminateApplication(id, u.id);
+  }
+  @RequirePermissions('purchase')
+  @Post('applications/:id/withdraw')
+  withdrawApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.service.withdrawApplication(id, u.id);
+  }
+  @RequirePermissions('purchase')
   @Post('applications/:id/approve')
   approveApplication(
     @Param('id') id: string,
