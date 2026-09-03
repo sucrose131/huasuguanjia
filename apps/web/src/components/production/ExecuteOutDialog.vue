@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
 import { dateText, moneyText } from '@/utils/format';
+import { recordAmountMasked } from '@/stores/auth';
 import BatchMaterialTable from './BatchMaterialTable.vue';
 import DocumentAttachments from '@/components/DocumentAttachments.vue';
 
@@ -18,6 +19,9 @@ const rows = ref<B[]>([]);
 const allStocks = ref<B[]>([]);
 
 const visible = computed({ get: () => props.modelValue, set: (v) => emit('update:modelValue', v) });
+
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(props.outDoc));
 
 async function load() {
   loading.value = true;
@@ -169,7 +173,7 @@ watch(visible, (v) => {
         </div>
         <div class="eo-fld">
           <span class="eo-fld-lb">金额</span
-          ><span class="eo-fld-vl">¥ {{ moneyText(outDoc.totalAmount ?? 0) }}</span>
+          ><span class="eo-fld-vl">¥ {{ moneyText(amountHidden ? null : outDoc.totalAmount ?? 0) }}</span>
         </div>
         <div class="eo-fld">
           <span class="eo-fld-lb">操作人</span

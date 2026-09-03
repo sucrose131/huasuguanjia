@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { moneyText } from '@/utils/format';
+import { computed } from 'vue';
+import { moneyCell } from '@/utils/format';
+import { useAuthStore } from '@/stores/auth';
 import PurchaseOrderSectionHeader from './PurchaseOrderSectionHeader.vue';
 
 const props = defineProps<{
@@ -14,8 +16,20 @@ const props = defineProps<{
   previewProgressStatus: number;
 }>();
 
+const auth = useAuthStore();
+/** 记录级掩码：无查看权，或（范围 own 且单据非本人创建）→ 金额统一 ¥ ****；新建中的单据不掩码 */
+const amountHidden = computed(() => {
+  if (props.mode === 'create' || !(props.form?.id ?? props.form?.po_id)) return false;
+  if (!props.canViewAmount) return true;
+  if ((auth.amountAccess.amountScope ?? 'all') === 'own')
+    return (
+      String(props.form?.createdBy ?? props.form?.created_by ?? '') !== String(auth.user?.id ?? '')
+    );
+  return false;
+});
+
 function protectedMoney(value: unknown) {
-  return props.canViewAmount ? `¥ ${moneyText(value)}` : '****';
+  return moneyCell(value, amountHidden.value);
 }
 
 function dictLabel(code: string, value: unknown) {

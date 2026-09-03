@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 
@@ -26,6 +26,8 @@ const options = reactive<Record<string, any>>({
 });
 
 const isView = computed(() => props.mode === 'view');
+/** 记录级金额掩码：无查看权，或（范围 own 且单据非本人创建）→ 金额统一以 **** 呈现 */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 
 function blankLine() {
   return {
@@ -349,11 +351,15 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="单价" width="110">
-        <template #default="s">{{ moneyText(Number(s.row.price || 0)) }}</template>
+        <template #default="s">{{
+          moneyText(amountHidden ? null : Number(s.row.price || 0))
+        }}</template>
       </el-table-column>
       <el-table-column label="金额" width="110">
         <template #default="s">{{
-          moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0))
+          moneyText(
+            amountHidden ? null : Number(s.row.quantity || 0) * Number(s.row.price || 0),
+          )
         }}</template>
       </el-table-column>
       <el-table-column label="备注" min-width="130">
