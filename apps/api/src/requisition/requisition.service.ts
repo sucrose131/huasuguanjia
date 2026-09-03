@@ -959,26 +959,25 @@ export class RequisitionService {
       throw error;
     }
     if (!submit) return { id: drawId, message: '草稿已保存' };
-    // 非「借用」类型的领用申请不走 OA 审批：单据保留在系统内待审批，
-    // 并给所属组织下有领用审批权限的用户写入待办提醒。
     const submitted = await this.prisma.hspsi_draw_approve.findFirst({
       where: { draw_id: drawId, deleted_at: null },
-      select: { draw_type: true, draw_no: true, org_id: true },
+      select: { draw_type: true },
     });
+    // 业务定义：非借用（直接领用）申请不走 OA，提交后由系统直接审批通过。
+    // 复用审批「通过」的既有副作用（与审批人点击通过一致）：
+    // 单据置为已通过、自动生成领用出库草稿、通知领用人/出库执行人办理领用。
     if (submitted && Number(submitted.draw_type) !== 2) {
-      const approvers = await this.findRequisitionApprovers(this.prisma, submitted.org_id);
-      for (const approverId of approvers) {
-        await this.todoService.create({
-          userId: approverId,
-          organizationId: Number(submitted.org_id),
-          title: submitted.draw_no,
-          content: '有新的领用申请待审批',
-          businessType: 'draw_approve',
-          businessId: Number(drawId),
-          actorUserId: userId,
-        });
-      }
-      return { id: drawId, message: '申请已提交，等待系统内审批' };
+      const approved = await this.approve(
+        String(drawId),
+        true,
+        '非借用领用申请提交后由系统直接审批通过',
+        String(userId),
+      );
+      return {
+        id: drawId,
+        outputId: approved.outputId ?? null,
+        message: '提交成功：非借用领用申请已直接审批通过，并已自动生成领用出库草稿',
+      };
     }
     const oa = await this.oaApproval.submit(drawId, userId);
     return {
@@ -990,62 +989,6 @@ export class RequisitionService {
       oaStatus: oa.procStatus,
       oaProcessId: oa.procInstId,
     };
-  }
-
-  /**
-   * 查找所属组织下对领用申请有审批操作权限的用户（无论角色）：
-   * 授权组织覆盖该 org_id，且拥有领用申请审核权限（菜单 code
-   * requisitions:applications:approve，含 admin 超级权限）。
-   */
-  private async findRequisitionApprovers(db: Db, orgId: bigint): Promise<number[]> {
-    const authorized = await db.hspsi_sys_user_authorized_org.findMany({
-      where: { org_id: orgId },
-      select: { user_id: true },
-    });
-    const candidateIds = [...new Set(authorized.map((item) => Number(item.user_id)))];
-    if (!candidateIds.length) return [];
-    const userRoles = await db.hspsi_sys_user_role.findMany({
-      where: { user_id: { in: candidateIds } },
-    });
-    const roleIds = [...new Set(userRoles.map((item) => Number(item.role_id)))];
-    const roles = roleIds.length
-      ? await db.hspsi_sys_role.findMany({
-          where: { id: { in: roleIds.map((id) => BigInt(id)) }, status: 1, deleted_at: null },
-          select: { id: true, code: true },
-        })
-      : [];
-    const adminRoleIds = new Set(
-      roles.filter((role) => role.code === 'admin').map((role) => Number(role.id)),
-    );
-    const roleMenus = roleIds.length
-      ? await db.hspsi_sys_role_menu.findMany({
-          where: { role_id: { in: roleIds.map((id) => BigInt(id)) } },
-        })
-      : [];
-    const menuIds = [...new Set(roleMenus.map((item) => Number(item.menu_id)))];
-    const menus = menuIds.length
-      ? await db.hspsi_sys_menu.findMany({
-          where: { id: { in: menuIds }, deleted_at: null, status: 1 },
-          select: { id: true, code: true },
-        })
-      : [];
-    const approveMenuIds = new Set(
-      menus
-        .filter((menu) => menu.code === 'requisitions:applications:approve')
-        .map((menu) => menu.id),
-    );
-    const approvedRoleIds = new Set<number>();
-    adminRoleIds.forEach((id) => approvedRoleIds.add(id));
-    roleMenus.forEach((item) => {
-      if (approveMenuIds.has(Number(item.menu_id))) approvedRoleIds.add(Number(item.role_id));
-    });
-    return [
-      ...new Set(
-        userRoles
-          .filter((item) => approvedRoleIds.has(Number(item.role_id)))
-          .map((item) => Number(item.user_id)),
-      ),
-    ];
   }
 
   private async ensureAutomaticOutput(
