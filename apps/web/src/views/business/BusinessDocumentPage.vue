@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, primeDetailHandoff } from '@/api';
-import { moneyText } from '@/utils/format';
+import { dateTimeText, moneyText } from '@/utils/format';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.vue';
@@ -155,7 +155,7 @@ function displayCell(
   const value = row[column.prop];
   if (value === null || value === undefined) return '—';
   if (column.kind === 'date') return String(value).slice(0, 10);
-  if (column.kind === 'datetime') return String(value).replace('T', ' ').slice(0, 16);
+  if (column.kind === 'datetime') return dateTimeText(value);
   if (column.kind === 'money') return protectedMoney(value);
   if (column.kind === 'number') return Number(value).toLocaleString();
   return String(value);
