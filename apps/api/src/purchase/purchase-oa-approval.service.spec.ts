@@ -129,6 +129,9 @@ function fixture(existingStatus?: string, mapping?: Record<string, unknown>) {
         procStatus: 'RUNNING',
       },
     }),
+    dealProcess: vi.fn().mockResolvedValue({
+      body: { busKey: 'purchase_application:7', procStatus: 'CANCELED' },
+    }),
   };
   const attachments = { listForIntegration: vi.fn().mockResolvedValue([]) };
   return {
@@ -141,6 +144,8 @@ function fixture(existingStatus?: string, mapping?: Record<string, unknown>) {
       { get: vi.fn().mockReturnValue('true') } as never,
     ),
     approval,
+    credentials,
+    prisma,
   };
 }
 
@@ -238,5 +243,60 @@ describe('PurchaseOaApprovalService', () => {
 
     expect(result.procStatus).toBe('RUNNING');
     expect(approval.startFormProcess).not.toHaveBeenCalled();
+  });
+
+  it('cancels a running OA process with the current user as approver', async () => {
+    const { service, approval } = fixture();
+
+    await service.cancelRemoteProcess(
+      {
+        account_set_id: 1n,
+        bus_key: 'purchase_application:7',
+        business_id: 7n,
+      },
+      '5',
+    );
+
+    expect(approval.dealProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1n }),
+      {
+        approverId: 'MEMBER-9',
+        operateType: 'cancel',
+        busKey: 'purchase_application:7',
+        approveComment: '创建人终止审批',
+      },
+    );
+  });
+
+  it('treats an already-canceled OA process as success so local apply can continue', async () => {
+    const { service, approval } = fixture();
+    approval.dealProcess.mockRejectedValueOnce(new Error('薪福通接口调用失败，returnCode: FAIL，errorMsg: 流程已撤销'));
+
+    await expect(
+      service.cancelRemoteProcess(
+        {
+          account_set_id: 1n,
+          bus_key: 'purchase_application:7',
+          business_id: 7n,
+        },
+        '5',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not swallow a real OA cancel failure', async () => {
+    const { service, approval } = fixture();
+    approval.dealProcess.mockRejectedValueOnce(new Error('网络超时'));
+
+    await expect(
+      service.cancelRemoteProcess(
+        {
+          account_set_id: 1n,
+          bus_key: 'purchase_application:7',
+          business_id: 7n,
+        },
+        '5',
+      ),
+    ).rejects.toThrow('撤销OA审批失败：网络超时');
   });
 });

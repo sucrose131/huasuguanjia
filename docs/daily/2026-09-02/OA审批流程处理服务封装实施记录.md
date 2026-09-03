@@ -46,4 +46,4 @@
 
 1. `picAttachmentList` / `fileAttachmentList` 官方文档未展开元素结构，当前按发起流程附件控件使用 `{id, objectKey, name}`；若实调结构不同再对齐。
 2. 退回节点 id 需另接「可退回节点查询」接口，本次未封装。
-3. 业务模块尚未调用 `dealProcess`（例如本系统主动撤销 OA 流程）。
+3. 采购申请创建人终止/撤回已调用 `dealProcess(cancel)`；其它单据的主动撤销仍未接入。

@@ -26,6 +26,7 @@ import { generateBatchNo } from '../common/batch-number';
 import { BUSINESS_PREFIX } from '../business-number/business-number.constants';
 import type { ApprovalCallbackPayload } from '../integrations/xinfutong-oa/approval/approval.types';
 import { calculatePurchaseOrderLifecycle } from './purchase-order-lifecycle';
+import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
@@ -56,6 +57,7 @@ export class PurchaseService {
 
     @Inject(TodoService) private readonly todoService: TodoService,
     @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
+    @Inject(PurchaseOaApprovalService) private readonly oaApproval: PurchaseOaApprovalService,
   ) {}
   private guardedTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) {
     return this.prisma.$transaction(callback, {
@@ -1534,6 +1536,7 @@ export class PurchaseService {
             : generatedDetailCount === detailCount
               ? 'fully_generated'
               : 'partially_generated',
+        sourceType: item.source_type,
         status: item.status,
         approveStatus: item.approve_status,
         approveComment: item.approve_comment,
@@ -1835,6 +1838,129 @@ export class PurchaseService {
     });
     return { id, message: '已提交审批' };
   }
+
+  async terminateApplication(id: string, userId: string) {
+    const { purId } = await this.revokeCreatorPendingOa(id, userId, 'terminate');
+    return this.guardedTransaction(async (tx) => {
+      const current = await this.lockCreatorPendingApplication(tx, purId, userId, 'terminate');
+      if (Number(current.approve_status) === 3) {
+        await this.markApplicationOaCanceled(tx, purId, userId);
+        return { id, message: '采购申请已终止' };
+      }
+      const result = await this.applyApplicationCanceled(tx, purId, '创建人终止审批', userId);
+      await this.markApplicationOaCanceled(tx, purId, userId);
+      return result;
+    });
+  }
+
+  async withdrawApplication(id: string, userId: string) {
+    const { purId } = await this.revokeCreatorPendingOa(id, userId, 'withdraw');
+    return this.guardedTransaction(async (tx) => {
+      const current = await this.lockCreatorPendingApplication(tx, purId, userId, 'withdraw');
+      if (Number(current.status) === 0 && Number(current.approve_status) === 0) {
+        await this.markApplicationOaCanceled(tx, purId, userId);
+        return { id, message: '采购申请已撤回' };
+      }
+      const result = await this.applyApplicationWithdrawn(tx, purId, userId);
+      await this.markApplicationOaCanceled(tx, purId, userId);
+      return result;
+    });
+  }
+
+  private async revokeCreatorPendingOa(
+    id: string,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    const purId = BigInt(id);
+    const application = await this.prisma.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!application) throw new NotFoundException('采购申请不存在');
+    if (application.created_by !== BigInt(userId))
+      throw new ForbiddenException(
+        action === 'withdraw'
+          ? '个人无权撤回他人发起的采购申请'
+          : '个人无权终止他人发起的采购申请',
+      );
+    if (action === 'withdraw' && application.source_type === 'production_plan')
+      throw new BadRequestException('生产缺料采购申请不能撤回，如需结束请使用终止');
+    if (Number(application.status) !== 1 || Number(application.approve_status) !== 0)
+      throw new BadRequestException(this.pendingActionError(action, application.approve_status));
+
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (instance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    if (instance && ['RUNNING', 'BACKTOSTART'].includes(instance.proc_status)) {
+      await this.oaApproval.cancelRemoteProcess(
+        instance,
+        userId,
+        action === 'withdraw' ? '创建人撤回审批' : '创建人终止审批',
+      );
+    }
+    return { purId, instance };
+  }
+
+  private pendingActionError(action: 'terminate' | 'withdraw', approveStatus: number) {
+    if (action === 'withdraw') {
+      return Number(approveStatus) === 3
+        ? '采购申请已终止，不能撤回'
+        : '仅审批中的采购申请可以撤回';
+    }
+    return Number(approveStatus) === 3
+      ? '采购申请已终止，不能重复终止'
+      : '仅审批中的采购申请可以终止';
+  }
+
+  private async lockCreatorPendingApplication(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const current = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!current) throw new NotFoundException('采购申请不存在');
+    if (current.created_by !== BigInt(userId))
+      throw new ForbiddenException(
+        action === 'withdraw'
+          ? '个人无权撤回他人发起的采购申请'
+          : '个人无权终止他人发起的采购申请',
+      );
+    const lockedInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (lockedInstance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    return current;
+  }
+
+  private async markApplicationOaCanceled(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+  ) {
+    const lockedInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'purchase_application', business_id: purId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (!lockedInstance) return;
+    await tx.hspsi_oa_approval_instance.update({
+      where: { id: lockedInstance.id },
+      data: {
+        proc_status: 'CANCELED',
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+  }
+
   async approveApplication(id: string, approved: boolean, comment: string, userId: string) {
     const purId = BigInt(id);
     return this.guardedTransaction((tx) =>
@@ -1953,6 +2079,75 @@ export class PurchaseService {
       );
     }
     return { id, message: '审批通过，请由采购人员生成采购订单' };
+  }
+
+  private async applyApplicationCanceled(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    comment: string,
+    userId: string,
+  ) {
+    const id = String(purId);
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const app = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!app) throw new NotFoundException('采购申请不存在');
+    if (Number(app.approve_status) === 3) {
+      return { id, message: '采购申请已终止' };
+    }
+    if (Number(app.status) !== 1 || ![0, 2].includes(Number(app.approve_status)))
+      throw new BadRequestException('仅审批中的采购申请可以终止');
+    await tx.hspsi_purchase_approve.update({
+      where: { pur_id: purId },
+      data: {
+        approve_status: 3,
+        approve_comment: comment,
+        approve_by: BigInt(userId),
+        approve_date: new Date(),
+        updated_by: BigInt(userId),
+      },
+    });
+    await this.rollbackProductionShortageApplication(tx, purId, userId);
+    return {
+      id,
+      message:
+        app.source_type === 'production_plan' ? '采购申请已终止，生产缺料已退回待处理' : '采购申请已终止',
+    };
+  }
+
+  private async applyApplicationWithdrawn(
+    tx: Prisma.TransactionClient,
+    purId: bigint,
+    userId: string,
+  ) {
+    const id = String(purId);
+    await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${purId} FOR UPDATE`;
+    const app = await tx.hspsi_purchase_approve.findFirst({
+      where: { pur_id: purId, deleted_at: null },
+    });
+    if (!app) throw new NotFoundException('采购申请不存在');
+    if (app.source_type === 'production_plan')
+      throw new BadRequestException('生产缺料采购申请不能撤回，如需结束请使用终止');
+    if (Number(app.status) === 0 && Number(app.approve_status) === 0) {
+      return { id, message: '采购申请已撤回' };
+    }
+    // 审批中，或 OA 回调已抢先写成已取消(3)：本次请求已成功撤销 OA，仍落成草稿。
+    if (Number(app.status) !== 1 || ![0, 3].includes(Number(app.approve_status)))
+      throw new BadRequestException('仅审批中的采购申请可以撤回');
+    await tx.hspsi_purchase_approve.update({
+      where: { pur_id: purId },
+      data: {
+        status: 0,
+        approve_status: 0,
+        approve_comment: '创建人撤回审批',
+        approve_by: 0n,
+        approve_date: null,
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+    return { id, message: '采购申请已撤回' };
   }
 
   async generateApplicationOrder(id: string, body: Body, userId: string) {
@@ -2200,19 +2395,34 @@ export class PurchaseService {
         where: { pur_id: current.business_id, deleted_at: null },
       });
       if (!application) throw new NotFoundException('OA审批对应的采购申请不存在');
-      const expectedStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      const expectedStatus =
+        payload.procStatus === 'PASSED' ? 1 : payload.procStatus === 'CANCELED' ? 3 : 2;
+      const withdrawnLocally =
+        payload.procStatus === 'CANCELED' &&
+        Number(application.status) === 0 &&
+        Number(application.approve_status) === 0;
       const duplicate =
-        current.proc_status === payload.procStatus && application.approve_status === expectedStatus;
+        (current.proc_status === payload.procStatus &&
+          application.approve_status === expectedStatus) ||
+        withdrawnLocally;
       let result: Record<string, unknown> = { id: String(application.pur_id) };
       if (!duplicate) {
-        result = await this.applyApplicationApproval(
-          tx,
-          application.pur_id,
-          payload.procStatus === 'PASSED',
-          this.oaApprovalComment(payload.procStatus),
-          '0',
-          true,
-        );
+        result =
+          payload.procStatus === 'CANCELED'
+            ? await this.applyApplicationCanceled(
+                tx,
+                application.pur_id,
+                this.oaApprovalComment(payload.procStatus),
+                '0',
+              )
+            : await this.applyApplicationApproval(
+                tx,
+                application.pur_id,
+                payload.procStatus === 'PASSED',
+                this.oaApprovalComment(payload.procStatus),
+                '0',
+                true,
+              );
       }
       await tx.hspsi_oa_approval_instance.update({
         where: { id: current.id },
