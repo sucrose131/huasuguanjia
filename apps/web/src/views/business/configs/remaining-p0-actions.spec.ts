@@ -149,4 +149,27 @@ describe('remaining P0 frontend actions', () => {
     expect(withdraw?.confirm).toBe('撤回后单据将回到草稿，可修改后重新提交，是否继续？');
     expect(terminate?.confirm).toBe('终止后审批将结束，且不能再编辑提交，是否继续？');
   });
+
+  it('hides purchase pass/reject while an OA approval is in flight (cannot be approved in-system)', () => {
+    const approve = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'approve');
+    const reject = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'reject');
+
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: '' })).toBe(true);
+    expect(reject?.show?.({ status: 1, approveStatus: 0, oaStatus: '' })).toBe(true);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING' })).toBe(false);
+    expect(reject?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING' })).toBe(false);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'PENDING_PUSH' })).toBe(false);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'BACKTOSTART' })).toBe(false);
+    // OA 提交失败/无实例仍可系统内审批（OA 停用或历史单据）
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'PUSH_FAILED' })).toBe(true);
+    // 撤回/终止不受影响（OA 在途仍可撤回/终止）
+    const withdraw = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'withdraw');
+    const terminate = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'terminate');
+    expect(
+      withdraw?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING', createdBy: '9' }),
+    ).toBe(true);
+    expect(
+      terminate?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING', createdBy: '9' }),
+    ).toBe(true);
+  });
 });

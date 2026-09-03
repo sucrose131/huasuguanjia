@@ -19,11 +19,30 @@ describe('approvalStatusText（审批/OA 合并口径，领用与采购共用）
     expect(approvalStatusText({})).toBe('待审批');
   });
 
-  it('标签颜色：通过绿、驳回/提交失败红、其余警告', () => {
+  it('终态：取消/终止（3）按渠道区分，OA 侧撤销带渠道', () => {
+    expect(approvalStatusText({ approveStatus: 3, oaStatus: 'CANCELED', approveBy: 0 })).toBe(
+      'OA已取消',
+    );
+    expect(approvalStatusText({ approveStatus: 3, oaStatus: 'CANCELED', approve_by: 0 })).toBe(
+      'OA已取消',
+    );
+    // 本系统终止（创建人操作）不带渠道
+    expect(approvalStatusText({ approveStatus: 3, oaStatus: 'CANCELED', approveBy: 229 })).toBe(
+      '已取消',
+    );
+    expect(approvalStatusText({ approveStatus: 3, oaStatus: '' })).toBe('已取消');
+    expect(approvalStatusText({ approve_status: 3 })).toBe('已取消');
+  });
+
+  it('标签颜色：通过绿、驳回/提交失败红、取消灰、其余警告', () => {
     expect(approvalStatusType({ approveStatus: 1, oaStatus: 'PASSED' })).toBe('success');
     expect(approvalStatusType({ approveStatus: 1 })).toBe('success');
     expect(approvalStatusType({ approveStatus: 2, oaStatus: 'REJECTED' })).toBe('danger');
     expect(approvalStatusType({ approveStatus: 2 })).toBe('danger');
+    expect(approvalStatusType({ approveStatus: 3 })).toBe('info');
+    expect(approvalStatusType({ approveStatus: 3, oaStatus: 'CANCELED', approveBy: 0 })).toBe(
+      'info',
+    );
     expect(approvalStatusType({ approveStatus: 0, oaStatus: 'PUSH_FAILED' })).toBe('danger');
     expect(approvalStatusType({ approveStatus: 0, oaStatus: 'RUNNING' })).toBe('warning');
     expect(approvalStatusType({ approveStatus: 0 })).toBe('warning');

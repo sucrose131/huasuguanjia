@@ -24,4 +24,12 @@ describe('requisitionApprovalStatusText（审批状态/OA状态合并口径）',
     expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: '' })).toBe('待审批');
     expect(requisitionApprovalStatusText({ approve_status: 0 })).toBe('待审批');
   });
+
+  it('终态：取消/终止（3）按渠道区分，OA 侧撤销带渠道', () => {
+    expect(requisitionApprovalStatusText({ approveStatus: 3, oaStatus: 'CANCELED', approveBy: 0 })).toBe(
+      'OA已取消',
+    );
+    expect(requisitionApprovalStatusText({ approveStatus: 3, approveBy: 214 })).toBe('已取消');
+    expect(requisitionApprovalStatusText({ approve_status: 3 })).toBe('已取消');
+  });
 });
