@@ -16,7 +16,7 @@
  *   4. 薪福通测试环境中有可用的表单模板
  */
 
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
 import { resolve } from 'node:path';
@@ -27,11 +27,12 @@ import {
   XinfutongOaCredentialService,
   type AccountSetCredential,
 } from '../core/credential.service';
-import type { FormStartParams, FileUploadParams } from './approval.types';
+import type { FormStartParams, FileUploadParams, ProcInstDealParams } from './approval.types';
 import {
   FILE_UPLOAD_ALLOWED_EXTENSIONS,
   FILE_UPLOAD_FILENAME_MAX_LENGTH,
   FILE_UPLOAD_MAX_SIZE,
+  PROC_INST_DEAL_PATH,
 } from './approval.types';
 
 // 加载项目根目录 .env
@@ -52,6 +53,198 @@ function loadEnvOverride(filePath: string) {
   }
 }
 loadEnvOverride(resolve(process.cwd(), '.env'));
+
+// ==================== 审批流程处理参数校验单元测试 ====================
+
+describe('XinfutongOaApprovalService 审批流程处理参数校验', () => {
+  const config = new ConfigService();
+  const service = new XinfutongOaApprovalService(config);
+
+  const mockCredential: AccountSetCredential = {
+    id: 1n,
+    name: 'test',
+    appId: 'testAppId',
+    appSecret: 'testSecret',
+  };
+
+  const passParams: ProcInstDealParams = {
+    approverId: 'V1234',
+    operateType: 'pass',
+    busKey: 'FORM_123456',
+    taskId: '123456',
+  };
+
+  it('approverId 为空时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, { ...passParams, approverId: '' }),
+    ).rejects.toThrow('approverId 为必填项');
+  });
+
+  it('operateType 为空时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: '' as ProcInstDealParams['operateType'],
+      }),
+    ).rejects.toThrow('operateType 为必填项');
+  });
+
+  it('operateType 为非法值时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'invalid' as ProcInstDealParams['operateType'],
+      }),
+    ).rejects.toThrow(/operateType 必须为/);
+  });
+
+  it('busKey 为空时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, { ...passParams, busKey: '' }),
+    ).rejects.toThrow('busKey 为必填项');
+  });
+
+  it('通过操作缺少 taskId 时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, { ...passParams, taskId: undefined }),
+    ).rejects.toThrow('通过、提交、否决、转派、加签操作时，taskId 为必填项');
+  });
+
+  it('通过操作 taskId 为空字符串时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, { ...passParams, taskId: '' }),
+    ).rejects.toThrow('通过、提交、否决、转派、加签操作时，taskId 为必填项');
+  });
+
+  it('退回操作缺少 backNodeId 时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        approverId: 'V1234',
+        operateType: 'back',
+        busKey: 'FORM_123456',
+      }),
+    ).rejects.toThrow('退回操作时，backNodeId 为必填项');
+  });
+
+  it('转派操作缺少 transferApproverId 时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'transfer',
+        transferApproverId: '',
+      }),
+    ).rejects.toThrow('转派操作时，transferApproverId 为必填项');
+  });
+
+  it('加签操作缺少 addSignType 时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'addSign',
+        addSignApproverIdList: ['U1234'],
+      }),
+    ).rejects.toThrow(/加签操作时，addSignType 必须为/);
+  });
+
+  it('加签操作 addSignType 非法时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'addSign',
+        addSignType: 'INVALID' as ProcInstDealParams['addSignType'],
+        addSignApproverIdList: ['U1234'],
+      }),
+    ).rejects.toThrow(/加签操作时，addSignType 必须为/);
+  });
+
+  it('加签操作加签人为空时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'addSign',
+        addSignType: 'FRONT',
+        addSignApproverIdList: [],
+      }),
+    ).rejects.toThrow('加签操作时，addSignApproverIdList 不能为空');
+  });
+
+  it('加签操作加签人仅含空字符串时抛错', async () => {
+    await expect(
+      service.dealProcess(mockCredential, {
+        ...passParams,
+        operateType: 'addSign',
+        addSignType: 'FRONT',
+        addSignApproverIdList: [''],
+      }),
+    ).rejects.toThrow('加签操作时，addSignApproverIdList 不能为空');
+  });
+
+  it('通过操作会提交必填字段', async () => {
+    const post = vi.spyOn(service, 'post').mockResolvedValue({
+      returnCode: 'SUC0000',
+      body: { busKey: 'FORM_123456', procStatus: 'RUNNING' },
+    });
+
+    const response = await service.dealProcess(mockCredential, {
+      ...passParams,
+      approveComment: '同意',
+    });
+
+    expect(response.returnCode).toBe('SUC0000');
+    expect(post).toHaveBeenCalledWith(PROC_INST_DEAL_PATH, mockCredential, {
+      approverId: 'V1234',
+      operateType: 'pass',
+      busKey: 'FORM_123456',
+      taskId: '123456',
+      approveComment: '同意',
+    });
+    post.mockRestore();
+  });
+
+  it('撤销操作不要求 taskId', async () => {
+    const post = vi.spyOn(service, 'post').mockResolvedValue({
+      returnCode: 'SUC0000',
+      body: { busKey: 'FORM_123456', procStatus: 'CANCELED' },
+    });
+
+    await service.dealProcess(mockCredential, {
+      approverId: 'V1234',
+      operateType: 'cancel',
+      busKey: 'FORM_123456',
+    });
+
+    expect(post).toHaveBeenCalledWith(PROC_INST_DEAL_PATH, mockCredential, {
+      approverId: 'V1234',
+      operateType: 'cancel',
+      busKey: 'FORM_123456',
+    });
+    post.mockRestore();
+  });
+
+  it('退回操作提交 backNodeId', async () => {
+    const post = vi.spyOn(service, 'post').mockResolvedValue({
+      returnCode: 'SUC0000',
+      body: { busKey: 'FORM_123456', procStatus: 'BACKTOSTART' },
+    });
+
+    await service.dealProcess(mockCredential, {
+      approverId: 'V1234',
+      operateType: 'back',
+      busKey: 'FORM_123456',
+      backNodeId: 'restart',
+      approveComment: '退回修改',
+    });
+
+    expect(post).toHaveBeenCalledWith(PROC_INST_DEAL_PATH, mockCredential, {
+      approverId: 'V1234',
+      operateType: 'back',
+      busKey: 'FORM_123456',
+      backNodeId: 'restart',
+      approveComment: '退回修改',
+    });
+    post.mockRestore();
+  });
+});
 
 // ==================== 参数校验单元测试 ====================
 

@@ -3,14 +3,26 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import PurchaseApplicationForm from '../forms/PurchaseApplicationForm.vue';
+import {
+  approvalStatusText,
+  approvalStatusType,
+} from '@/utils/approval-status';
 
 const isCurrentApplicant = (row: Record<string, any>) =>
   String(row.createdBy ?? '') === String(useAuthStore().user?.id ?? '');
 
+/** OA 审批在途（推送中/审批中/退回发起人）：该单据不能在系统内审批，通过/驳回按钮不展示 */
+const hasActiveOaApproval = (row: Record<string, any>) =>
+  ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? ''));
+const canApproveApplication = (row: Record<string, any>) =>
+  !hasActiveOaApproval(row) &&
+  Number(row.approveStatus) === 0 &&
+  Number(row.status) === 1;
+
 /**
  * 采购申请单：共享引擎配置。
  *
- * 说明：列表接口返回的是原始 approveStatus（0 待审批 / 1 已通过 / 2 已驳回）与
+ * 说明：列表接口返回的是原始 approveStatus（0 待审批 / 1 已通过 / 2 已驳回 / 3 已取消）与
  * generationStatus（not_generated / partially_generated / fully_generated）等数字/枚举值，
  * 列表接口提供 createdByName；组织、部门和仓库继续复用共享选项袋显示。
  */
@@ -44,6 +56,14 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
     { prop: 'reason', label: '申请原因', minWidth: 200, tooltip: true },
     { prop: 'quantity', label: '申请数量', width: 104, kind: 'number', align: 'right' },
     {
+      prop: 'approveStatus',
+      label: '审批状态',
+      width: 130,
+      kind: 'status',
+      statusType: approvalStatusType,
+      render: approvalStatusText,
+    },
+    {
       prop: 'generationStatus',
       label: '生成状态',
       minWidth: 120,
@@ -64,13 +84,6 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       render: (row, ctx) => row.createdByName || ctx.creator(row),
     },
     { prop: 'createdAt', label: '创建时间', width: 160, kind: 'datetime' },
-    {
-      prop: 'approveStatus',
-      label: '审批状态',
-      width: 96,
-      kind: 'status',
-      statusDict: 'approval_status',
-    },
   ],
   dictionaries: ['approval_status'],
   optionBags: ['orgs', 'depts', 'warehouses'],
@@ -140,11 +153,42 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       },
     },
     {
+      key: 'withdraw',
+      label: '撤回',
+      kind: 'warning',
+      primary: false,
+      show: (row) =>
+        isCurrentApplicant(row) &&
+        Number(row.status) === 1 &&
+        Number(row.approveStatus) === 0 &&
+        row.sourceType !== 'production_plan',
+      confirm: '撤回后单据将回到草稿，可修改后重新提交，是否继续？',
+      confirmTitle: '撤回审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/purchase/applications/${row.id}/withdraw`, {});
+        ElMessage.success(result?.message ?? '采购申请已撤回');
+      },
+    },
+    {
+      key: 'terminate',
+      label: '终止',
+      kind: 'danger',
+      primary: false,
+      show: (row) =>
+        isCurrentApplicant(row) && Number(row.status) === 1 && Number(row.approveStatus) === 0,
+      confirm: '终止后审批将结束，且不能再编辑提交，是否继续？',
+      confirmTitle: '终止审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/purchase/applications/${row.id}/terminate`, {});
+        ElMessage.success(result?.message ?? '采购申请已终止');
+      },
+    },
+    {
       key: 'approve',
       label: '通过',
       kind: 'success',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      show: canApproveApplication,
       confirm: '通过后进入采购流程，是否继续？',
       confirmTitle: '确认审批通过',
       handler: async (row) => {
@@ -160,7 +204,7 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       label: '驳回',
       kind: 'danger',
       primary: false,
-      show: (row) => Number(row.approveStatus) === 0 && Number(row.status) === 1,
+      show: canApproveApplication,
       handler: async (row) => {
         const prompt = await ElMessageBox.prompt('请输入驳回原因', '驳回采购申请', {
           inputValidator: (value) => Boolean(String(value).trim()) || '驳回原因不能为空',

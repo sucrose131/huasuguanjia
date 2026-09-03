@@ -34,14 +34,17 @@ export class PurchaseController {
 
   private async protectPurchaseAmounts<T>(value: T, userId: string): Promise<T> {
     const access = await this.amountAccess.forUser(userId);
-    const protectedValue = access.canViewAmount
-      ? value
-      : this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
+    let protectedValue = value;
+    if (!access.canViewAmount)
+      protectedValue = this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
+    else if (access.amountScope === 'own')
+      protectedValue = this.amountAccess.maskAmountsByOwner(value, userId);
     if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
       return protectedValue;
     return {
       ...protectedValue,
       amountAccess: access.level,
+      amountScope: access.amountScope,
       amountMasked: !access.canViewAmount,
     } as T;
   }
@@ -123,6 +126,16 @@ export class PurchaseController {
     };
   }
   @RequirePermissions('purchase')
+  @Post('applications/:id/terminate')
+  terminateApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.service.terminateApplication(id, u.id);
+  }
+  @RequirePermissions('purchase')
+  @Post('applications/:id/withdraw')
+  withdrawApplication(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.service.withdrawApplication(id, u.id);
+  }
+  @RequirePermissions('purchase')
   @Post('applications/:id/approve')
   approveApplication(
     @Param('id') id: string,
@@ -169,7 +182,7 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    await this.amountAccess.assertCanEdit(u.id);
+    await this.amountAccess.assertCanEditRecord(u.id, await this.service.purchaseOrderCreatedBy(id));
     return this.service.saveOrder(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -223,7 +236,8 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    if (b.directReceipt) await this.amountAccess.assertCanEdit(u.id);
+    if (b.directReceipt)
+      await this.amountAccess.assertCanEditRecord(u.id, await this.service.purchaseInputCreatedBy(id));
     return this.service.saveReceipt(id, b, u.id);
   }
   @RequirePermissions('purchase')
@@ -372,11 +386,12 @@ export class PurchaseController {
   @RequirePermissions('purchase')
   @RequireAmountEdit()
   @Patch('payments/:id')
-  updatePayment(
+  async updatePayment(
     @Param('id') id: string,
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
+    await this.amountAccess.assertCanEditRecord(u.id, await this.service.purchasePaymentCreatedBy(id));
     return this.service.savePayment(id, b, u.id);
   }
   @RequirePermissions('purchase')

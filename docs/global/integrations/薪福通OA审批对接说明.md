@@ -64,6 +64,7 @@
 | 4 | 获取表单数据 | `/xft-oa/openapi/xft-oaquery/form-data/query-list` | POST | 按busKey/procInstId批量查询已提交的表单数据 | `FormService.getFormDataList` |
 | 5 | 发起流程v2 | `/xft-oa/openapi/xft-newform/open/form-start` | POST | 提交formData发起审批流程 | `ApprovalService.startFormProcess` |
 | 6 | 文件上传 | `/xft-oa/openapi/xft-oa/file/upload` | POST(form-data) | 上传附件/图片，获取objectKey用于formData | `ApprovalService.uploadFile` |
+| 7 | 审批流程处理 | `/xft-oa/openapi/xft-oa/open/operate/proc/inst/deal` | POST | 提交、通过、否决、转派、加签、退回、撤销已发起流程 | `ApprovalService.dealProcess` |
 
 ### 2.2 入站事件（OA → 平台）
 
@@ -202,7 +203,49 @@ Content-Type: multipart/form-data
   }
 ```
 
-#### 2.4.5 OA审批流程结束事件回调
+#### 2.4.5 审批流程处理
+
+```
+POST /xft-oa/openapi/xft-oa/open/operate/proc/inst/deal
+Content-Type: application/json
+
+请求参数：
+  approverId: string              // 必填，审批人用户号
+  operateType: string             // 必填，pass|submit|reject|transfer|addSign|back|cancel
+  busKey: string                  // 必填，业务编号
+  taskId?: string | number        // 通过、提交、否决、转派、加签时必填
+  approveComment?: string         // 审批意见（OA 开启必填校验时必填）
+  busData?: string                // 业务数据 JSON 字符串，审批时修改表单数据可传
+  backNodeId?: string             // 退回时必填
+  transferApproverId?: string     // 转派时必填
+  addSignType?: string            // 加签时必填，FRONT|BEHIND|PARALLEL
+  addSignApproverIdList?: string[] // 加签时必填
+  picAttachmentList?: Array<{id?, objectKey?, name?}>
+  fileAttachmentList?: Array<{id?, objectKey?, name?}>
+  signKey?: string                // 审批签名文件id，须先调用文件上传接口
+
+响应 body：
+  returnCode: string
+  errorMsg: string
+  body: {
+    busKey: string
+    busData?: string
+    procInstId: string
+    procKey?: string
+    procDefId?: string
+    procStarterId?: string
+    procStatus: string            // RUNNING|BACKTOSTART|PASSED|CANCELED|REJECTED|DELETED|WITHDRAWN
+    prjCod?: string
+    extensionData?: object
+    todoTaskList: TodoTask[]
+  }
+```
+
+> **条件必填**：退回需 `backNodeId`；转派需 `transferApproverId`；加签需 `addSignType` 与非空 `addSignApproverIdList`；通过/提交/否决/转派/加签需 `taskId`。撤销不要求 `taskId`。仅支持自定义流程及包含套件的系统表单。
+>
+> 采购申请创建人终止或撤回审批时，本系统在本地落账前先调用 `dealProcess(operateType=cancel)`；OA 失败则本地仍保持审批中。OA 侧取消回调仍按终止写入 `approve_status=3`；若本地已撤回成草稿则忽略该回调的单据落账。
+
+#### 2.4.6 OA审批流程结束事件回调
 
 ```
 事件编号：XFTOAFPS

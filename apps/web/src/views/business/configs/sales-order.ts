@@ -1,7 +1,14 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage } from 'element-plus';
+import { useAuthStore, canEditAmountRecord } from '@/stores/auth';
 import SalesOrderForm from '../forms/SalesOrderForm.vue';
+
+/** 记录级金额编辑判定：范围 own 时只允许编辑自己创建(createdBy=本人)的订单 */
+const canEditRecordAmount = (row: Record<string, any>) => {
+  const auth = useAuthStore();
+  return canEditAmountRecord(auth.amountAccess, auth.user?.id, row.createdBy);
+};
 
 export const salesOrderConfig: BusinessDocumentConfig = {
   key: 'sales/orders',
@@ -43,7 +50,11 @@ export const salesOrderConfig: BusinessDocumentConfig = {
   openFromRoute: async (query, ctx) => {
     if (query.documentId) {
       const detail: any = await api.get(`/sales/orders/${query.documentId}`);
-      if (String(query.view ?? '') === '1') ctx.openView(detail);
+      const auth = useAuthStore();
+      const ownEditable =
+        (auth.amountAccess.amountScope ?? 'all') === 'all' ||
+        String(detail?.createdBy ?? '') === String(auth.user?.id ?? '');
+      if (String(query.view ?? '') === '1' || !ownEditable) ctx.openView(detail);
       else ctx.openEdit(detail);
     } else if (String(query.create ?? '') === '1' && query.orderId) {
       ctx.openCreate({ orderId: String(query.orderId) });
@@ -56,6 +67,7 @@ export const salesOrderConfig: BusinessDocumentConfig = {
       label: '编辑',
       primary: false,
       show: (row) =>
+        canEditRecordAmount(row) &&
         !['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'].includes(String(row.oaStatus ?? '')) &&
         Number(row.confirmStatus ?? row.comfirm_status) !== 1 &&
         Number(row.approveStatus ?? row.approve_status) !== 1,

@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Key, Lock, User } from '@element-plus/icons-vue';
+import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import huasuLogo from '@/assets/huasu-logo.png';
 
 const remembered = localStorage.getItem('hspsi_remember') === '1';
 const form = reactive({ username: remembered ? 'admin' : '', password: '', remember: remembered });
 const loading = ref(false);
+const guides = ref<Array<{ value: string; label: string }>>([]);
+const preview = reactive({ visible: false, title: '', url: '' });
 const error = ref('');
 const auth = useAuthStore();
 const router = useRouter();
@@ -31,6 +34,35 @@ async function submit() {
     loading.value = false;
   }
 }
+
+async function loadOperationGuides() {
+  try {
+    const items = (await api.get('/public/operation-guides')) as Array<{
+      value?: string;
+      label?: string;
+    }>;
+    guides.value = (items ?? []).filter((item) => item.value && item.label) as Array<{
+      value: string;
+      label: string;
+    }>;
+  } catch {
+    guides.value = [];
+  }
+}
+
+function openOperationGuide(value: string) {
+  preview.title = guides.value.find((item) => item.value === value)?.label || '操作指引';
+  preview.url = `/api/public/operation-guides/file?value=${encodeURIComponent(value)}`;
+  preview.visible = true;
+}
+
+function closeGuidePreview() {
+  preview.visible = false;
+  preview.url = '';
+  preview.title = '';
+}
+
+onMounted(loadOperationGuides);
 </script>
 
 <template>
@@ -99,10 +131,36 @@ async function submit() {
             >登录</el-button
           >
         </el-form>
-
+        <button
+          v-for="guide in guides"
+          :key="guide.value"
+          type="button"
+          class="medical-guide"
+          @click="openOperationGuide(guide.value)"
+        >
+          {{ guide.label }}
+        </button>
       </div>
       <p class="secure">♢　企业数据安全连接</p>
     </section>
+    <el-dialog
+      v-model="preview.visible"
+      class="guide-preview-dialog"
+      :title="preview.title"
+      width="92%"
+      top="3vh"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="false"
+      @closed="closeGuidePreview"
+    >
+      <iframe
+        v-if="preview.url"
+        class="guide-preview-frame"
+        :src="preview.url"
+        :title="preview.title"
+      />
+    </el-dialog>
   </main>
 </template>
 
@@ -305,6 +363,25 @@ async function submit() {
   box-shadow: 0 8px 20px #3157d538;
   font-weight: 650;
 }
+.medical-guide {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3157d5;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.medical-guide:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.medical-guide:disabled {
+  color: #9aa3b0;
+  cursor: wait;
+}
 
 .secure {
   position: absolute;
@@ -359,5 +436,20 @@ async function submit() {
     position: static;
     margin-top: 38px;
   }
+}
+</style>
+<style>
+.guide-preview-dialog {
+  max-width: 1200px;
+}
+.guide-preview-dialog .el-dialog__body {
+  padding: 0 16px 16px;
+}
+.guide-preview-frame {
+  display: block;
+  width: 100%;
+  height: 82vh;
+  border: 0;
+  background: #f5f6f8;
 }
 </style>

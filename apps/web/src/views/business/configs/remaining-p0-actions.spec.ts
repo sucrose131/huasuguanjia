@@ -34,6 +34,15 @@ vi.mock('@/stores/auth', () => ({
     user: { id: '9' },
     amountAccess: { canViewAmount: true, canEditAmount: true },
   }),
+  canEditAmountRecord: (
+    amountAccess: { canEditAmount: boolean; amountScope?: 'own' | 'all' },
+    userId: unknown,
+    createdBy: unknown,
+  ) => {
+    if (!amountAccess.canEditAmount) return false;
+    if ((amountAccess.amountScope ?? 'all') === 'all') return true;
+    return String(createdBy ?? '') === String(userId ?? '');
+  },
 }));
 
 import {
@@ -127,11 +136,49 @@ describe('remaining P0 frontend actions', () => {
   it('locks purchase application editing permanently after submission', () => {
     const edit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'edit');
     const submit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'submit');
+    const withdraw = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'withdraw');
+    const terminate = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'terminate');
 
     expect(edit?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(true);
     expect(submit?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(withdraw?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(false);
+    expect(terminate?.show?.({ status: 0, approveStatus: 0, createdBy: '9' })).toBe(false);
     expect(edit?.show?.({ status: 0, approveStatus: 0, createdBy: '8' })).toBe(false);
     expect(edit?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(false);
     expect(edit?.show?.({ status: 1, approveStatus: 2, createdBy: '9' })).toBe(false);
+    expect(withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '8' })).toBe(false);
+    expect(
+      withdraw?.show?.({ status: 1, approveStatus: 0, createdBy: '9', sourceType: 'production_plan' }),
+    ).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 0, createdBy: '9' })).toBe(true);
+    expect(terminate?.show?.({ status: 1, approveStatus: 0, createdBy: '8' })).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 1, createdBy: '9' })).toBe(false);
+    expect(terminate?.show?.({ status: 1, approveStatus: 3, createdBy: '9' })).toBe(false);
+    expect(withdraw?.confirm).toBe('撤回后单据将回到草稿，可修改后重新提交，是否继续？');
+    expect(terminate?.confirm).toBe('终止后审批将结束，且不能再编辑提交，是否继续？');
+  });
+
+  it('hides purchase pass/reject while an OA approval is in flight (cannot be approved in-system)', () => {
+    const approve = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'approve');
+    const reject = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'reject');
+
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: '' })).toBe(true);
+    expect(reject?.show?.({ status: 1, approveStatus: 0, oaStatus: '' })).toBe(true);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING' })).toBe(false);
+    expect(reject?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING' })).toBe(false);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'PENDING_PUSH' })).toBe(false);
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'BACKTOSTART' })).toBe(false);
+    // OA 提交失败/无实例仍可系统内审批（OA 停用或历史单据）
+    expect(approve?.show?.({ status: 1, approveStatus: 0, oaStatus: 'PUSH_FAILED' })).toBe(true);
+    // 撤回/终止不受影响（OA 在途仍可撤回/终止）
+    const withdraw = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'withdraw');
+    const terminate = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'terminate');
+    expect(
+      withdraw?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING', createdBy: '9' }),
+    ).toBe(true);
+    expect(
+      terminate?.show?.({ status: 1, approveStatus: 0, oaStatus: 'RUNNING', createdBy: '9' }),
+    ).toBe(true);
   });
 });

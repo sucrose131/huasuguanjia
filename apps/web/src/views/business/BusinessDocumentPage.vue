@@ -13,6 +13,7 @@ import DocumentAttachments from '@/components/DocumentAttachments.vue';
 import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
 import { useBusinessDocumentPermissions } from './use-business-document-permissions';
 import { useBusinessDocumentOptions } from './use-business-document-options';
+import { useAuthStore } from '@/stores/auth';
 import type {
   BusinessDocumentConfig,
   BusinessDocumentContext,
@@ -144,6 +145,7 @@ function displayCell(
   row: Record<string, any>,
   column: { prop: string; kind?: string; render?: (row: Record<string, any>, ctx: ColumnRenderContext) => string },
 ) {
+  if (column.kind === 'money' && recordAmountMasked(row)) return '¥ ****';
   if (column.render) {
     const text = column.render(row, columnRenderCtx);
     return column.kind === 'money' ? protectedMoney(text) : text;
@@ -156,6 +158,16 @@ function displayCell(
   if (column.kind === 'number') return Number(value).toLocaleString();
   return String(value);
 }
+
+// 记录级金额掩码判定：无查看权（能力级）或 范围 own 且非本人创建的行，金额一律以 ¥ **** 呈现，
+// 避免后端 null（脱敏）被 render 的 ?? 0 兜成 ¥ 0.00 造成误导。
+const recordAmountMasked = (row: Record<string, any>) => {
+  const amount = useAuthStore().amountAccess;
+  if (!amount.canViewAmount) return true;
+  if ((amount.amountScope ?? 'all') === 'own')
+    return String(row.createdBy ?? row.created_by ?? '') !== String(useAuthStore().user?.id ?? '');
+  return false;
+};
 
 // 金额：无查看权限时仍带 ¥ 前缀掩码（对齐旧版「¥ ****」），有权限加 ¥ 前缀
 const protectedMoney = (value: unknown) => {

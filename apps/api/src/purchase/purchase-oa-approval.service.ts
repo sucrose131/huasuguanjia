@@ -449,4 +449,60 @@ export class PurchaseOaApprovalService {
     });
     return { id: fileId, objectKey, name: attachment.fileName };
   }
+
+  /**
+   * 创建人主动撤销已在 OA 运行中的采购申请流程。
+   * OA 失败时抛错，由调用方保证本地单据仍保持审批中。
+   * 若 OA 已撤销（上次本地落账失败后的重试），视为成功。
+   */
+  async cancelRemoteProcess(
+    instance: { account_set_id: bigint; bus_key: string; business_id: bigint },
+    userId: string,
+    approveComment = '创建人终止审批',
+  ): Promise<void> {
+    const credential = await this.credentials.getById(instance.account_set_id);
+    if (!credential) throw new BadRequestException('采购申请所属账套未启用，无法撤销OA审批');
+    const approverId = await this.resolveApproverId(userId, instance.account_set_id);
+    const busKey = instance.bus_key || `${BUSINESS_TYPE}:${instance.business_id}`;
+    try {
+      await this.approval.dealProcess(credential, {
+        approverId,
+        operateType: 'cancel',
+        busKey,
+        approveComment,
+      });
+    } catch (error) {
+      if (this.isAlreadyCanceledError(error)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`撤销OA审批失败：${message}`);
+    }
+  }
+
+  private async resolveApproverId(userId: string, accountSetId: bigint): Promise<string> {
+    const identity = await this.prisma.hspsi_sys_user_oa_staff.findFirst({
+      where: { user_id: BigInt(userId), account_set_id: accountSetId },
+      select: { staff_id: true },
+    });
+    if (!identity?.staff_id) {
+      throw new BadRequestException('提交人尚未关联该账套的OA员工，请先同步OA组织人员');
+    }
+    const staff = await this.prisma.hspsi_basic_staff.findFirst({
+      where: {
+        id: identity.staff_id,
+        account_set_id: accountSetId,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { outer_ref_id: true },
+    });
+    if (!staff?.outer_ref_id) {
+      throw new BadRequestException('提交人尚未关联有效OA账号，请先同步OA组织人员');
+    }
+    return staff.outer_ref_id;
+  }
+
+  private isAlreadyCanceledError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /已撤销|已取消|已经撤销|已经取消|already\s*cancel|already\s*revok/i.test(message);
+  }
 }
