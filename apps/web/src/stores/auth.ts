@@ -51,6 +51,38 @@ export const canEditAmountRecord = (
   if ((amountAccess.amountScope ?? 'all') === 'all') return true;
   return String(createdBy ?? '') === String(userId ?? '');
 };
+
+/**
+ * 记录级金额显示掩码判定：无查看能力，或（范围 own 且单据非本人创建）→ true（金额应显示 ¥ ****）。
+ * amountScope 缺失时按 all 处理。
+ */
+export const isAmountRecordMasked = (
+  amountAccess: { canViewAmount: boolean; amountScope?: AmountAccessState['amountScope'] },
+  userId: string | number | null | undefined,
+  createdBy: unknown,
+): boolean => {
+  if (!amountAccess.canViewAmount) return true;
+  if ((amountAccess.amountScope ?? 'all') === 'own')
+    return String(createdBy ?? '') !== String(userId ?? '');
+  return false;
+};
+
+/**
+ * 单据级金额显示掩码：对"当前展示的单据对象"做判定。
+ * - 无查看能力 → 掩码；
+ * - 范围 own 且单据有归属（createdBy/created_by）且非本人 → 掩码；
+ * - 新建/草稿单据（无归属字段）不掩码，避免录入金额被误遮蔽。
+ */
+export const recordAmountMasked = (
+  record: { createdBy?: unknown; created_by?: unknown } | null | undefined,
+): boolean => {
+  const auth = useAuthStore();
+  const createdBy = record?.createdBy ?? record?.created_by;
+  if (!auth.amountAccess.canViewAmount) return true;
+  if ((auth.amountAccess.amountScope ?? 'all') !== 'own') return false;
+  if (createdBy == null) return false;
+  return String(createdBy) !== String(auth.user?.id ?? '');
+};
 const storedMenus = () => {
   try {
     return JSON.parse(localStorage.getItem('hspsi_menus') ?? '[]') as Menu[];

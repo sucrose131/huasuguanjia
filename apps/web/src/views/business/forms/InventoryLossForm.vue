@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import { fetchScopedStockOptions } from '../use-scoped-stock-options';
@@ -15,6 +15,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ ****；新建/无归属不掩码 */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
@@ -456,7 +458,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
       <el-table-column label="金额" width="100" align="right">
-        <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
+        <template #default="s">¥ {{ moneyText(amountHidden ? null : s.row.amount) }}</template>
       </el-table-column>
       <el-table-column prop="batchNo" label="批号" width="125">
         <template #default="s">{{ s.row.batchNo || '无批号' }}</template>
@@ -501,7 +503,7 @@ onMounted(async () => {
         }}</strong></span
       >
       <span
-        >合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span
+        >合计金额 <strong>¥ {{ moneyText(amountHidden ? null : totalAmount) }}</strong></span
       >
     </div>
 

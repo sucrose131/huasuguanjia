@@ -97,6 +97,8 @@ const columnRenderCtx: ColumnRenderContext = {
   dictLabel: (code: string, value: unknown) =>
     (dicts[code] ?? []).find((item) => String(item.value) === String(value))?.label ?? '—',
   creator: (row: Record<string, any>) => {
+    const byName = row.createdByName ?? row.created_by_name;
+    if (byName) return String(byName);
     const value = row.createdBy ?? row.created_by;
     if (value === undefined || value === null || value === '') return '—';
     const user = (options.users ?? []).find(

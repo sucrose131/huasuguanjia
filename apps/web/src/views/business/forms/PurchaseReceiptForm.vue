@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, display, moneyText } from '@/utils/format';
 import { generateBatchNo } from '@/utils/batch-number';
 import { buildCategoryTree } from '@/utils/category-tree';
@@ -18,6 +18,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   organizations: [],
@@ -34,6 +36,15 @@ const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
 /** 来源方式：false=采购订单入库，true=临时采购入库（反向生成申请+订单） */
 const isDirect = computed(() => Boolean(form.value.directReceipt));
+
+/** 收货经办人显示具体人名：本人取登录用户员工姓名，他人取详情返回的 receiverName */
+const receiverDisplayName = computed(() => {
+  const rid = String(form.value.receiverId ?? '');
+  if (!rid || rid === '0') return '—';
+  if (rid === String(auth.user?.id ?? ''))
+    return auth.user?.displayName || auth.user?.username || '—';
+  return form.value.receiverName || `用户 #${rid}`;
+});
 
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
 const canExecuteReceipt = computed(
@@ -672,6 +683,9 @@ async function doSave(): Promise<any | null> {
     const url = '/purchase/receipts';
     const payload: Record<string, any> = {
       ...(isDirect.value ? {} : { orderId: form.value.orderId }),
+      ...(isDirect.value && form.value.vendorId
+        ? { vendorId: String(form.value.vendorId) }
+        : {}),
       orgId: form.value.orgId,
       warehouseId: form.value.warehouseId,
       deptId: form.value.deptId,
@@ -853,7 +867,7 @@ onMounted(async () => {
       </el-form-item>
 
       <el-form-item label="收货经办人">
-        <el-input :model-value="auth.user?.username || '—'" readonly />
+        <el-input :model-value="receiverDisplayName" readonly />
       </el-form-item>
 
       <el-form-item label="入库类型">
@@ -894,6 +908,7 @@ onMounted(async () => {
       :details="form.details ?? []"
       :units="options.units"
       :readonly="isView"
+      :amount-hidden="amountHidden"
     />
 
     <!-- 临时入库：内联明细表格 -->
@@ -989,7 +1004,7 @@ onMounted(async () => {
               :precision="2"
               controls-position="right"
             />
-            <span v-else class="readonly-cell number-cell">¥ {{ moneyText(s.row.unitPrice) }}</span>
+            <span v-else class="readonly-cell number-cell">¥ {{ moneyText(amountHidden ? null : s.row.unitPrice) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="批号" width="140">

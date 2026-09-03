@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
 import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
@@ -15,6 +15,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const dicts = reactive<Record<string, any[]>>({});
 
@@ -39,6 +41,7 @@ const flowForm = reactive({
 });
 
 function money(value: unknown) {
+  if (amountHidden.value) return canViewAmount.value ? '¥ ****' : '****';
   return canViewAmount.value ? `¥ ${moneyText(value)}` : '****';
 }
 

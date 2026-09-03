@@ -4,7 +4,13 @@ import { dateText, display, moneyText } from '@/utils/format';
 
 type UnitOption = { label: string; value: string | number };
 
-const props = defineProps<{ details: any[]; units?: UnitOption[]; readonly?: boolean }>();
+const props = defineProps<{
+  details: any[];
+  units?: UnitOption[];
+  readonly?: boolean;
+  /** 记录级金额掩码：true 时单价/金额/合计统一显示 ¥ ****（脱敏单据） */
+  amountHidden?: boolean;
+}>();
 const totalQuantity = computed(() =>
   props.details.reduce((sum, line) => sum + Number(line.inputQuantity ?? 0), 0),
 );
@@ -15,6 +21,13 @@ const totalAmount = computed(() =>
   ),
 );
 const orderAmount = (line: any) => Number(line.orderQuantity ?? 0) * Number(line.unitPrice ?? 0);
+const lineAmountText = (line: any) =>
+  props.amountHidden ? '¥ ****' : `¥ ${moneyText(orderAmount(line))}`;
+const unitPriceText = (line: any) =>
+  props.amountHidden ? '¥ ****' : `¥ ${moneyText(line.unitPrice)}`;
+const totalAmountText = computed(() =>
+  props.amountHidden ? '¥ ****' : `¥ ${moneyText(totalAmount.value)}`,
+);
 const currentQuantity = (line: any) => Math.max(0, Number(line.inputQuantity ?? 0));
 const arrivedQuantity = (line: any) =>
   props.readonly
@@ -65,8 +78,8 @@ const unitName = (line: any) =>
         <div class="value-box">{{ display(line.skuLabel ?? line.skuName) }}</div>
         <div class="value-box">{{ unitName(line) }}</div>
         <div class="value-box number">{{ line.orderQuantity }}</div>
-        <div class="value-box number">¥ {{ moneyText(line.unitPrice) }}</div>
-        <div class="value-box number amount">¥ {{ moneyText(orderAmount(line)) }}</div>
+        <div class="value-box number">{{ unitPriceText(line) }}</div>
+        <div class="value-box number amount">{{ lineAmountText(line) }}</div>
       </div>
       <div class="receipt-business">
         <section class="progress-panel">
@@ -172,7 +185,7 @@ const unitName = (line: any) =>
     </article>
     <footer v-if="details.length" class="receipt-total">
       <span>合计实收数</span><strong>{{ totalQuantity }}</strong
-      ><span>合计金额</span><strong>¥ {{ moneyText(totalAmount) }}</strong>
+      ><span>合计金额</span><strong>{{ totalAmountText }}</strong>
     </footer>
   </section>
 </template>
