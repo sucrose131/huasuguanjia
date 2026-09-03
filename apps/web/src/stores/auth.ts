@@ -43,7 +43,7 @@ const defaultAmountAccess = (): AmountAccessState => ({
  * amountScope 缺失时按 all 处理，兼容旧接口/旧快照与既有测试。
  */
 export const canEditAmountRecord = (
-  amountAccess: Pick<AmountAccessState, 'canEditAmount' | 'amountScope'>,
+  amountAccess: { canEditAmount: boolean; amountScope?: AmountAccessState['amountScope'] },
   userId: string | number | null | undefined,
   createdBy: unknown,
 ): boolean => {
