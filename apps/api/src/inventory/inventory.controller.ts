@@ -17,6 +17,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
 import { InventoryOaApprovalService } from './inventory-oa-approval.service';
+import { AmountScopeExempt } from '../amount-access/amount-access.decorator';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
@@ -51,6 +52,8 @@ export class InventoryController {
   }
 
   // ── stocks ──
+  // 库存查询：当前存量视图，金额按"金额查看能力"整体控制，不参与 own/全部 经办范围分级
+  @AmountScopeExempt()
   @Get('stocks')
   @RequirePermissions('inventory')
   stocks(@Query() q: any) {
@@ -385,6 +388,8 @@ export class InventoryController {
   }
 
   // ── alerts ──
+  // 库存预警/效期预警：存量视图金额按"金额查看能力"整体控制，不参与 own/全部 经办范围分级
+  @AmountScopeExempt()
   @Get('quantity-alerts')
   @RequirePermissions('inventory')
   quantityAlerts(@Query() q: any) {
@@ -397,6 +402,7 @@ export class InventoryController {
     return this.service.saveQuantityAlert(b);
   }
 
+  @AmountScopeExempt()
   @Get('expiry-alerts')
   @RequirePermissions('inventory')
   expiryAlerts(@Query() q: any) {
