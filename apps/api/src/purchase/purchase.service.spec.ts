@@ -155,6 +155,7 @@ describe('PurchaseService quick catalog materialization', () => {
     const receiptCreate = vi.fn().mockResolvedValue({ po_input_id: 501n });
     const receiptDetailCreate = vi.fn();
     const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null), create: goodsCreate },
       hspsi_goods_info_category: {
         findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
@@ -232,6 +233,7 @@ describe('PurchaseService quick catalog materialization', () => {
     const applicationCreate = vi.fn().mockResolvedValue({ pur_id: 301n });
     const detailCreateMany = vi.fn();
     const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       hspsi_goods_info: { findFirst: vi.fn().mockResolvedValue(null), create: goodsCreate },
       hspsi_goods_info_category: {
         findFirst: vi.fn().mockResolvedValue({ goods_catg_id: 3n, warehouse_type: 2 }),
@@ -256,6 +258,8 @@ describe('PurchaseService quick catalog materialization', () => {
       null,
       {
         orgId: 1,
+        oaOrgId: 1,
+        receiverId: 9,
         deptId: 2,
         warehouseId: 3,
         details: [
@@ -271,9 +275,15 @@ describe('PurchaseService quick catalog materialization', () => {
           },
         ],
       },
-      '9',
+      {
+        id: '9',
+        username: 'applicant',
+        orgId: '1',
+        deptId: '2',
+        authorizedOrganizations: [{ id: '1', name: '主组织' }],
+        permissions: ['purchase'],
+      },
       false,
-      '1',
     );
 
     expect(goodsCreate).toHaveBeenCalledOnce();
@@ -1172,6 +1182,7 @@ describe('PurchaseService production-shortage guards', () => {
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
     const tx = {
       $queryRaw: vi.fn(),
+      $executeRaw: vi.fn().mockResolvedValue(1),
       hspsi_purchase_order: {
         findFirst: vi.fn().mockResolvedValue({
           po_id: 20n,

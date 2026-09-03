@@ -2842,6 +2842,14 @@ export class PurchaseService {
             remark: line.remark,
           })),
         });
+        // 反向生成的申请与已有订单明细建立关联：订单明细 source_application_detail_id 指向新申请明细
+        // （订单明细按 goods+sku 唯一，见 assertUniqueOrderLines）
+        await tx.$executeRaw`
+          UPDATE hspsi_purchase_order_detail od
+          JOIN hspsi_purchase_approve_detail ad
+            ON ad.goods_id = od.goods_id AND ad.sku_id = od.sku_id AND ad.pur_id = ${applicationId}
+          SET od.source_application_detail_id = ad.id
+          WHERE od.po_id = ${poId} AND od.source_application_detail_id IS NULL`;
       }
       await tx.hspsi_purchase_order.update({
         where: { po_id: poId },
@@ -3548,6 +3556,14 @@ export class PurchaseService {
             remark: String(line.remark ?? ''),
           })),
         });
+        // 反向生成的申请与订单明细建立关联：订单明细 source_application_detail_id 指向新申请明细
+        // （订单明细由同一批 lines 生成，goods+sku 与申请明细一一对应）
+        await tx.$executeRaw`
+          UPDATE hspsi_purchase_order_detail od
+          JOIN hspsi_purchase_approve_detail ad
+            ON ad.goods_id = od.goods_id AND ad.sku_id = od.sku_id AND ad.pur_id = ${purId}
+          SET od.source_application_detail_id = ad.id
+          WHERE od.po_id = ${newPoId} AND od.source_application_detail_id IS NULL`;
         finalPoId = newPoId;
         finalPoNo = orderNo;
         pcsQty = qty;
