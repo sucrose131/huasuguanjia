@@ -9,17 +9,24 @@ export function approvalStatusText(row: Record<string, any>): string {
   const oaStatus = String(row.oaStatus ?? '');
   if (approveStatus === 1) return oaStatus === 'PASSED' ? 'OA已通过' : '已通过';
   if (approveStatus === 2) return oaStatus === 'REJECTED' ? 'OA已驳回' : '已驳回';
+  if (approveStatus === 3) {
+    // 取消/终止（approve_status=3）：OA 侧撤销（回调以 0 号操作人写入）带渠道，本系统终止（创建人）不带
+    const bySystem = Number(row.approveBy ?? row.approve_by ?? 0) === 0;
+    return oaStatus === 'CANCELED' && bySystem ? 'OA已取消' : '已取消';
+  }
   if (oaStatus === 'RUNNING') return 'OA审批中';
   if (oaStatus === 'BACKTOSTART') return 'OA退回发起人';
   if (oaStatus === 'PENDING_PUSH') return '待提交OA';
   if (oaStatus === 'PUSH_FAILED') return 'OA提交失败';
-  return '待审批';
+  // 单据未进入审批流程（草稿/撤回待重提/未推送）：显示"待提交"，与 OA 各过程态区分
+  return '待提交';
 }
 
 export function approvalStatusType(row: Record<string, any>): ApprovalStatusTagType {
   const text = approvalStatusText(row);
   if (text.includes('通过')) return 'success';
+  if (text.includes('取消')) return 'info';
   if (text === 'OA提交失败') return 'danger';
   if (text.includes('驳回')) return 'danger';
-  return 'warning'; // 待审批 / OA审批中 / 待提交OA / OA退回发起人
+  return 'warning'; // 待提交 / OA审批中 / 待提交OA / OA退回发起人
 }

@@ -14,7 +14,7 @@ const isCurrentApplicant = (row: Record<string, any>) =>
 /**
  * 采购申请单：共享引擎配置。
  *
- * 说明：列表接口返回的是原始 approveStatus（0 待审批 / 1 已通过 / 2 已驳回 / 3 已取消）与
+ * 说明：列表接口返回的是原始 approveStatus（0 待提交 / 1 已通过 / 2 已驳回 / 3 已取消）与
  * generationStatus（not_generated / partially_generated / fully_generated）等数字/枚举值，
  * 列表接口提供 createdByName；组织、部门和仓库继续复用共享选项袋显示。
  */
