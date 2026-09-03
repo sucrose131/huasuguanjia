@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, primeDetailHandoff } from '@/api';
-import { moneyText } from '@/utils/format';
+import { dateTimeText, moneyText } from '@/utils/format';
 import SummaryStrip from '@/components/SummaryStrip.vue';
 import TableRowActions from '@/components/business/TableRowActions.vue';
 import BusinessDocumentTrace from '@/components/business/BusinessDocumentTrace.vue';
@@ -97,6 +97,8 @@ const columnRenderCtx: ColumnRenderContext = {
   dictLabel: (code: string, value: unknown) =>
     (dicts[code] ?? []).find((item) => String(item.value) === String(value))?.label ?? '—',
   creator: (row: Record<string, any>) => {
+    const byName = row.createdByName ?? row.created_by_name;
+    if (byName) return String(byName);
     const value = row.createdBy ?? row.created_by;
     if (value === undefined || value === null || value === '') return '—';
     const user = (options.users ?? []).find(
@@ -153,7 +155,7 @@ function displayCell(
   const value = row[column.prop];
   if (value === null || value === undefined) return '—';
   if (column.kind === 'date') return String(value).slice(0, 10);
-  if (column.kind === 'datetime') return String(value).replace('T', ' ').slice(0, 16);
+  if (column.kind === 'datetime') return dateTimeText(value);
   if (column.kind === 'money') return protectedMoney(value);
   if (column.kind === 'number') return Number(value).toLocaleString();
   return String(value);
@@ -161,7 +163,9 @@ function displayCell(
 
 // 记录级金额掩码判定：无查看权（能力级）或 范围 own 且非本人创建的行，金额一律以 ¥ **** 呈现，
 // 避免后端 null（脱敏）被 render 的 ?? 0 兜成 ¥ 0.00 造成误导。
+// 存量/主数据视图（config.amountScopeExempt，如库存查询/预警）不做按行掩码，金额仅由能力级控制。
 const recordAmountMasked = (row: Record<string, any>) => {
+  if (props.config.amountScopeExempt) return false;
   const amount = useAuthStore().amountAccess;
   if (!amount.canViewAmount) return true;
   if ((amount.amountScope ?? 'all') === 'own')

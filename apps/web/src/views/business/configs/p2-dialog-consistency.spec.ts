@@ -61,4 +61,13 @@ describe('P2 business dialog interaction contract', () => {
     expect(refund).toContain('确认采购退款');
     expect(refund).toContain("confirmButtonText: '确认退款'");
   });
+
+  it('formats list datetime columns in the local timezone instead of slicing UTC ISO', () => {
+    const page = source('../BusinessDocumentPage.vue');
+    expect(page).toContain('dateTimeText(value)');
+    expect(page).not.toContain("String(value).replace('T', ' ').slice(0, 16)");
+
+    const preview = source('../../../components/purchase/PurchaseApplicationOrderPreviewDialog.vue');
+    expect(preview).toContain('dateTimeText(scope.row.createdAt)');
+  });
 });

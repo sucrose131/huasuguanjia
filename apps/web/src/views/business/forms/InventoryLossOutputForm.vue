@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive } from 'vue';
 import { api } from '@/api';
+import { recordAmountMasked } from '@/stores/auth';
 import { moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
@@ -11,6 +12,8 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'cancel'): void }>();
 
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
@@ -143,16 +146,16 @@ onMounted(async () => {
         <template #default="s">{{ quantity(s.row.quantity) }}</template>
       </el-table-column>
       <el-table-column label="单价" width="130">
-        <template #default="s">¥ {{ moneyText(s.row.unitPrice) }}</template>
+        <template #default="s">¥ {{ moneyText(amountHidden ? null : s.row.unitPrice) }}</template>
       </el-table-column>
       <el-table-column label="金额" width="100" align="right">
-        <template #default="s">¥ {{ moneyText(s.row.amount) }}</template>
+        <template #default="s">¥ {{ moneyText(amountHidden ? null : s.row.amount) }}</template>
       </el-table-column>
       <el-table-column prop="batchNo" label="批号" width="125" />
     </el-table>
     <div v-if="(form.details ?? []).length" class="modal-totals">
       <span>合计数量 <strong>{{ quantity(totalQuantity) }}</strong></span>
-      <span>合计金额 <strong>¥ {{ moneyText(totalAmount) }}</strong></span>
+      <span>合计金额 <strong>¥ {{ moneyText(amountHidden ? null : totalAmount) }}</strong></span>
     </div>
 
     <div class="form-actions">

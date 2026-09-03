@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { createRequestId } from '@/utils/random-id';
 import RemoteSelect from '@/components/RemoteSelect.vue';
@@ -21,6 +21,8 @@ const dicts = reactive<Record<string, any[]>>({ payment_channel: [] });
 
 const isView = computed(() => props.mode !== 'create');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+/** 记录级金额掩码：无查看权，或（范围 own 且单据非本人创建）→ 金额统一以 **** 呈现 */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const orderActualAmount = computed(
   () => form.value.orderActualAmount ?? form.value.actualAmount ?? 0,
 );
@@ -203,7 +205,7 @@ onMounted(async () => {
           <el-input :model-value="form.orderDate ? dateText(form.orderDate) : '—'" readonly />
         </el-form-item>
         <el-form-item label="订单实际金额">
-          <el-input :model-value="moneyText(orderActualAmount)" readonly />
+          <el-input :model-value="moneyText(amountHidden ? null : orderActualAmount)" readonly />
         </el-form-item>
       </div>
     </div>
@@ -212,16 +214,16 @@ onMounted(async () => {
       <div class="funds-title">资金摘要</div>
       <div class="form-grid">
         <el-form-item label="累计收款">
-          <el-input :model-value="moneyText(form.receivedAmount)" readonly />
+          <el-input :model-value="moneyText(amountHidden ? null : form.receivedAmount)" readonly />
         </el-form-item>
         <el-form-item label="累计退款">
-          <el-input :model-value="moneyText(form.refundedAmount)" readonly />
+          <el-input :model-value="moneyText(amountHidden ? null : form.refundedAmount)" readonly />
         </el-form-item>
         <el-form-item label="净收款">
-          <el-input :model-value="moneyText(form.netAmount)" readonly />
+          <el-input :model-value="moneyText(amountHidden ? null : form.netAmount)" readonly />
         </el-form-item>
         <el-form-item label="可退金额">
-          <el-input :model-value="moneyText(moneyLimit)" readonly />
+          <el-input :model-value="moneyText(amountHidden ? null : moneyLimit)" readonly />
         </el-form-item>
       </div>
     </div>

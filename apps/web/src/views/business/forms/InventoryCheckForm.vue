@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import BusinessStatusTag from '@/components/business/BusinessStatusTag.vue';
@@ -16,6 +16,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 单价/差异金额显示 ¥ ****；新建/无归属不掩码 */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const options = reactive<Record<string, any>>({ orgs: [], warehouses: [] });
 const dicts = reactive<Record<string, any[]>>({
@@ -131,7 +133,7 @@ function getCheckSummaries({ columns, data }: { columns: any[]; data: any[] }) {
     if (index === 0) return '合计';
     if (!(column.property in totals)) return '';
     return column.property === 'differentAmount'
-      ? `¥ ${moneyText(totals[column.property])}`
+      ? `¥ ${moneyText(amountHidden.value ? null : totals[column.property])}`
       : quantity(totals[column.property]);
   });
 }
@@ -460,10 +462,10 @@ onMounted(async () => {
               </template>
             </el-table-column>
             <el-table-column prop="unitPrice" label="单价" width="88" align="right">
-              <template #default="b">¥ {{ moneyText(b.row.unitPrice) }}</template>
+              <template #default="b">¥ {{ moneyText(amountHidden ? null : b.row.unitPrice) }}</template>
             </el-table-column>
             <el-table-column prop="differentAmount" label="差异金额" width="104" align="right">
-              <template #default="b">¥ {{ moneyText(b.row.differentAmount) }}</template>
+              <template #default="b">¥ {{ moneyText(amountHidden ? null : b.row.differentAmount) }}</template>
             </el-table-column>
             <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip>
               <template #default="b">

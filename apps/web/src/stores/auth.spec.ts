@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canEditAmountRecord } from './auth';
+import { canEditAmountRecord, isAmountRecordMasked } from './auth';
 
 vi.mock('@/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 
@@ -32,5 +32,38 @@ describe('canEditAmountRecord', () => {
     expect(
       canEditAmountRecord({ canEditAmount: true }, '9', '8'),
     ).toBe(true);
+  });
+});
+
+describe('isAmountRecordMasked', () => {
+  it('masks every record when the user has no view capability', () => {
+    expect(
+      isAmountRecordMasked({ canViewAmount: false, amountScope: 'own' }, '9', '9'),
+    ).toBe(true);
+    expect(
+      isAmountRecordMasked({ canViewAmount: false, amountScope: 'all' }, '9', '9'),
+    ).toBe(true);
+  });
+
+  it('keeps all records visible for all-scope viewers', () => {
+    expect(
+      isAmountRecordMasked({ canViewAmount: true, amountScope: 'all' }, '9', '8'),
+    ).toBe(false);
+  });
+
+  it('masks records created by others for own-scope viewers', () => {
+    expect(
+      isAmountRecordMasked({ canViewAmount: true, amountScope: 'own' }, '9', '8'),
+    ).toBe(true);
+  });
+
+  it('keeps own records visible for own-scope viewers', () => {
+    expect(
+      isAmountRecordMasked({ canViewAmount: true, amountScope: 'own' }, '9', '9'),
+    ).toBe(false);
+  });
+
+  it('treats a missing scope as all (backward compatibility)', () => {
+    expect(isAmountRecordMasked({ canViewAmount: true }, '9', '8')).toBe(false);
   });
 });

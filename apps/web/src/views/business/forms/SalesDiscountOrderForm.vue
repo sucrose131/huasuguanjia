@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import { filterMappedGoodsByKeyword } from '@/utils/goods-warehouse';
@@ -29,6 +29,8 @@ const dicts = reactive<Record<string, any[]>>({});
 
 const isView = computed(() => props.mode === 'view');
 const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+/** 记录级金额掩码：无查看权，或（范围 own 且单据非本人创建）→ 金额统一以 **** 呈现 */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const sourceLocked = computed(() => Boolean(form.value.sourceLocked));
 
 function blankLine() {
@@ -409,7 +411,11 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="金额" width="120">
         <template #default="s">
-          {{ moneyText(Number(s.row.quantity || 0) * Number(s.row.price || 0)) }}
+          {{
+            moneyText(
+              amountHidden ? null : Number(s.row.quantity || 0) * Number(s.row.price || 0),
+            )
+          }}
         </template>
       </el-table-column>
       <el-table-column label="可用库存" width="100">
@@ -444,7 +450,7 @@ onMounted(async () => {
             :placeholder="String(lineActual(s.row))"
             :disabled="!canEditAmount"
           />
-          <span v-else>{{ moneyText(lineActual(s.row)) }}</span>
+          <span v-else>{{ moneyText(amountHidden ? null : lineActual(s.row)) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="备注" min-width="140">
@@ -464,13 +470,19 @@ onMounted(async () => {
         >合计数量：<strong>{{ orderTotals.quantity.toLocaleString('zh-CN') }}</strong></span
       >
       <span
-        >订单金额：<strong>¥ {{ moneyText(orderTotals.orderAmount) }}</strong></span
+        >订单金额：<strong>¥ {{
+          moneyText(amountHidden ? null : orderTotals.orderAmount)
+        }}</strong></span
       >
       <span
-        >旧物折价金额：<strong>¥ {{ moneyText(orderTotals.discount) }}</strong></span
+        >旧物折价金额：<strong>¥ {{
+          moneyText(amountHidden ? null : orderTotals.discount)
+        }}</strong></span
       >
       <span
-        >最终成交金额：<strong>¥ {{ moneyText(orderTotals.factAmount) }}</strong></span
+        >最终成交金额：<strong>¥ {{
+          moneyText(amountHidden ? null : orderTotals.factAmount)
+        }}</strong></span
       >
     </div>
 

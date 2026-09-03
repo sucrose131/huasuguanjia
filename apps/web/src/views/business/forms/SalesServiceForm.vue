@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { recordAmountMasked, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import RemoteSelect from '@/components/RemoteSelect.vue';
 import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
@@ -15,6 +15,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
+/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
+const amountHidden = computed(() => recordAmountMasked(form.value));
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   orgs: [],
@@ -374,7 +376,7 @@ onMounted(async () => {
         <el-input :model-value="form.orderDate" readonly />
       </el-form-item>
       <el-form-item v-if="form.orderId" label="订单金额">
-        <el-input :model-value="moneyText(form.orderAmount ?? 0)" readonly />
+        <el-input :model-value="moneyText(amountHidden ? null : form.orderAmount ?? 0)" readonly />
       </el-form-item>
 
       <el-form-item label="售后商品" required>
