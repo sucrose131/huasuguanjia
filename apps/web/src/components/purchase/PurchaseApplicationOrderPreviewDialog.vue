@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router';
 import { api } from '@/api';
 import StatusTag from '@/components/StatusTag.vue';
 import OverflowTooltipCell from '@/components/business/OverflowTooltipCell.vue';
-import { dateText, moneyText } from '@/utils/format';
+import { dateTimeText, moneyText } from '@/utils/format';
 
 type PreviewMode = 'all' | 'partial' | 'related';
 type Option = { label: string; value: string | number };
@@ -269,8 +269,8 @@ watch(
               />
             </template>
           </el-table-column>
-          <el-table-column label="生成时间" width="112">
-            <template #default="scope">{{ dateText(scope.row.createdAt) }}</template>
+          <el-table-column label="生成时间" width="160">
+            <template #default="scope">{{ dateTimeText(scope.row.createdAt) }}</template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right" align="center">
             <template #default="scope">
