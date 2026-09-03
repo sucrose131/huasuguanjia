@@ -10,7 +10,7 @@ describe('requisitionApprovalStatusText（审批状态/OA状态合并口径）',
     expect(requisitionApprovalStatusText({ approveStatus: 2, oaStatus: '' })).toBe('已驳回');
   });
 
-  it('未决态：展示 OA 过程，未进入审批流程的显示待提交', () => {
+  it('未决态：展示 OA 过程，否则待审批', () => {
     expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: 'RUNNING' })).toBe('OA审批中');
     expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: 'BACKTOSTART' })).toBe(
       'OA退回发起人',
@@ -21,8 +21,8 @@ describe('requisitionApprovalStatusText（审批状态/OA状态合并口径）',
     expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: 'PUSH_FAILED' })).toBe(
       'OA提交失败',
     );
-    expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: '' })).toBe('待提交');
-    expect(requisitionApprovalStatusText({ approve_status: 0 })).toBe('待提交');
+    expect(requisitionApprovalStatusText({ approveStatus: 0, oaStatus: '' })).toBe('待审批');
+    expect(requisitionApprovalStatusText({ approve_status: 0 })).toBe('待审批');
   });
 
   it('终态：取消/终止（3）按渠道区分，OA 侧撤销带渠道', () => {

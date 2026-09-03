@@ -18,8 +18,8 @@ export function approvalStatusText(row: Record<string, any>): string {
   if (oaStatus === 'BACKTOSTART') return 'OA退回发起人';
   if (oaStatus === 'PENDING_PUSH') return '待提交OA';
   if (oaStatus === 'PUSH_FAILED') return 'OA提交失败';
-  // 单据未进入审批流程（草稿/撤回待重提/未推送）：显示"待提交"，与 OA 各过程态区分
-  return '待提交';
+  // 单据无 OA 过程态：系统内待审批（含草稿/撤回后未重提等），沿用既有"待审批"口径
+  return '待审批';
 }
 
 export function approvalStatusType(row: Record<string, any>): ApprovalStatusTagType {
@@ -28,5 +28,5 @@ export function approvalStatusType(row: Record<string, any>): ApprovalStatusTagT
   if (text.includes('取消')) return 'info';
   if (text === 'OA提交失败') return 'danger';
   if (text.includes('驳回')) return 'danger';
-  return 'warning'; // 待提交 / OA审批中 / 待提交OA / OA退回发起人
+  return 'warning'; // 待审批 / OA审批中 / 待提交OA / OA退回发起人
 }
