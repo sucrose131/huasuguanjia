@@ -15,8 +15,15 @@ const INCREMENT_SCRIPT = `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   redis.call('SET', KEYS[1], ARGV[2])
 end
+local current = tonumber(redis.call('GET', KEYS[1]))
+local dbMax = tonumber(ARGV[3])
+if current < dbMax then
+  -- Redis 计数落后于数据库（如导入/恢复了含更高单号的数据）：先抬升到库内最大值，避免唯一键冲突
+  redis.call('SET', KEYS[1], dbMax)
+  current = dbMax
+end
 local value = redis.call('INCR', KEYS[1])
-if value == tonumber(ARGV[2]) + 1 then
+if value == dbMax + 1 then
   redis.call('EXPIREAT', KEYS[1], ARGV[1])
 end
 return value
@@ -48,6 +55,7 @@ export class BusinessNumberService {
       ? PURCHASE_BUSINESS_NUMBER_DAILY_LIMIT
       : BUSINESS_NUMBER_DAILY_LIMIT;
     const sequenceWidth = isPurchaseNumber ? 4 : 6;
+    // 采购类：initialSequence 同时是"库内当日最大号"，作为 Redis 计数托底（ARGV[3]）
     const initialSequence = isPurchaseNumber
       ? await this.existingPurchaseSequence(prefix, date)
       : 0;
@@ -61,6 +69,7 @@ export class BusinessNumberService {
           1,
           key,
           String(expiresAt),
+          String(initialSequence),
           String(initialSequence),
         );
         const sequence = Number(raw);

@@ -43,6 +43,7 @@ describe('BusinessNumberService', () => {
       'hspsi:production:business-no:PO:20260804',
       expect.any(String),
       '0',
+      '0',
     );
   });
 
@@ -93,6 +94,22 @@ describe('BusinessNumberService', () => {
       /^PO\d{8}0028$/,
     );
     expect(evalCommand.mock.calls[0]!.at(-1)).toBe('27');
+  });
+
+  it('passes the in-database maximum as the Redis floor so imports cannot collide', async () => {
+    const { service, prisma, evalCommand } = createService();
+    prisma.hspsi_purchase_order.findFirst.mockResolvedValueOnce({
+      po_no: 'PO202609030042',
+    });
+    evalCommand.mockResolvedValueOnce(43);
+
+    await expect(service.generate(BUSINESS_PREFIX.PURCHASE_ORDER)).resolves.toMatch(
+      /^PO\d{8}0043$/,
+    );
+    // ARGV[2]=initialSequence 与 ARGV[3]=dbMax 均为库内最大号 42；脚本会在 Redis 计数落后时先抬升
+    expect(evalCommand.mock.calls[0]![4]).toBe('42');
+    expect(evalCommand.mock.calls[0]![5]).toBe('42');
+    expect(String(evalCommand.mock.calls[0]![0])).toContain('dbMax');
   });
 
   it('retries three times and fails closed when Redis is unavailable', async () => {

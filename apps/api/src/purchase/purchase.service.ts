@@ -3746,7 +3746,10 @@ export class PurchaseService {
     const qty = lines.reduce((sum, line) => sum + Number(line.inputQuantity), 0);
     // 收货经办人（收货人）统一取值：表单未传时回退当前用户；申请/订单/入库三条链路共用同一值
     const chainReceiverId = body.receiverId ? BigInt(String(body.receiverId)) : BigInt(userId);
-    return this.guardedTransaction(async (tx) => {
+    // 新建入库单（含临时采购入库自动生成申请/订单号）：自动单号撞唯一键时整事务重试并重新发号；
+    // 编辑已有入库单不自动生成申请/订单号，无需重试。
+    const txBody = () =>
+      this.guardedTransaction(async (tx) => {
       if (isDirect) await this.materializeQuickCatalog(tx, lines, userId);
       let finalPoId = BigInt(0);
       let finalOrgId = BigInt(0);
@@ -4029,6 +4032,20 @@ export class PurchaseService {
         message: id ? '更新成功' : '入库单已创建',
       };
     });
+    if (id) return txBody();
+    const isUniqueNoConflict = (error: unknown) =>
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002' &&
+      /(pur_no|po_no|po_input_no)/.test(JSON.stringify(error.meta?.target ?? ''));
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await txBody();
+      } catch (error) {
+        if (attempt < 3 && isUniqueNoConflict(error)) continue;
+        throw error;
+      }
+    }
+    return txBody();
   }
   private async postReceipt(
     tx: Prisma.TransactionClient,
