@@ -38,6 +38,15 @@ const SALES_OUTPUT_DESTINATION = { SALE: 1, DISCOUNT: 2, EXCHANGE: 3 } as const;
 
 @Injectable()
 export class SalesService {
+  /** 金额范围 own 记录级断言用：取销售订单创建人（不存在返回 '0'，own 用户视为非本人） */
+  async saleOrderCreatedBy(id: string): Promise<string> {
+    const row = await this.p.hspsi_sale_order.findUnique({
+      where: { so_id: BigInt(id) },
+      select: { created_by: true },
+    });
+    return row ? String(row.created_by ?? 0) : '0';
+  }
+
   constructor(
     @Inject(PrismaService) private readonly p: PrismaService,
     @Inject(InventoryPostingService) private readonly posting: InventoryPostingService,

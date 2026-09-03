@@ -9,7 +9,10 @@ import {
 import { Prisma } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { PrismaService } from '../database/prisma.service';
-import { AmountAccessService } from '../amount-access/amount-access.service';
+import {
+  AmountAccessService,
+  amountScopeFromDb,
+} from '../amount-access/amount-access.service';
 
 type Body = Record<string, any>;
 
@@ -316,6 +319,7 @@ export class SystemService {
           ? this.amountAccess.fromFlags(
               configuredAmountAccess.can_view_amount,
               configuredAmountAccess.can_edit_amount,
+              amountScopeFromDb(configuredAmountAccess.amount_scope),
             )
           : this.amountAccess.fromFlags(0, 0);
       return {
@@ -358,6 +362,7 @@ export class SystemService {
         amountAccess: amountAccess.level,
         canViewAmount: amountAccess.canViewAmount,
         canEditAmount: amountAccess.canEditAmount,
+        amountScope: amountAccess.amountScope,
         amountGrantReason: configuredAmountAccess?.grant_reason ?? '',
         authorizationSource: user.staff_id ? 'OA身份同步 + 本地业务授权' : '本地系统账号',
         phone: user.phone ?? '',

@@ -45,6 +45,33 @@ type OperationHistoryItem = {
 export class PurchaseService {
   private static readonly logger = new Logger(PurchaseService.name);
 
+  /** 金额范围 own 记录级断言用：取采购订单创建人（不存在返回 '0'，own 用户视为非本人） */
+  async purchaseOrderCreatedBy(id: string): Promise<string> {
+    const row = await this.prisma.hspsi_purchase_order.findUnique({
+      where: { po_id: BigInt(id) },
+      select: { created_by: true },
+    });
+    return row ? String(row.created_by ?? 0) : '0';
+  }
+
+  /** 金额范围 own 记录级断言用：取采购入库（收货单）创建人 */
+  async purchaseInputCreatedBy(id: string): Promise<string> {
+    const row = await this.prisma.hspsi_purchase_order_input.findUnique({
+      where: { po_input_id: BigInt(id) },
+      select: { created_by: true },
+    });
+    return row ? String(row.created_by ?? 0) : '0';
+  }
+
+  /** 金额范围 own 记录级断言用：取采购付款单创建人 */
+  async purchasePaymentCreatedBy(id: string): Promise<string> {
+    const row = await this.prisma.hspsi_purchase_order_payment.findUnique({
+      where: { pay_id: BigInt(id) },
+      select: { created_by: true },
+    });
+    return row ? String(row.created_by ?? 0) : '0';
+  }
+
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(BusinessMasterDataService) private masterData: BusinessMasterDataService,

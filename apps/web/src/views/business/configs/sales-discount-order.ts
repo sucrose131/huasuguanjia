@@ -1,9 +1,16 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useAuthStore, canEditAmountRecord } from '@/stores/auth';
 import SalesDiscountOrderForm from '../forms/SalesDiscountOrderForm.vue';
 
 type Row = Record<string, any>;
+
+/** 记录级金额编辑判定：范围 own 时只允许编辑自己创建(createdBy=本人)的折价单 */
+const canEditRecordAmount = (row: Row) => {
+  const auth = useAuthStore();
+  return canEditAmountRecord(auth.amountAccess, auth.user?.id, row.createdBy);
+};
 
 const hasSource = (row: Row) => Number(row.businessSourceId ?? row.business_source_id ?? 0) > 0;
 const approveStatus = (row: Row) => Number(row.approveStatus ?? row.approve_status ?? 0);
@@ -47,7 +54,11 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     if (query.documentId) {
       // controller 无 GET /sales/discount-orders/:id，详情复用 /sales/orders/:id
       const detail: any = await api.get(`/sales/orders/${query.documentId}`);
-      if (String(query.view ?? '') === '1') ctx.openView(detail);
+      const auth = useAuthStore();
+      const ownEditable =
+        (auth.amountAccess.amountScope ?? 'all') === 'all' ||
+        String(detail?.createdBy ?? '') === String(auth.user?.id ?? '');
+      if (String(query.view ?? '') === '1' || !ownEditable) ctx.openView(detail);
       else ctx.openEdit(detail);
     }
   },
@@ -56,7 +67,7 @@ export const salesDiscountOrderConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
-      show: (row) => approveStatus(row) === 0,
+      show: (row) => canEditRecordAmount(row) && approveStatus(row) === 0,
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {

@@ -1857,10 +1857,12 @@ model hspsi_sys_user_oa_staff {
 }
 
 /// 本地系统用户金额白名单；无记录即无权限，不参与 OA 同步。
+/// amount_scope：金额数据范围 1=仅自己经办(created_by=当前用户) 2=权限内全部，默认 1。
 model hspsi_sys_user_amount_access {
   user_id         BigInt   @id @db.UnsignedBigInt
   can_view_amount Int      @default(0) @db.TinyInt
   can_edit_amount Int      @default(0) @db.TinyInt
+  amount_scope    Int      @default(1) @db.TinyInt
   grant_reason    String   @default("") @db.VarChar(255)
   created_by      BigInt   @default(0)
   updated_by      BigInt   @default(0)

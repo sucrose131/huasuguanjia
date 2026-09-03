@@ -76,7 +76,7 @@ const amountSaving = ref(false);
 const roleSaving = ref(false);
 const amountCurrent = ref<any>(null);
 const roleCurrent = ref<any>(null);
-const amountForm = reactive({ level: 'none', grantReason: '' });
+const amountForm = reactive({ level: 'none', scope: 'own', grantReason: '' });
 const roleForm = reactive<{ roleId: string; additionalOrgIds: string[] }>({
   roleId: '',
   additionalOrgIds: [],
@@ -108,7 +108,7 @@ const filteredRows = computed(() =>
               row.name,
               row.department,
               row.phone,
-              amountAccessLabel(row.amountAccess),
+              amountAccessLabel(row.amountAccess, row.amountScope),
               row.roleName,
             ]
           : [row.name, row.path, row.permission, row.type];
@@ -300,8 +300,9 @@ function timeText(value: any) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '—';
 }
 
-function amountAccessLabel(level: string) {
-  return level === 'edit' ? '可编辑' : level === 'view' ? '仅查看' : '无权限';
+function amountAccessLabel(level: string, scope?: string) {
+  if (level === 'none') return '无权限';
+  return `${level === 'edit' ? '编辑' : '查看'}·${scope === 'all' ? '全部' : '自己'}`;
 }
 
 function amountAccessTag(level: string) {
@@ -471,6 +472,7 @@ async function save() {
 function openAmountAccess(row: any) {
   amountCurrent.value = row;
   amountForm.level = row.amountAccess ?? 'none';
+  amountForm.scope = row.amountScope ?? 'own';
   amountForm.grantReason = '';
   amountDialog.value = true;
 }
@@ -482,7 +484,11 @@ async function saveAmountAccess() {
   }
   amountSaving.value = true;
   try {
-    await api.put(`/system/users/${amountCurrent.value.id}/amount-access`, amountForm);
+    await api.put(`/system/users/${amountCurrent.value.id}/amount-access`, {
+      level: amountForm.level,
+      amountScope: amountForm.scope,
+      grantReason: amountForm.grantReason,
+    });
     ElMessage.success(amountForm.level === 'none' ? '金额权限已取消' : '金额权限已保存');
     amountDialog.value = false;
     await load();
@@ -760,10 +766,10 @@ onMounted(async () => {
                 }}</OverflowTooltipCell></template
               ></el-table-column
             >
-            <el-table-column label="金额权限" width="104" align="center"
+            <el-table-column label="金额权限" width="112" align="center"
               ><template #default="{ row }"
                 ><el-tag :type="amountAccessTag(row.amountAccess)">{{
-                  amountAccessLabel(row.amountAccess)
+                  amountAccessLabel(row.amountAccess, row.amountScope)
                 }}</el-tag></template
               ></el-table-column
             >
@@ -1380,7 +1386,7 @@ onMounted(async () => {
           </div>
         </div>
         <el-alert
-          title="金额权限独立于角色、岗位和 OA；未进入白名单时默认不能查看或编辑金额。"
+          title="金额权限独立于角色、岗位和 OA；未进入白名单时默认不能查看或编辑金额。数据范围：仅自己经办或权限内全部。"
           type="info"
           :closable="false"
           show-icon
@@ -1394,6 +1400,20 @@ onMounted(async () => {
                 >可编辑</el-radio-button
               >
             </el-radio-group>
+          </el-form-item>
+          <el-form-item
+            v-if="amountForm.level !== 'none'"
+            label="数据范围 *"
+            class="amount-access-scopes"
+          >
+            <el-radio-group v-model="amountForm.scope">
+              <el-radio-button value="own">仅自己经办</el-radio-button>
+              <el-radio-button value="all">权限内全部</el-radio-button>
+            </el-radio-group>
+            <div class="amount-access-scope-tip">
+              仅自己经办：只能看见/修改自己创建单据（created_by=本人）的金额；权限内全部：可看见/修改
+              组织数据权限内所有单据的金额。
+            </div>
           </el-form-item>
           <el-form-item label="授权或变更原因 *">
             <el-input
@@ -1653,6 +1673,15 @@ onMounted(async () => {
 }
 .amount-access-levels :deep(.el-radio-button__inner) {
   width: 100%;
+}
+.amount-access-scopes {
+  margin-top: 4px;
+}
+.amount-access-scope-tip {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .table-wrap :deep(.el-table) {
   min-width: 1180px;
