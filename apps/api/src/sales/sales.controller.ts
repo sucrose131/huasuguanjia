@@ -20,12 +20,14 @@ import { SalesOaApprovalService } from './sales-oa-approval.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApproveOrderDto } from './dto/approve-order.dto';
 import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
+import { AmountAccessService } from '../amount-access/amount-access.service';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('sales')
 export class SalesController {
   constructor(
     @Inject(SalesService) private readonly s: SalesService,
     @Inject(SalesOaApprovalService) private readonly oa: SalesOaApprovalService,
+    @Inject(AmountAccessService) private readonly amountAccess: AmountAccessService,
   ) {}
   @RequirePermissions('sales')
   @Get('product-options')
@@ -76,7 +78,8 @@ export class SalesController {
   @RequirePermissions('sales')
   @RequireAmountEdit()
   @Patch('orders/:id')
-  updateOrder(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
+  async updateOrder(@Param('id') id: string, @Body() dto: CreateOrderDto, @CurrentUser() u: AuthUser) {
+    await this.amountAccess.assertCanEditRecord(u.id, await this.s.saleOrderCreatedBy(id));
     return this.s.saveOrder(id, dto as any, u.id, 1);
   }
   @RequirePermissions('sales')
@@ -226,6 +229,7 @@ export class SalesController {
     @Body() dto: CreateOrderDto,
     @CurrentUser() u: AuthUser,
   ) {
+    await this.amountAccess.assertCanEditRecord(u.id, await this.s.saleOrderCreatedBy(id));
     const result = await this.s.saveOrder(id, dto as any, u.id, 2);
     return { ...result, oa: await this.oa.submitDiscountOrder(BigInt(result.id), u.id) };
   }

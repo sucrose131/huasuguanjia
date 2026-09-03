@@ -28,12 +28,29 @@ export interface AmountAccessState {
   level: 'none' | 'view' | 'edit';
   canViewAmount: boolean;
   canEditAmount: boolean;
+  /** 金额数据范围：own=仅自己经办单据，all=权限内全部单据 */
+  amountScope: 'own' | 'all';
 }
 const defaultAmountAccess = (): AmountAccessState => ({
   level: 'none',
   canViewAmount: false,
   canEditAmount: false,
+  amountScope: 'own',
 });
+
+/**
+ * 记录级金额编辑判定（金额范围 own 时只能编辑自己创建的记录）。
+ * amountScope 缺失时按 all 处理，兼容旧接口/旧快照与既有测试。
+ */
+export const canEditAmountRecord = (
+  amountAccess: Pick<AmountAccessState, 'canEditAmount' | 'amountScope'>,
+  userId: string | number | null | undefined,
+  createdBy: unknown,
+): boolean => {
+  if (!amountAccess.canEditAmount) return false;
+  if ((amountAccess.amountScope ?? 'all') === 'all') return true;
+  return String(createdBy ?? '') === String(userId ?? '');
+};
 const storedMenus = () => {
   try {
     return JSON.parse(localStorage.getItem('hspsi_menus') ?? '[]') as Menu[];

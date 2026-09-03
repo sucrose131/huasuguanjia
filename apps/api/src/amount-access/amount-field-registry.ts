@@ -1,3 +1,17 @@
+/**
+ * 金额归属字段登记表：标识响应中"记录创建人/经办人"的字段名。
+ * 用于"仅自己经办"范围（amount_scope=own）的按记录脱敏：
+ * 命中归属字段时比较其值与当前用户 ID（统一 String 化，规避 BigInt 序列化差异）。
+ */
+export const AMOUNT_OWNER_FIELDS: ReadonlySet<string> = new Set([
+  'createdBy',
+  'created_by',
+  'createBy',
+  'create_by',
+  'creatorId',
+  'creator_id',
+]);
+
 export const PURCHASE_ORDER_AMOUNT_FIELDS: ReadonlySet<string> = new Set([
   'referencePrice',
   'reference_price',

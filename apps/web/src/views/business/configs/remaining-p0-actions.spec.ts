@@ -34,6 +34,15 @@ vi.mock('@/stores/auth', () => ({
     user: { id: '9' },
     amountAccess: { canViewAmount: true, canEditAmount: true },
   }),
+  canEditAmountRecord: (
+    amountAccess: { canEditAmount: boolean; amountScope?: 'own' | 'all' },
+    userId: unknown,
+    createdBy: unknown,
+  ) => {
+    if (!amountAccess.canEditAmount) return false;
+    if ((amountAccess.amountScope ?? 'all') === 'all') return true;
+    return String(createdBy ?? '') === String(userId ?? '');
+  },
 }));
 
 import {

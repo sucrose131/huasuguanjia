@@ -17,7 +17,11 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { GoodsService } from './goods.service';
 import { AmountAccessService } from '../amount-access/amount-access.service';
+import { AmountScopeExempt } from '../amount-access/amount-access.decorator';
 
+// 商品档案成本/售价属于主数据，无"经办单据"归属语义；
+// amount_scope=own 的按记录脱敏对其豁免，仍受"无查看权全局置空"约束（goods.service.maskAmounts）。
+@AmountScopeExempt()
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('goods')
 export class GoodsController {
