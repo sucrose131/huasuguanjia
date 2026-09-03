@@ -44,6 +44,13 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
     { prop: 'reason', label: '申请原因', minWidth: 200, tooltip: true },
     { prop: 'quantity', label: '申请数量', width: 104, kind: 'number', align: 'right' },
     {
+      prop: 'approveStatus',
+      label: '审批状态',
+      width: 96,
+      kind: 'status',
+      statusDict: 'approval_status',
+    },
+    {
       prop: 'generationStatus',
       label: '生成状态',
       minWidth: 120,
@@ -64,13 +71,6 @@ export const purchaseApplicationConfig: BusinessDocumentConfig = {
       render: (row, ctx) => row.createdByName || ctx.creator(row),
     },
     { prop: 'createdAt', label: '创建时间', width: 160, kind: 'datetime' },
-    {
-      prop: 'approveStatus',
-      label: '审批状态',
-      width: 96,
-      kind: 'status',
-      statusDict: 'approval_status',
-    },
   ],
   dictionaries: ['approval_status'],
   optionBags: ['orgs', 'depts', 'warehouses'],
