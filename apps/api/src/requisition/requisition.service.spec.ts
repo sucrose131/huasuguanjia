@@ -1108,8 +1108,8 @@ describe('RequisitionService OA callback result handling', () => {
   });
 });
 
-describe('RequisitionService non-borrow applications skip OA and write todos', () => {
-  it('does not push OA for non-borrow (draw_type != 2) and writes todos to approvers', async () => {
+describe('RequisitionService non-borrow applications auto-approve without OA', () => {
+  it('auto-approves non-borrow (draw_type != 2) submissions via the approve flow, without OA', async () => {
     const tx = {
       $queryRawUnsafe: vi.fn(),
       hspsi_draw_approve: {
@@ -1137,37 +1137,8 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
     };
     const root = {
       hspsi_draw_approve: {
-        // 事务外的提交后查询（非借用 → 写 todo）
-        findFirst: vi
-          .fn()
-          .mockResolvedValue({ draw_type: 1, draw_no: 'LY202608260001', org_id: 9n }),
-      },
-      hspsi_sys_user_authorized_org: {
-        findMany: vi.fn().mockResolvedValue([{ user_id: 3n }, { user_id: 4n }, { user_id: 5n }]),
-      },
-      hspsi_sys_user_role: {
-        findMany: vi.fn().mockResolvedValue([
-          { user_id: 3, role_id: 11 }, // 有 approve 权限 → 应收到
-          { user_id: 4, role_id: 12 }, // 仅有 requisitions 父权限 → 不应收到
-        ]),
-      },
-      hspsi_sys_role: {
-        findMany: vi.fn().mockResolvedValue([
-          { id: 11n, code: 'requisition-approver' },
-          { id: 12n, code: 'requisition-viewer' },
-        ]),
-      },
-      hspsi_sys_role_menu: {
-        findMany: vi.fn().mockResolvedValue([
-          { role_id: 11n, menu_id: 265n }, // requisitions:applications:approve
-          { role_id: 12n, menu_id: 49n }, // requisitions（父权限）
-        ]),
-      },
-      hspsi_sys_menu: {
-        findMany: vi.fn().mockResolvedValue([
-          { id: 265, code: 'requisitions:applications:approve' },
-          { id: 49, code: 'requisitions' },
-        ]),
+        // 事务外的提交后查询：非借用 → 直接审批通过（不再写待审批待办）
+        findFirst: vi.fn().mockResolvedValue({ draw_type: 1 }),
       },
     };
     const { service, todoService, oaApproval, attachmentsService } = serviceWithTransaction(
@@ -1185,6 +1156,16 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       category: 'signature',
     });
     vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
+    // 自动通过复用审批「通过」流程（置已通过 + 自动生成领用出库草稿 + 通知领用人/出库执行人）
+    const approveSpy = vi
+      .spyOn(service, 'approve')
+      .mockResolvedValue({
+        id: '77',
+        outputId: 99n,
+        returnId: null,
+        alreadyApproved: false,
+        rejectedDirectOutput: false,
+      } as any);
 
     const result = await service.saveApplication(
       null,
@@ -1204,21 +1185,20 @@ describe('RequisitionService non-borrow applications skip OA and write todos', (
       '1',
     );
 
-    expect(result).toMatchObject({ id: 77n, message: '申请已提交，等待系统内审批' });
-    expect(oaApproval.submit).not.toHaveBeenCalled();
-    // 授权组织覆盖 org 9 的候选：3/4/5；仅 user 3 的角色(11)拥有
-    // requisitions:applications:approve 审批操作权限；user 4 仅父权限不通知
-    expect(todoService.create).toHaveBeenCalledTimes(1);
-    expect(todoService.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 3,
-        organizationId: 9,
-        title: 'LY202608260001',
-        content: '有新的领用申请待审批',
-        businessType: 'draw_approve',
-        businessId: 77,
-      }),
+    expect(approveSpy).toHaveBeenCalledWith(
+      '77',
+      true,
+      expect.stringContaining('系统直接审批通过'),
+      '3',
     );
+    expect(result).toMatchObject({
+      id: 77n,
+      outputId: 99n,
+      message: expect.stringContaining('已直接审批通过'),
+    });
+    expect(oaApproval.submit).not.toHaveBeenCalled();
+    // 非借用不再给审批人写「待审批」待办
+    expect(todoService.create).not.toHaveBeenCalled();
   });
 
   it('still pushes OA for borrow (draw_type = 2) applications', async () => {
