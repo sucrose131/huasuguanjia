@@ -10,6 +10,11 @@ export const dateText = (value: unknown, time = false) => {
     ? `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     : day;
 };
+/** 后端 UTC Instant → 浏览器本地墙钟，精确到分钟（业务列表创建时间等） */
+export const dateTimeText = (value: unknown) => {
+  const text = dateText(value, true);
+  return text === '—' ? '—' : text.slice(0, 16);
+};
 export const moneyText = (value: unknown) => {
   const level = localStorage.getItem('hspsi_amount_access') ?? 'none';
   if (!['view', 'edit'].includes(level) || value === null || value === undefined || value === '')
