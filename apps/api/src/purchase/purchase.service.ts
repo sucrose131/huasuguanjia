@@ -2221,8 +2221,10 @@ export class PurchaseService {
       if (!application) throw new NotFoundException('采购申请不存在');
       if (application.status !== 1 || application.approve_status !== 1)
         throw new BadRequestException('仅审核通过的采购申请可以生成采购订单');
-      if (application.receiver_id > 0n) receiverId = application.receiver_id;
-      if (receiverId <= 0n) throw new BadRequestException('采购申请未指定有效收货人');
+      // 优先使用生成订单时指定的收货人；未指定时回退采购申请已填收货人；两者皆空才报错
+      if (receiverId <= 0n) receiverId = application.receiver_id;
+      if (receiverId <= 0n)
+        throw new BadRequestException('采购申请未指定收货人，请在生成订单时选择收货人');
       await this.assertApplicationCostScope(tx, application.org_id, application.warehouse_id);
       const receiver = await this.assertApplicationReceiverScope(
         tx,
