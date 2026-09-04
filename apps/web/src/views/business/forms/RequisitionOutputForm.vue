@@ -213,6 +213,8 @@ async function applicationChanged() {
     }));
   await loadRequisitionOptions(form.value.orgId);
   await loadStocks();
+  // 来源申请出库：为每条明细补可选 SKU（默认回显申请 SKU，可在有库存的其他 SKU 间切换）
+  await Promise.all((form.value.details ?? []).map((line: any) => fillSkuOptions(line)));
 }
 
 async function searchGoodsOptions(keyword: string) {
@@ -243,15 +245,68 @@ async function loadStocks() {
   );
 }
 
+/** 当前仓库下某商品有库存的 SKU 集合（用于规格可用性标注与批次过滤） */
+function stockSkuIds(goodsId: unknown, warehouseId: unknown) {
+  const set = new Set<string>();
+  for (const s of options.stocks ?? []) {
+    if (String(s.goodsId) !== String(goodsId)) continue;
+    if (warehouseId && String(s.warehouseId) !== String(warehouseId)) continue;
+    set.add(String(s.skuId));
+  }
+  return set;
+}
+
+/** 按商品填充明细可选的 SKU 列表（含当前仓库是否缺货标记） */
+async function fillSkuOptions(line: any) {
+  if (!line.goodsId) {
+    line.skuOptions = [];
+    return;
+  }
+  const g: any = await api.get(`/goods/${line.goodsId}`).catch(() => null);
+  const stocked = stockSkuIds(line.goodsId, form.value.warehouseId);
+  const skus = (g?.skus ?? []).map((x: any) => ({
+    value: x.id,
+    label: x.specModels || `规格 ${x.id}`,
+    unitType: x.unitType ?? 0,
+    outOfStock: !stocked.has(String(x.id)),
+  }));
+  // 申请已定 SKU 若因删除等原因不在商品 SKU 列表中，作为兜底候选保留
+  if (
+    line.skuId &&
+    !skus.some((x: any) => String(x.value) === String(line.skuId)) &&
+    line.skuSpec
+  ) {
+    skus.push({ value: line.skuId, label: line.skuSpec, unitType: line.unitType, outOfStock: true });
+  }
+  line.skuOptions = skus;
+}
+
+/** 切换明细 SKU：更新规格/单位，清空批号与库存选择，使批次按新 SKU 过滤 */
+function lineSkuChanged(line: any) {
+  const sku = (line.skuOptions ?? []).find((x: any) => String(x.value) === String(line.skuId));
+  line.unitType = sku?.unitType ?? 0;
+  line.skuSpec = sku?.label ?? '';
+  line.stockKey = '';
+  line.batchNo = '';
+}
+
 async function lineGoodsChanged(line: any) {
   if (!line.goodsId) return;
+  await fillSkuOptions(line);
   const g: any = await api.get(`/goods/${line.goodsId}`);
-  const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
+  const stocked = stockSkuIds(line.goodsId, form.value.warehouseId);
+  const sku =
+    (g.skus ?? []).find((x: any) => x.isDefault === 1 && stocked.has(String(x.id))) ??
+    (g.skus ?? []).find((x: any) => stocked.has(String(x.id))) ??
+    (g.skus ?? []).find((x: any) => x.isDefault === 1) ??
+    g.skus?.[0];
   line.skuId = sku?.id ?? '';
   line.unitType = sku?.unitType ?? 0;
   line.goodsCode = g.queryCode ?? '';
   line.goodsName = g.goodsName ?? '';
   line.skuSpec = sku?.specModels ?? '';
+  line.stockKey = '';
+  line.batchNo = '';
 }
 
 function addLine() {
@@ -503,10 +558,25 @@ onMounted(async () => {
       <el-table-column label="商品编码" width="125">
         <template #default="s">{{ s.row.goodsCode || '—' }}</template>
       </el-table-column>
-      <el-table-column label="SKU/规格" min-width="125">
-        <template #default="s">{{
-          s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—'
-        }}</template>
+      <el-table-column label="SKU/规格" min-width="150">
+        <template #default="s">
+          <el-select
+            v-if="!isView"
+            v-model="s.row.skuId"
+            filterable
+            :disabled="!s.row.goodsId"
+            placeholder="请选择规格"
+            @change="lineSkuChanged(s.row)"
+          >
+            <el-option
+              v-for="opt in s.row.skuOptions ?? []"
+              :key="opt.value"
+              :label="opt.outOfStock ? `${opt.label}（暂无库存）` : opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <span v-else>{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="单位" width="90">
         <template #default="s">{{ unitName(s.row) }}</template>
@@ -546,10 +616,11 @@ onMounted(async () => {
               v-for="x in options.stocks.filter(
                 (v: any) =>
                   (!s.row.goodsId || String(v.goodsId) === String(s.row.goodsId)) &&
+                  (!s.row.skuId || String(v.skuId) === String(s.row.skuId)) &&
                   (!form.warehouseId || String(v.warehouseId) === String(form.warehouseId)),
               )"
               :key="`${x.goodsId}-${x.skuId}-${x.warehouseId}-${x.batchNo}`"
-              :label="`${x.goodsName} · ${x.batchNo} · ${x.inventoryQty}`"
+              :label="`${x.goodsName}${x.specModels ? ` ${x.specModels}` : ''} · ${x.batchNo} · ${x.inventoryQty}`"
               :value="`${x.goodsId}-${x.skuId}-${x.warehouseId}-${x.batchNo}`"
             />
           </el-select>

@@ -215,6 +215,11 @@ async function lineGoodsChanged(line: any) {
     return;
   }
   const g: any = await api.get(`/goods/${line.goodsId}`);
+  line.skuOptions = (g.skus ?? []).map((x: any) => ({
+    value: x.id,
+    label: x.specModels || `规格 ${x.id}`,
+    unitType: x.unitType ?? 0,
+  }));
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
   line.unitType = sku?.unitType ?? 0;
@@ -240,6 +245,14 @@ async function lineGoodsChanged(line: any) {
 function lineUnitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
+}
+
+/** 切换明细 SKU：更新规格/单位并清空意向批号，避免残留与旧规格不匹配的批号 */
+function lineSkuChanged(line: any) {
+  const sku = (line.skuOptions ?? []).find((x: any) => String(x.value) === String(line.skuId));
+  line.unitType = sku?.unitType ?? 0;
+  line.skuSpec = sku?.label ?? '';
+  line.batchNo = '';
 }
 
 function signatureChanged(value: string) {
@@ -281,6 +294,10 @@ function validate(submit: boolean) {
   }
   if (submit && !String(form.value.reason ?? '').trim()) {
     ElMessage.warning('提交申请前必须填写申请原因');
+    return false;
+  }
+  if ((form.value.details ?? []).some((line: any) => line.goodsId && !line.skuId)) {
+    ElMessage.warning('请为每条领用明细选择规格(SKU)');
     return false;
   }
   if ((form.value.details ?? []).some((line: any) => typeof line.returnable !== 'boolean')) {
@@ -459,8 +476,23 @@ onMounted(async () => {
           </RemoteSelect>
         </template>
       </el-table-column>
-      <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+      <el-table-column label="SKU/规格" min-width="150">
+        <template #default="s">
+          <el-select
+            v-model="s.row.skuId"
+            filterable
+            :disabled="isView || !s.row.goodsId"
+            placeholder="请选择规格"
+            @change="lineSkuChanged(s.row)"
+          >
+            <el-option
+              v-for="opt in s.row.skuOptions ?? []"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">
         <template #default="s">
