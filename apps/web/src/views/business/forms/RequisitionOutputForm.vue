@@ -444,6 +444,9 @@ onMounted(async () => {
     }));
     await loadRequisitionOptions(form.value.orgId);
     await loadStocks();
+    // 编辑回显：按商品补齐 SKU 选项，保证 SKU 下拉有值可显示/可切换（查看态直接展示 skuSpec 文本）
+    if (!isView.value)
+      await Promise.all((form.value.details ?? []).map((line: any) => fillSkuOptions(line)));
   }
 });
 </script>
