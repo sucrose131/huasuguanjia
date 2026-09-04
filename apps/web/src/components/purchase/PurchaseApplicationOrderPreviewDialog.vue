@@ -140,7 +140,9 @@ async function load() {
       };
     });
     application.value = data;
-    form.receiverId = data.receiverId ?? '';
+    // 后端 bigint 序列化为字符串：收货人为空/0 时不作为有效收货人，避免出现「用户 #0」候选项
+    const appReceiverId = Number(data.receiverId ?? 0) > 0 ? String(data.receiverId) : '';
+    form.receiverId = appReceiverId;
     // 收货人可在生成订单时指定：按申请所属组织取可选收货人，并保留申请已填收货人（历史数据可能为空）
     let receivers: Option[] = [];
     if (data.orgId) {
@@ -152,12 +154,12 @@ async function load() {
         receivers = [];
       }
     }
-    if (data.receiverId) {
-      const exists = receivers.some((item) => String(item.value) === String(data.receiverId));
+    if (appReceiverId) {
+      const exists = receivers.some((item) => String(item.value) === appReceiverId);
       if (!exists)
         receivers.push({
-          value: String(data.receiverId),
-          label: data.receiverName || `用户 #${data.receiverId}`,
+          value: appReceiverId,
+          label: data.receiverName || `用户 #${appReceiverId}`,
         });
     }
     options.receivers = receivers;
