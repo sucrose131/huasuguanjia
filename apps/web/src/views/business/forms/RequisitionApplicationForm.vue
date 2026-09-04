@@ -134,6 +134,43 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
+/** 拉取商品 SKU 列表（id/label/unitType），供明细 SKU 下拉与编辑回显 */
+async function buildSkuOptionList(goodsId: unknown) {
+  if (!goodsId) return [];
+  const g: any = await api.get(`/goods/${goodsId}`).catch(() => null);
+  return (g?.skus ?? []).map((x: any) => ({
+    value: x.id,
+    label: x.specModels || `规格 ${x.id}`,
+    unitType: x.unitType ?? 0,
+  }));
+}
+
+/** 编辑/查看回显：为已有明细行补齐 SKU 选项，并保证当前 SKU 有名称可显示 */
+async function syncLoadedLineSkus() {
+  await Promise.all(
+    (form.value.details ?? []).map(async (line: any) => {
+      if (!line.goodsId) return;
+      const list = await buildSkuOptionList(line.goodsId);
+      if (
+        line.skuId &&
+        !list.some((x: any) => String(x.value) === String(line.skuId)) &&
+        (line.skuSpec || line.skuId)
+      ) {
+        list.push({
+          value: line.skuId,
+          label: line.skuSpec || `规格 ${line.skuId}`,
+          unitType: line.unitType ?? 0,
+        });
+      }
+      line.skuOptions = list;
+      if (!line.skuSpec) {
+        line.skuSpec =
+          list.find((x: any) => String(x.value) === String(line.skuId))?.label ?? '';
+      }
+    }),
+  );
+}
+
 /** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
 const selectedWarehouseType = computed(() =>
   warehouseTypeOf(options.requisitionWarehouses ?? [], form.value.warehouseId),
@@ -341,10 +378,20 @@ async function save(submit = false) {
 
 onMounted(async () => {
   const units = await api.get('/base-data/units/options').catch(() => []);
-  // 申请发起组织只能是登录人的 OA 固定所属组织；额外授权组织仅用于查看和执行业务。
-  options.orgs = auth.user?.orgId
-    ? [{ value: auth.user.orgId, label: auth.user.orgName || auth.user.currentOrgName || '所属组织' }]
-    : [];
+  // 组织下拉只读展示：加载全部可见组织用于名称回显（跨组织单据/直接出库反推单据也能显示组织名）；
+  // 新建时仍只允许登录人 OA 固定所属组织（下方 create 分支取 auth.user.orgId）
+  const orgOptions = (await api.get('/base-data/organizations/options').catch(() => [])) as any[];
+  options.orgs =
+    Array.isArray(orgOptions) && orgOptions.length
+      ? orgOptions
+      : auth.user?.orgId
+        ? [
+            {
+              value: auth.user.orgId,
+              label: auth.user.orgName || auth.user.currentOrgName || '所属组织',
+            },
+          ]
+        : [];
   options.units = units;
   await loadDicts();
   if (props.mode === 'create') {
@@ -368,6 +415,18 @@ onMounted(async () => {
       .get(`/requisitions/applications/${form.value.id}`)
       .catch(() => null);
     if (detail) Object.assign(form.value, detail);
+    // 回显组织名：组织列表匹配不到时兜底显示组织ID
+    if (
+      form.value.orgId &&
+      !options.orgs.some((o: any) => String(o.value) === String(form.value.orgId))
+    ) {
+      options.orgs.push({
+        value: form.value.orgId,
+        label: form.value.orgName || `组织 #${form.value.orgId}`,
+      });
+    }
+    // 回显 SKU 名称：为每条明细补 SKU 选项，保证查看/编辑显示规格名而非空白/ID
+    await syncLoadedLineSkus();
   }
   await loadRequisitionOptions(form.value.orgId);
   await loadOrgGoods(form.value.orgId);
@@ -479,9 +538,10 @@ onMounted(async () => {
       <el-table-column label="SKU/规格" min-width="150">
         <template #default="s">
           <el-select
+            v-if="!isView"
             v-model="s.row.skuId"
             filterable
-            :disabled="isView || !s.row.goodsId"
+            :disabled="!s.row.goodsId"
             placeholder="请选择规格"
             @change="lineSkuChanged(s.row)"
           >
@@ -492,6 +552,7 @@ onMounted(async () => {
               :value="opt.value"
             />
           </el-select>
+          <span v-else>{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">
