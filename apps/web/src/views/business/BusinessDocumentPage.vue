@@ -450,7 +450,8 @@ onMounted(async () => {
 
       <div class="table-wrap">
         <el-table :data="rows" v-loading="loading" border row-key="id">
-          <el-table-column type="index" label="序号" width="58" />
+          <!-- 序号列已按业务确认隐藏：本页行号无跨页引用价值，单据以单号沟通，不再展示 -->
+          <!-- <el-table-column type="index" label="序号" width="58" /> -->
           <el-table-column prop="id" label="ID" width="100" />
           <el-table-column
             v-for="column in config.columns"
