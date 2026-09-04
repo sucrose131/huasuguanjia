@@ -12,8 +12,6 @@ export const inventoryStockConfig: BusinessDocumentConfig = {
   title: '库存查询',
   subtitle: '按仓库查看即时库存、库存金额及可追溯流水',
   endpoint: '/inventory/stocks',
-  /** 库存存量视图：金额按金额查看能力整体控制，不参与 own/全部 经办范围分级 */
-  amountScopeExempt: true,
   no: 'goodsName',
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 120 },

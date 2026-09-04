@@ -52,8 +52,8 @@ export class InventoryController {
   }
 
   // ── stocks ──
-  // 库存查询：当前存量视图，金额按"金额查看能力"整体控制，不参与 own/全部 经办范围分级
-  @AmountScopeExempt()
+  // 库存查询：只有“仅查看/可编辑 + 权限内全部”可查看单位成本和库存金额。
+  // own 范围与无金额查看能力都由全局金额拦截器在服务端脱敏。
   @Get('stocks')
   @RequirePermissions('inventory')
   stocks(@Query() q: any) {
