@@ -315,6 +315,7 @@ export class RequisitionService {
    * 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库。
    * 候选仍按“组织→仓库类型→商品分类”主数据映射计算，不因库存收窄；
    * 额外附带 stockByWarehouse（goods_id → { warehouse_id: 库存数量 }，仅含非零库存），
+   * 库存必须同时按 hspsi_inventory_total.org_id 与本组织启用仓库收口，不汇总其他组织行；
    * 供前端在商品下拉展示可用库存：未选仓库=领用可用仓库合计，选仓库=该仓库数量。
    */
   async allGoodsOptions(orgIdValue: unknown) {
@@ -329,6 +330,7 @@ export class RequisitionService {
       ? await this.prisma.hspsi_inventory_total.groupBy({
           by: ['warehouse_id', 'goods_id'],
           where: {
+            org_id: orgId,
             warehouse_id: { in: warehouses.map((item) => item.warehouse_id) },
             deleted_at: null,
             inventory_qty: { not: 0 },

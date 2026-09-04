@@ -1598,6 +1598,7 @@ describe('RequisitionService direct output cross-org options and authorization',
     expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
+          org_id: 7n,
           warehouse_id: { in: [49n, 48n, 16n] },
           deleted_at: null,
           inventory_qty: { not: 0 },
@@ -1609,5 +1610,32 @@ describe('RequisitionService direct output cross-org options and authorization',
     expect(result[0]!.stockByWarehouse).toEqual({ '49': 5, '48': 2 });
     expect(result[1]!.stockByWarehouse).toEqual({});
     expect(result[2]!.stockByWarehouse).toEqual({});
+  });
+
+  it('all-goods-options stock query scopes inventory_total by document org_id', async () => {
+    const root = {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 49n }]),
+      },
+      hspsi_inventory_total: {
+        groupBy: vi.fn().mockResolvedValue([
+          { warehouse_id: 49n, goods_id: 100n, _sum: { inventory_qty: 5 } },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+    (service as any).masterData.goodsOptionsByOrg.mockResolvedValue([
+      { id: 100n, goodsId: 100n, goodsName: 'A4纸', categoryWarehouseType: 7 },
+    ]);
+
+    const result = await service.allGoodsOptions('7');
+
+    expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledTimes(1);
+    const where = root.hspsi_inventory_total.groupBy.mock.calls[0]![0].where;
+    expect(where.org_id).toBe(7n);
+    expect(where.warehouse_id).toEqual({ in: [49n] });
+    // 查询已按单据组织收口：同一仓库下其他组织库存行不会进入 groupBy 结果，因此不会写入 stockByWarehouse
+    expect(result[0]!.stockByWarehouse).toEqual({ '49': 5 });
+    expect(where.org_id).not.toBe(3n);
   });
 });
