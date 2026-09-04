@@ -314,9 +314,11 @@ export class RequisitionService {
   /**
    * 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库。
    * 候选仍按“组织→仓库类型→商品分类”主数据映射计算，不因库存收窄；
-   * 额外附带 stockByWarehouse（goods_id → { warehouse_id: 库存数量 }，仅含非零库存），
+   * 额外附带：
+   * - stockByWarehouse：商品级（各 SKU 合计）goods_id → { warehouse_id: 数量 }
+   * - skuStockByWarehouse：规格级 goods_id → { sku_id → { warehouse_id: 数量 } }
    * 库存必须同时按 hspsi_inventory_total.org_id 与本组织启用仓库收口，不汇总其他组织行；
-   * 供前端在商品下拉展示可用库存：未选仓库=领用可用仓库合计，选仓库=该仓库数量。
+   * 仅含非零库存。前端未选仓库=领用可用仓库合计，选仓库=该仓库数量。
    */
   async allGoodsOptions(orgIdValue: unknown) {
     if (!orgIdValue) return [];
@@ -328,7 +330,7 @@ export class RequisitionService {
     });
     const stockRows = warehouses.length
       ? await this.prisma.hspsi_inventory_total.groupBy({
-          by: ['warehouse_id', 'goods_id'],
+          by: ['warehouse_id', 'goods_id', 'sku_id'],
           where: {
             org_id: orgId,
             warehouse_id: { in: warehouses.map((item) => item.warehouse_id) },
@@ -339,18 +341,26 @@ export class RequisitionService {
         })
       : [];
     const stockByWarehouse = new Map<string, Record<string, number>>();
+    const skuStockByWarehouse = new Map<string, Record<string, Record<string, number>>>();
     for (const row of stockRows) {
       const goodsKey = String(row.goods_id);
       const warehouseKey = String(row.warehouse_id);
+      const skuKey = String(row.sku_id);
       const quantity = Number(row._sum.inventory_qty ?? 0);
       if (!quantity) continue;
-      const map = stockByWarehouse.get(goodsKey) ?? {};
-      map[warehouseKey] = (map[warehouseKey] ?? 0) + quantity;
-      stockByWarehouse.set(goodsKey, map);
+      const goodsMap = stockByWarehouse.get(goodsKey) ?? {};
+      goodsMap[warehouseKey] = (goodsMap[warehouseKey] ?? 0) + quantity;
+      stockByWarehouse.set(goodsKey, goodsMap);
+      const skuMap = skuStockByWarehouse.get(goodsKey) ?? {};
+      const skuWarehouseMap = skuMap[skuKey] ?? {};
+      skuWarehouseMap[warehouseKey] = (skuWarehouseMap[warehouseKey] ?? 0) + quantity;
+      skuMap[skuKey] = skuWarehouseMap;
+      skuStockByWarehouse.set(goodsKey, skuMap);
     }
     return goods.map((item) => ({
       ...item,
       stockByWarehouse: stockByWarehouse.get(String(item.id)) ?? {},
+      skuStockByWarehouse: skuStockByWarehouse.get(String(item.id)) ?? {},
     }));
   }
 

@@ -3,6 +3,7 @@ import {
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
   goodsStockQty,
+  skuStockQty,
   warehouseTypeOf,
 } from './goods-warehouse';
 
@@ -89,5 +90,31 @@ describe('goodsStockQty', () => {
   it('无库存数据或零库存返回 0', () => {
     expect(goodsStockQty({}, '', ['49'])).toBe(0);
     expect(goodsStockQty({ id: 1, stockByWarehouse: { '49': 0 } }, '', ['49'])).toBe(0);
+  });
+});
+
+describe('skuStockQty', () => {
+  const goods = {
+    id: 1,
+    skuStockByWarehouse: {
+      '201': { '49': 5, '48': 2 },
+      '202': { '49': 3 },
+    },
+  };
+
+  it('未选仓库时返回该规格在领用可用仓库的合计', () => {
+    expect(skuStockQty(goods, '201', '', ['49', '48'])).toBe(7);
+    expect(skuStockQty(goods, '202', '', ['49', '48'])).toBe(3);
+  });
+
+  it('已选仓库时只返回该规格在该仓库的数量', () => {
+    expect(skuStockQty(goods, '201', '49', ['49', '48'])).toBe(5);
+    expect(skuStockQty(goods, '202', '48', ['49', '48'])).toBe(0);
+  });
+
+  it('缺少规格或库存数据时返回 0', () => {
+    expect(skuStockQty(goods, '', '49')).toBe(0);
+    expect(skuStockQty(goods, '999', '49')).toBe(0);
+    expect(skuStockQty({}, '201', '49', ['49'])).toBe(0);
   });
 });
