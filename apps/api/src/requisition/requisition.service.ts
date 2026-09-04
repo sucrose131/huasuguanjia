@@ -315,6 +315,7 @@ export class RequisitionService {
    * 按单据组织返回全部启用商品（不按仓库过滤），供领用申请先选商品后选兼容仓库。
    * 候选仍按“组织→仓库类型→商品分类”主数据映射计算，不因库存收窄；
    * 额外附带 stockByWarehouse（goods_id → { warehouse_id: 库存数量 }，仅含非零库存），
+   * 库存必须同时按 hspsi_inventory_total.org_id 与本组织启用仓库收口，不汇总其他组织行；
    * 供前端在商品下拉展示可用库存：未选仓库=领用可用仓库合计，选仓库=该仓库数量。
    */
   async allGoodsOptions(orgIdValue: unknown) {
@@ -329,6 +330,7 @@ export class RequisitionService {
       ? await this.prisma.hspsi_inventory_total.groupBy({
           by: ['warehouse_id', 'goods_id'],
           where: {
+            org_id: orgId,
             warehouse_id: { in: warehouses.map((item) => item.warehouse_id) },
             deleted_at: null,
             inventory_qty: { not: 0 },
@@ -1834,10 +1836,12 @@ export class RequisitionService {
         if (quantity > Number(source.draw_qty) - used) {
           throw new BadRequestException('本次领用超过申请剩余数量');
         }
+        // 允许出库指定实际库存 SKU：前端所选 skuId 缺省回退申请 SKU
+        const chosenSkuId = line.skuId ? this.bigint(line.skuId, 'SKU') : source.sku_id;
         return {
           applicationDetailId,
           goodsId: source.goods_id,
-          skuId: source.sku_id,
+          skuId: chosenSkuId,
           batchNo: String(line.batchNo ?? source.batch_no ?? '').trim(),
           unitType: source.unit_type,
           applicationQuantity: Number(source.draw_qty),
@@ -1846,6 +1850,21 @@ export class RequisitionService {
           remark: String(line.remark ?? source.remark ?? ''),
         };
       });
+
+      // 校验所选 SKU 存在且属于同一条申请明细对应的商品，避免跨商品错配
+      const chosenSkuIds = [...new Set(lines.map((line) => line.skuId).filter((id) => id > 0n))];
+      if (chosenSkuIds.length) {
+        const skuRows = await tx.hspsi_goods_info_sku.findMany({
+          where: { sku_id: { in: chosenSkuIds }, deleted_at: null },
+          select: { sku_id: true, good_id: true },
+        });
+        const goodIdBySku = new Map(skuRows.map((row) => [String(row.sku_id), row.good_id]));
+        for (const line of lines) {
+          const goodsId = goodIdBySku.get(String(line.skuId));
+          if (goodsId === undefined) throw new BadRequestException('所选规格不存在或已删除');
+          if (goodsId !== line.goodsId) throw new BadRequestException('所选规格不属于该商品');
+        }
+      }
 
       const data = {
         draw_id: application.draw_id,
@@ -2181,7 +2200,8 @@ export class RequisitionService {
         const source = applicationDetails.find(
           (line) => line.draw_detail_id === detail.draw_detail_id,
         );
-        if (!source || source.goods_id !== detail.goods_id || source.sku_id !== detail.sku_id) {
+        // SKU 允许按实际出库选择（与申请同商品即可），仅校验商品一致
+        if (!source || source.goods_id !== detail.goods_id) {
           throw new BadRequestException('出库明细与来源申请明细不一致');
         }
         const used =
