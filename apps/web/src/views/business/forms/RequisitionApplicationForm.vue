@@ -8,6 +8,7 @@ import {
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
   goodsStockQty,
+  skuStockQty,
   warehouseTypeOf,
 } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
@@ -122,6 +123,7 @@ async function loadOrgGoods(orgId: unknown) {
   options.contextGoods = (await api
     .get('/requisitions/all-goods-options', { params: { orgId: String(orgId) } })
     .catch(() => [])) as any[];
+  refreshAllSkuStock();
 }
 
 /** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
@@ -133,6 +135,96 @@ const documentWarehouseType = computed(() => {
   );
   return types.size === 1 ? [...types][0] : 0;
 });
+
+/** 给规格选项附带当前组织（已选仓库或领用可用仓库合计）的库存，仅展示不收窄候选 */
+function decorateSkuOptions(
+  list: Array<{ value: unknown; label: string; unitType?: number }>,
+  goodsId: unknown,
+) {
+  const goods = (options.contextGoods ?? []).find((g: any) => String(g.id) === String(goodsId));
+  return list.map((opt) => {
+    const stockQty = skuStockQty(
+      goods ?? {},
+      opt.value,
+      form.value.warehouseId,
+      eligibleWarehouseIds.value,
+    );
+    return {
+      value: opt.value,
+      label: opt.label,
+      unitType: opt.unitType ?? 0,
+      stockQty,
+      outOfStock: stockQty <= 0,
+    };
+  });
+}
+
+function skuOptionLabel(opt: { label?: string; stockQty?: number; outOfStock?: boolean }) {
+  const name = String(opt.label ?? '').trim();
+  if (typeof opt.stockQty !== 'number') return name || '—';
+  return opt.outOfStock ? `${name}（暂无库存）` : `${name}（库存 ${opt.stockQty}）`;
+}
+
+function skuViewText(line: Record<string, any>) {
+  const spec = String(line.skuSpec || line.goodsSpec || line.skuId || '').trim();
+  const opt = (line.skuOptions ?? []).find((x: any) => String(x.value) === String(line.skuId));
+  if (opt && typeof opt.stockQty === 'number') return skuOptionLabel({ ...opt, label: spec || opt.label });
+  return spec || '—';
+}
+
+function refreshAllSkuStock() {
+  for (const line of form.value.details ?? []) {
+    if (!line.goodsId || !Array.isArray(line.skuOptions) || !line.skuOptions.length) continue;
+    line.skuOptions = decorateSkuOptions(line.skuOptions, line.goodsId);
+  }
+}
+
+/** 拉取商品 SKU 列表（id/label/unitType），供明细 SKU 下拉与编辑回显 */
+async function buildSkuOptionList(goodsId: unknown) {
+  if (!goodsId) return [];
+  const g: any = await api.get(`/goods/${goodsId}`).catch(() => null);
+  return decorateSkuOptions(
+    (g?.skus ?? []).map((x: any) => ({
+      value: x.id,
+      label: x.specModels || `规格 ${x.id}`,
+      unitType: x.unitType ?? 0,
+    })),
+    goodsId,
+  );
+}
+
+/** 编辑/查看回显：为已有明细行补齐 SKU 选项，并保证当前 SKU 有名称可显示 */
+async function syncLoadedLineSkus() {
+  await Promise.all(
+    (form.value.details ?? []).map(async (line: any) => {
+      if (!line.goodsId) return;
+      const list = await buildSkuOptionList(line.goodsId);
+      if (
+        line.skuId &&
+        !list.some((x: any) => String(x.value) === String(line.skuId)) &&
+        (line.skuSpec || line.skuId)
+      ) {
+        list.push(
+          ...decorateSkuOptions(
+            [
+              {
+                value: line.skuId,
+                label: line.skuSpec || `规格 ${line.skuId}`,
+                unitType: line.unitType ?? 0,
+              },
+            ],
+            line.goodsId,
+          ),
+        );
+      }
+      line.skuOptions = list;
+      if (!line.skuSpec) {
+        line.skuSpec =
+          list.find((x: any) => String(x.value) === String(line.skuId))?.label ?? '';
+      }
+    }),
+  );
+}
 
 /** 当前所选仓库的类型（双向联动：选仓库后商品按该类型过滤；未选仓库为 0=不限） */
 const selectedWarehouseType = computed(() =>
@@ -162,6 +254,7 @@ function warehouseChanged() {
     form.value.warehouseId = '';
     ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
   }
+  refreshAllSkuStock();
 }
 
 function drawTypeChanged(value: unknown) {
@@ -215,6 +308,14 @@ async function lineGoodsChanged(line: any) {
     return;
   }
   const g: any = await api.get(`/goods/${line.goodsId}`);
+  line.skuOptions = decorateSkuOptions(
+    (g.skus ?? []).map((x: any) => ({
+      value: x.id,
+      label: x.specModels || `规格 ${x.id}`,
+      unitType: x.unitType ?? 0,
+    })),
+    line.goodsId,
+  );
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
   line.unitType = sku?.unitType ?? 0;
@@ -240,6 +341,14 @@ async function lineGoodsChanged(line: any) {
 function lineUnitName(line: any) {
   const unit = options.units.find((u: any) => String(u.value ?? u.id) === String(line.unitType));
   return unit?.label ?? unit?.name ?? '—';
+}
+
+/** 切换明细 SKU：更新规格/单位并清空意向批号，避免残留与旧规格不匹配的批号 */
+function lineSkuChanged(line: any) {
+  const sku = (line.skuOptions ?? []).find((x: any) => String(x.value) === String(line.skuId));
+  line.unitType = sku?.unitType ?? 0;
+  line.skuSpec = sku?.label ?? '';
+  line.batchNo = '';
 }
 
 function signatureChanged(value: string) {
@@ -283,6 +392,10 @@ function validate(submit: boolean) {
     ElMessage.warning('提交申请前必须填写申请原因');
     return false;
   }
+  if ((form.value.details ?? []).some((line: any) => line.goodsId && !line.skuId)) {
+    ElMessage.warning('请为每条领用明细选择规格(SKU)');
+    return false;
+  }
   if ((form.value.details ?? []).some((line: any) => typeof line.returnable !== 'boolean')) {
     ElMessage.warning('请为每条领用明细选择“可归还”或“无需归还”');
     return false;
@@ -324,10 +437,20 @@ async function save(submit = false) {
 
 onMounted(async () => {
   const units = await api.get('/base-data/units/options').catch(() => []);
-  // 申请发起组织只能是登录人的 OA 固定所属组织；额外授权组织仅用于查看和执行业务。
-  options.orgs = auth.user?.orgId
-    ? [{ value: auth.user.orgId, label: auth.user.orgName || auth.user.currentOrgName || '所属组织' }]
-    : [];
+  // 组织下拉只读展示：加载全部可见组织用于名称回显（跨组织单据/直接出库反推单据也能显示组织名）；
+  // 新建时仍只允许登录人 OA 固定所属组织（下方 create 分支取 auth.user.orgId）
+  const orgOptions = (await api.get('/base-data/organizations/options').catch(() => [])) as any[];
+  options.orgs =
+    Array.isArray(orgOptions) && orgOptions.length
+      ? orgOptions
+      : auth.user?.orgId
+        ? [
+            {
+              value: auth.user.orgId,
+              label: auth.user.orgName || auth.user.currentOrgName || '所属组织',
+            },
+          ]
+        : [];
   options.units = units;
   await loadDicts();
   if (props.mode === 'create') {
@@ -351,9 +474,20 @@ onMounted(async () => {
       .get(`/requisitions/applications/${form.value.id}`)
       .catch(() => null);
     if (detail) Object.assign(form.value, detail);
+    // 回显组织名：组织列表匹配不到时兜底显示组织ID
+    if (
+      form.value.orgId &&
+      !options.orgs.some((o: any) => String(o.value) === String(form.value.orgId))
+    ) {
+      options.orgs.push({
+        value: form.value.orgId,
+        label: form.value.orgName || `组织 #${form.value.orgId}`,
+      });
+    }
   }
   await loadRequisitionOptions(form.value.orgId);
   await loadOrgGoods(form.value.orgId);
+  if (form.value.id) await syncLoadedLineSkus();
   if (props.mode === 'create') await resolveCurrentApplicant();
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
   for (const line of form.value.details ?? []) {
@@ -459,8 +593,40 @@ onMounted(async () => {
           </RemoteSelect>
         </template>
       </el-table-column>
-      <el-table-column label="SKU/规格" min-width="120">
-        <template #default="s">{{ s.row.skuSpec || s.row.skuId || '—' }}</template>
+      <el-table-column label="SKU/规格" min-width="200">
+        <template #default="s">
+          <el-select
+            v-if="!isView"
+            v-model="s.row.skuId"
+            filterable
+            :disabled="!s.row.goodsId"
+            placeholder="请选择规格"
+            @change="lineSkuChanged(s.row)"
+          >
+            <el-option
+              v-for="opt in s.row.skuOptions ?? []"
+              :key="opt.value"
+              :label="skuOptionLabel(opt)"
+              :value="opt.value"
+            >
+              <div class="goods-option">
+                <span
+                  class="goods-option-label"
+                  :class="{ 'is-out-of-stock': opt.outOfStock === true }"
+                >
+                  {{ opt.label }}
+                </span>
+                <span
+                  class="goods-stock-tag"
+                  :class="{ 'is-out-of-stock': opt.outOfStock === true }"
+                >
+                  {{ opt.outOfStock === true ? '暂无库存' : `库存 ${opt.stockQty}` }}
+                </span>
+              </div>
+            </el-option>
+          </el-select>
+          <span v-else>{{ skuViewText(s.row) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">
         <template #default="s">

@@ -1576,10 +1576,10 @@ describe('RequisitionService direct output cross-org options and authorization',
       },
       hspsi_inventory_total: {
         groupBy: vi.fn().mockResolvedValue([
-          { warehouse_id: 49n, goods_id: 100n, _sum: { inventory_qty: 5 } },
-          { warehouse_id: 48n, goods_id: 100n, _sum: { inventory_qty: 2 } },
-          { warehouse_id: 49n, goods_id: 101n, _sum: { inventory_qty: 0 } },
-          { warehouse_id: 16n, goods_id: 102n, _sum: { inventory_qty: 8 } },
+          { warehouse_id: 49n, goods_id: 100n, sku_id: 201n, _sum: { inventory_qty: 5 } },
+          { warehouse_id: 48n, goods_id: 100n, sku_id: 201n, _sum: { inventory_qty: 2 } },
+          { warehouse_id: 49n, goods_id: 101n, sku_id: 301n, _sum: { inventory_qty: 0 } },
+          { warehouse_id: 16n, goods_id: 102n, sku_id: 401n, _sum: { inventory_qty: 8 } },
         ]),
       },
     };
@@ -1597,7 +1597,9 @@ describe('RequisitionService direct output cross-org options and authorization',
     );
     expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
+        by: ['warehouse_id', 'goods_id', 'sku_id'],
         where: expect.objectContaining({
+          org_id: 7n,
           warehouse_id: { in: [49n, 48n, 16n] },
           deleted_at: null,
           inventory_qty: { not: 0 },
@@ -1607,7 +1609,67 @@ describe('RequisitionService direct output cross-org options and authorization',
     // 候选不被库存收窄：零库存与无库存记录商品仍返回
     expect(result.map((item: any) => item.id)).toEqual([100n, 101n, 103n]);
     expect(result[0]!.stockByWarehouse).toEqual({ '49': 5, '48': 2 });
+    expect(result[0]!.skuStockByWarehouse).toEqual({ '201': { '49': 5, '48': 2 } });
     expect(result[1]!.stockByWarehouse).toEqual({});
+    expect(result[1]!.skuStockByWarehouse).toEqual({});
     expect(result[2]!.stockByWarehouse).toEqual({});
+    expect(result[2]!.skuStockByWarehouse).toEqual({});
+  });
+
+  it('all-goods-options stock query scopes inventory_total by document org_id', async () => {
+    const root = {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 49n }]),
+      },
+      hspsi_inventory_total: {
+        groupBy: vi.fn().mockResolvedValue([
+          { warehouse_id: 49n, goods_id: 100n, sku_id: 201n, _sum: { inventory_qty: 5 } },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+    (service as any).masterData.goodsOptionsByOrg.mockResolvedValue([
+      { id: 100n, goodsId: 100n, goodsName: 'A4纸', categoryWarehouseType: 7 },
+    ]);
+
+    const result = await service.allGoodsOptions('7');
+
+    expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledTimes(1);
+    const where = root.hspsi_inventory_total.groupBy.mock.calls[0]![0].where;
+    expect(where.org_id).toBe(7n);
+    expect(where.warehouse_id).toEqual({ in: [49n] });
+    // 查询已按单据组织收口：同一仓库下其他组织库存行不会进入 groupBy 结果，因此不会写入 stockByWarehouse
+    expect(result[0]!.stockByWarehouse).toEqual({ '49': 5 });
+    expect(result[0]!.skuStockByWarehouse).toEqual({ '201': { '49': 5 } });
+    expect(where.org_id).not.toBe(3n);
+  });
+
+  it('all-goods-options attaches per-sku stock without mixing specifications', async () => {
+    const root = {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 49n }]),
+      },
+      hspsi_inventory_total: {
+        groupBy: vi.fn().mockResolvedValue([
+          { warehouse_id: 49n, goods_id: 100n, sku_id: 201n, _sum: { inventory_qty: 5 } },
+          { warehouse_id: 49n, goods_id: 100n, sku_id: 202n, _sum: { inventory_qty: 3 } },
+        ]),
+      },
+    };
+    const { service } = serviceWithTransaction({}, root);
+    (service as any).masterData.goodsOptionsByOrg.mockResolvedValue([
+      { id: 100n, goodsId: 100n, goodsName: 'A4纸', categoryWarehouseType: 7 },
+    ]);
+
+    const result = await service.allGoodsOptions('7');
+
+    expect(root.hspsi_inventory_total.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ by: ['warehouse_id', 'goods_id', 'sku_id'] }),
+    );
+    expect(result[0]!.stockByWarehouse).toEqual({ '49': 8 });
+    expect(result[0]!.skuStockByWarehouse).toEqual({
+      '201': { '49': 5 },
+      '202': { '49': 3 },
+    });
   });
 });
