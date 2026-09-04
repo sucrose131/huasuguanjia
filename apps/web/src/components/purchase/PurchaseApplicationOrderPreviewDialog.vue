@@ -141,9 +141,26 @@ async function load() {
     });
     application.value = data;
     form.receiverId = data.receiverId ?? '';
-    options.receivers = data.receiverId
-      ? [{ value: data.receiverId, label: data.receiverName || String(data.receiverId) }]
-      : [];
+    // 收货人可在生成订单时指定：按申请所属组织取可选收货人，并保留申请已填收货人（历史数据可能为空）
+    let receivers: Option[] = [];
+    if (data.orgId) {
+      try {
+        receivers = (await api.get('/purchase/application-receiver-options', {
+          params: { orgId: data.orgId },
+        })) as Option[];
+      } catch {
+        receivers = [];
+      }
+    }
+    if (data.receiverId) {
+      const exists = receivers.some((item) => String(item.value) === String(data.receiverId));
+      if (!exists)
+        receivers.push({
+          value: String(data.receiverId),
+          label: data.receiverName || `用户 #${data.receiverId}`,
+        });
+    }
+    options.receivers = receivers;
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message ?? '采购申请生成界面加载失败');
   } finally {
@@ -169,7 +186,7 @@ async function submitOrder() {
     return;
   }
   if (!form.receiverId) {
-    ElMessage.warning('采购申请未指定有效收货人，请先检查申请单');
+    ElMessage.warning('请选择收货人');
     return;
   }
   if (!effectiveRows.value.length) {
@@ -193,6 +210,7 @@ async function submitOrder() {
     const result = (await api.post(`/purchase/applications/${props.applicationId}/generate-order`, {
       generationMode: props.mode,
       vendorId: form.vendorId,
+      receiverId: form.receiverId,
       details: effectiveRows.value.map((item: any) => ({
         applicationDetailId: String(item.applicationDetailId),
         totalAmount: Number(item.totalAmount),
@@ -331,8 +349,20 @@ watch(
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="收货人">
-            <el-input :model-value="lookup('receivers', form.receiverId)" disabled />
+          <el-form-item label="收货人" required>
+            <el-select
+              v-model="form.receiverId"
+              clearable
+              filterable
+              placeholder="请选择收货人"
+            >
+              <el-option
+                v-for="item in options.receivers"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
           </el-form-item>
         </el-form>
 
