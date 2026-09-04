@@ -8,6 +8,7 @@ import {
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
   goodsStockQty,
+  skuStockQty,
   warehouseTypeOf,
 } from '@/utils/goods-warehouse';
 import RemoteSelect from '@/components/RemoteSelect.vue';
@@ -122,6 +123,7 @@ async function loadOrgGoods(orgId: unknown) {
   options.contextGoods = (await api
     .get('/requisitions/all-goods-options', { params: { orgId: String(orgId) } })
     .catch(() => [])) as any[];
+  refreshAllSkuStock();
 }
 
 /** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
@@ -134,15 +136,61 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
+/** 给规格选项附带当前组织（已选仓库或领用可用仓库合计）的库存，仅展示不收窄候选 */
+function decorateSkuOptions(
+  list: Array<{ value: unknown; label: string; unitType?: number }>,
+  goodsId: unknown,
+) {
+  const goods = (options.contextGoods ?? []).find((g: any) => String(g.id) === String(goodsId));
+  return list.map((opt) => {
+    const stockQty = skuStockQty(
+      goods ?? {},
+      opt.value,
+      form.value.warehouseId,
+      eligibleWarehouseIds.value,
+    );
+    return {
+      value: opt.value,
+      label: opt.label,
+      unitType: opt.unitType ?? 0,
+      stockQty,
+      outOfStock: stockQty <= 0,
+    };
+  });
+}
+
+function skuOptionLabel(opt: { label?: string; stockQty?: number; outOfStock?: boolean }) {
+  const name = String(opt.label ?? '').trim();
+  if (typeof opt.stockQty !== 'number') return name || '—';
+  return opt.outOfStock ? `${name}（暂无库存）` : `${name}（库存 ${opt.stockQty}）`;
+}
+
+function skuViewText(line: Record<string, any>) {
+  const spec = String(line.skuSpec || line.goodsSpec || line.skuId || '').trim();
+  const opt = (line.skuOptions ?? []).find((x: any) => String(x.value) === String(line.skuId));
+  if (opt && typeof opt.stockQty === 'number') return skuOptionLabel({ ...opt, label: spec || opt.label });
+  return spec || '—';
+}
+
+function refreshAllSkuStock() {
+  for (const line of form.value.details ?? []) {
+    if (!line.goodsId || !Array.isArray(line.skuOptions) || !line.skuOptions.length) continue;
+    line.skuOptions = decorateSkuOptions(line.skuOptions, line.goodsId);
+  }
+}
+
 /** 拉取商品 SKU 列表（id/label/unitType），供明细 SKU 下拉与编辑回显 */
 async function buildSkuOptionList(goodsId: unknown) {
   if (!goodsId) return [];
   const g: any = await api.get(`/goods/${goodsId}`).catch(() => null);
-  return (g?.skus ?? []).map((x: any) => ({
-    value: x.id,
-    label: x.specModels || `规格 ${x.id}`,
-    unitType: x.unitType ?? 0,
-  }));
+  return decorateSkuOptions(
+    (g?.skus ?? []).map((x: any) => ({
+      value: x.id,
+      label: x.specModels || `规格 ${x.id}`,
+      unitType: x.unitType ?? 0,
+    })),
+    goodsId,
+  );
 }
 
 /** 编辑/查看回显：为已有明细行补齐 SKU 选项，并保证当前 SKU 有名称可显示 */
@@ -156,11 +204,18 @@ async function syncLoadedLineSkus() {
         !list.some((x: any) => String(x.value) === String(line.skuId)) &&
         (line.skuSpec || line.skuId)
       ) {
-        list.push({
-          value: line.skuId,
-          label: line.skuSpec || `规格 ${line.skuId}`,
-          unitType: line.unitType ?? 0,
-        });
+        list.push(
+          ...decorateSkuOptions(
+            [
+              {
+                value: line.skuId,
+                label: line.skuSpec || `规格 ${line.skuId}`,
+                unitType: line.unitType ?? 0,
+              },
+            ],
+            line.goodsId,
+          ),
+        );
       }
       line.skuOptions = list;
       if (!line.skuSpec) {
@@ -199,6 +254,7 @@ function warehouseChanged() {
     form.value.warehouseId = '';
     ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
   }
+  refreshAllSkuStock();
 }
 
 function drawTypeChanged(value: unknown) {
@@ -252,11 +308,14 @@ async function lineGoodsChanged(line: any) {
     return;
   }
   const g: any = await api.get(`/goods/${line.goodsId}`);
-  line.skuOptions = (g.skus ?? []).map((x: any) => ({
-    value: x.id,
-    label: x.specModels || `规格 ${x.id}`,
-    unitType: x.unitType ?? 0,
-  }));
+  line.skuOptions = decorateSkuOptions(
+    (g.skus ?? []).map((x: any) => ({
+      value: x.id,
+      label: x.specModels || `规格 ${x.id}`,
+      unitType: x.unitType ?? 0,
+    })),
+    line.goodsId,
+  );
   const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
   line.skuId = sku?.id ?? '';
   line.unitType = sku?.unitType ?? 0;
@@ -425,11 +484,10 @@ onMounted(async () => {
         label: form.value.orgName || `组织 #${form.value.orgId}`,
       });
     }
-    // 回显 SKU 名称：为每条明细补 SKU 选项，保证查看/编辑显示规格名而非空白/ID
-    await syncLoadedLineSkus();
   }
   await loadRequisitionOptions(form.value.orgId);
   await loadOrgGoods(form.value.orgId);
+  if (form.value.id) await syncLoadedLineSkus();
   if (props.mode === 'create') await resolveCurrentApplicant();
   // 编辑回显：为已有明细行补商品分类类型，确保仓库下拉按类型过滤
   for (const line of form.value.details ?? []) {
@@ -535,7 +593,7 @@ onMounted(async () => {
           </RemoteSelect>
         </template>
       </el-table-column>
-      <el-table-column label="SKU/规格" min-width="150">
+      <el-table-column label="SKU/规格" min-width="200">
         <template #default="s">
           <el-select
             v-if="!isView"
@@ -548,11 +606,26 @@ onMounted(async () => {
             <el-option
               v-for="opt in s.row.skuOptions ?? []"
               :key="opt.value"
-              :label="opt.label"
+              :label="skuOptionLabel(opt)"
               :value="opt.value"
-            />
+            >
+              <div class="goods-option">
+                <span
+                  class="goods-option-label"
+                  :class="{ 'is-out-of-stock': opt.outOfStock === true }"
+                >
+                  {{ opt.label }}
+                </span>
+                <span
+                  class="goods-stock-tag"
+                  :class="{ 'is-out-of-stock': opt.outOfStock === true }"
+                >
+                  {{ opt.outOfStock === true ? '暂无库存' : `库存 ${opt.stockQty}` }}
+                </span>
+              </div>
+            </el-option>
           </el-select>
-          <span v-else>{{ s.row.skuSpec || s.row.goodsSpec || s.row.skuId || '—' }}</span>
+          <span v-else>{{ skuViewText(s.row) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">

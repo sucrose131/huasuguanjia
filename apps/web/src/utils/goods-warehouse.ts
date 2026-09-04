@@ -58,3 +58,20 @@ export function goodsStockQty(
     0,
   );
 }
+
+/**
+ * 计算某一规格(SKU)在领用表单内的可用库存展示值，口径与 goodsStockQty 相同。
+ */
+export function skuStockQty(
+  goods: Record<string, any>,
+  skuId: unknown,
+  warehouseId: unknown,
+  eligibleWarehouseIds: Array<unknown> = [],
+) {
+  const skuKey = String(skuId ?? '').trim();
+  if (!skuKey) return 0;
+  const map = ((goods?.skuStockByWarehouse ?? {}) as Record<string, Record<string, number>>)[
+    skuKey
+  ];
+  return goodsStockQty({ stockByWarehouse: map ?? {} }, warehouseId, eligibleWarehouseIds);
+}
