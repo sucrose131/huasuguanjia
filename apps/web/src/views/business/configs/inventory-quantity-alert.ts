@@ -7,8 +7,6 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
   title: '库存预警',
   subtitle: '按仓库监控安全库存、缺口及建议补货数量',
   endpoint: '/inventory/quantity-alerts',
-  /** 库存存量视图：金额按金额查看能力整体控制，不参与 own/全部 经办范围分级 */
-  amountScopeExempt: true,
   no: 'goodsName',
   columns: [
     { prop: 'goodsCode', label: '商品编码', minWidth: 120 },

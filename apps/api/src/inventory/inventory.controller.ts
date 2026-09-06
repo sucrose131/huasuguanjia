@@ -17,7 +17,6 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
 import { InventoryOaApprovalService } from './inventory-oa-approval.service';
-import { AmountScopeExempt } from '../amount-access/amount-access.decorator';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
@@ -388,8 +387,8 @@ export class InventoryController {
   }
 
   // ── alerts ──
-  // 库存预警/效期预警：存量视图金额按"金额查看能力"整体控制，不参与 own/全部 经办范围分级
-  @AmountScopeExempt()
+  // 库存预警/效期预警：与库存查询 stocks 一致，金额仅在「仅查看/可编辑 + 权限内全部」可见，
+  // own 范围与无金额查看能力由全局金额拦截器在服务端脱敏，避免通过预警金额反推库存价值。
   @Get('quantity-alerts')
   @RequirePermissions('inventory')
   quantityAlerts(@Query() q: any) {
@@ -402,7 +401,6 @@ export class InventoryController {
     return this.service.saveQuantityAlert(b);
   }
 
-  @AmountScopeExempt()
   @Get('expiry-alerts')
   @RequirePermissions('inventory')
   expiryAlerts(@Query() q: any) {

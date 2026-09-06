@@ -7,8 +7,6 @@ export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
   title: '效期预警',
   subtitle: '依据效期预警配置识别临期和过期批次',
   endpoint: '/inventory/expiry-alerts',
-  /** 库存存量视图：金额按金额查看能力整体控制，不参与 own/全部 经办范围分级 */
-  amountScopeExempt: true,
   no: 'goodsName',
   optionBags: ['orgs'],
   queryFields: [{ key: 'orgId', label: '组织', type: 'tree-select', optionBag: 'orgs', width: 200 }],

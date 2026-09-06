@@ -65,8 +65,10 @@ const summaryItems = computed<Array<{ label: string; value: number | string }>>(
   if (!props.config.summaryLabels?.length) return [];
   return props.config.summaryLabels.map((item) => {
     const raw = summary[item.key];
+    // 金额项不做 null→0 兜底：后端对无金额权限/own 范围用户脱敏后金额为 null，
+    // 直接交给 moneyText（null → '****'）呈现 ¥ ****，避免被兜成 ¥ 0.00 造成误导。
+    if (item.kind === 'money') return { label: item.label, value: `¥ ${moneyText(raw)}` };
     const value = raw == null || raw === '' ? 0 : Number(raw);
-    if (item.kind === 'money') return { label: item.label, value: `¥ ${moneyText(value)}` };
     if (item.kind === 'number') return { label: item.label, value: value.toLocaleString('zh-CN') };
     return { label: item.label, value: String(raw ?? '0') };
   });
@@ -163,9 +165,7 @@ function displayCell(
 
 // 记录级金额掩码判定：无查看权（能力级）或 范围 own 且非本人创建的行，金额一律以 ¥ **** 呈现，
 // 避免后端 null（脱敏）被 render 的 ?? 0 兜成 ¥ 0.00 造成误导。
-// 存量/主数据视图（config.amountScopeExempt，如库存查询/预警）不做按行掩码，金额仅由能力级控制。
 const recordAmountMasked = (row: Record<string, any>) => {
-  if (props.config.amountScopeExempt) return false;
   const amount = useAuthStore().amountAccess;
   if (!amount.canViewAmount) return true;
   if ((amount.amountScope ?? 'all') === 'own')
