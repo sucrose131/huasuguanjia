@@ -122,10 +122,13 @@ const categoryCount = (category: string) =>
       (categoryCounts.value['预警消息'] ?? 0) +
       (categoryCounts.value['业务消息'] ?? 0)
     : (categoryCounts.value[category] ?? 0);
-const money = (value: any) =>
-  auth.amountAccess.canViewAmount
-    ? `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`
-    : '****';
+const money = (value: any) => {
+  // 金额无查看权：掩码
+  if (!auth.amountAccess.canViewAmount) return '****';
+  // 后端对 own 范围/无权限聚合值脱敏为 null，避免被兜成 ¥0（误导为真实为 0）
+  if (value === null || value === undefined || value === '') return '¥ ****';
+  return `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`;
+};
 const messageText = (item: DashboardMessageItem) =>
   Object.prototype.hasOwnProperty.call(item, 'amount')
     ? `${item.content || ''} ${money(item.amount)}。`
