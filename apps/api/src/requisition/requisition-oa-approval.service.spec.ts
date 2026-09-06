@@ -113,6 +113,7 @@ function createFixture(options: { existingStatus?: string; startError?: Error } 
   };
   const approvalService = {
     uploadFile: vi.fn(),
+    dealProcess: vi.fn().mockResolvedValue({ returnCode: 'SUC0000', body: {} }),
     startFormProcess: options.startError
       ? vi.fn().mockRejectedValue(options.startError)
       : vi.fn().mockResolvedValue({
@@ -281,5 +282,103 @@ describe('RequisitionOaApprovalService', () => {
     expect(result.procStatus).toBe('PUSH_FAILED');
     expect(result.errorMessage).toContain('OA审批已暂停');
     expect(prisma.hspsi_draw_approve.findFirst).not.toHaveBeenCalled();
+  });
+
+  describe('cancelRemoteProcess', () => {
+    const instance = { account_set_id: 1n, bus_key: 'requisition_application:7', business_id: 7n };
+
+    it('issues an OA cancel with the applicant staff identity and business busKey', async () => {
+      const { service, approvalService } = createFixture();
+
+      await service.cancelRemoteProcess(instance, 9n, '创建人撤回审批');
+
+      expect(approvalService.dealProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 1n }),
+        {
+          approverId: 'MEMBER-9',
+          operateType: 'cancel',
+          busKey: 'requisition_application:7',
+          approveComment: '创建人撤回审批',
+        },
+      );
+    });
+
+    it('derives the busKey from the business id when the instance bus_key is empty', async () => {
+      const { service, approvalService } = createFixture();
+      approvalService.dealProcess.mockClear();
+
+      await service.cancelRemoteProcess({ ...instance, bus_key: '' }, 9n);
+
+      expect(approvalService.dealProcess).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ busKey: 'requisition_application:7' }),
+      );
+    });
+
+    it('rejects when the account set has no OA credential', async () => {
+      const service = new RequisitionOaApprovalService(
+        { hspsi_basic_staff: { findFirst: vi.fn() } } as never,
+        { getById: vi.fn().mockResolvedValue(null) } as never,
+        { dealProcess: vi.fn() } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await expect(service.cancelRemoteProcess(instance, 9n)).rejects.toThrow(
+        '领用申请所属账套未启用，无法撤销OA审批',
+      );
+    });
+
+    it('rejects when the applicant has no valid OA account', async () => {
+      const service = new RequisitionOaApprovalService(
+        { hspsi_basic_staff: { findFirst: vi.fn().mockResolvedValue({ outer_ref_id: '' }) } } as never,
+        { getById: vi.fn().mockResolvedValue({ id: 1n }) } as never,
+        { dealProcess: vi.fn() } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await expect(service.cancelRemoteProcess(instance, 9n)).rejects.toThrow(
+        '领用人尚未关联有效OA账号，请先同步OA组织人员',
+      );
+    });
+
+    it('treats an already-canceled OA process as success (retry after local failure)', async () => {
+      const service = new RequisitionOaApprovalService(
+        {
+          hspsi_basic_staff: {
+            findFirst: vi.fn().mockResolvedValue({ outer_ref_id: 'MEMBER-9' }),
+          },
+        } as never,
+        { getById: vi.fn().mockResolvedValue({ id: 1n }) } as never,
+        { dealProcess: vi.fn().mockRejectedValue(new Error('流程已撤销')) } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await expect(service.cancelRemoteProcess(instance, 9n)).resolves.toBeUndefined();
+    });
+
+    it('wraps other OA failures and lets the caller keep the document in approval', async () => {
+      const service = new RequisitionOaApprovalService(
+        {
+          hspsi_basic_staff: {
+            findFirst: vi.fn().mockResolvedValue({ outer_ref_id: 'MEMBER-9' }),
+          },
+        } as never,
+        { getById: vi.fn().mockResolvedValue({ id: 1n }) } as never,
+        { dealProcess: vi.fn().mockRejectedValue(new Error('网络超时')) } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await expect(service.cancelRemoteProcess(instance, 9n)).rejects.toThrow(
+        '撤销OA审批失败：网络超时',
+      );
+    });
   });
 });
