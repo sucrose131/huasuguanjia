@@ -9,3 +9,11 @@ export const RequireAmountEdit = () => SetMetadata(REQUIRE_AMOUNT_EDIT_KEY, true
  */
 export const AMOUNT_SCOPE_EXEMPT_KEY = 'amount_scope_exempt';
 export const AmountScopeExempt = () => SetMetadata(AMOUNT_SCOPE_EXEMPT_KEY, true);
+
+/**
+ * 标记处理器响应中的金额为"库存成本快照"（如盘点单明细的成本单价、盘点衍生的
+ * 报亏/报盈入库成本价）：不随单据 created_by 归属放行，仅"可查看 + 权限内全部"
+ * （amount_scope=all）用户可见，own 范围一律脱敏。用于封堵通过单据详情反推库存价值的旁路。
+ */
+export const AMOUNT_ALL_SCOPE_ONLY_KEY = 'amount_all_scope_only';
+export const AmountAllScopeOnly = () => SetMetadata(AMOUNT_ALL_SCOPE_ONLY_KEY, true);

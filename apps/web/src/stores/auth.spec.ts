@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canEditAmountRecord, isAmountRecordMasked } from './auth';
+import {
+  canEditAmountRecord,
+  isAmountRecordMasked,
+  isStockSnapshotAmountHidden,
+} from './auth';
 
 vi.mock('@/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 
@@ -65,5 +69,33 @@ describe('isAmountRecordMasked', () => {
 
   it('treats a missing scope as all (backward compatibility)', () => {
     expect(isAmountRecordMasked({ canViewAmount: true }, '9', '8')).toBe(false);
+  });
+});
+
+describe('isStockSnapshotAmountHidden', () => {
+  it('hides stock-snapshot amounts for users without view capability', () => {
+    expect(
+      isStockSnapshotAmountHidden({ canViewAmount: false, amountScope: 'own' }),
+    ).toBe(true);
+    expect(
+      isStockSnapshotAmountHidden({ canViewAmount: false, amountScope: 'all' }),
+    ).toBe(true);
+  });
+
+  it('hides stock-snapshot amounts for own-scope users regardless of ownership', () => {
+    // 盘点/报亏/报盈明细成本价不随单据 created_by 归属放行
+    expect(
+      isStockSnapshotAmountHidden({ canViewAmount: true, amountScope: 'own' }),
+    ).toBe(true);
+  });
+
+  it('keeps stock-snapshot amounts visible for all-scope users', () => {
+    expect(
+      isStockSnapshotAmountHidden({ canViewAmount: true, amountScope: 'all' }),
+    ).toBe(false);
+  });
+
+  it('treats a missing scope as all (backward compatibility)', () => {
+    expect(isStockSnapshotAmountHidden({ canViewAmount: true })).toBe(false);
   });
 });

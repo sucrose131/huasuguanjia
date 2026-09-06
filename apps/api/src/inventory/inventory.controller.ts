@@ -17,7 +17,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
 import { InventoryOaApprovalService } from './inventory-oa-approval.service';
-import { AmountScopeExempt } from '../amount-access/amount-access.decorator';
+import { AmountAllScopeOnly, AmountScopeExempt } from '../amount-access/amount-access.decorator';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
@@ -189,6 +189,10 @@ export class InventoryController {
     return this.service.checks(q);
   }
 
+  // 盘点单详情含整仓库存的成本单价快照（details.unitPrice/all_value 等）：
+  // 金额仅“可查看 + 权限内全部”可见，own 范围不因单据 created_by 归属而放行，
+  // 防止通过新建/查看盘点单反推库存价值。
+  @AmountAllScopeOnly()
   @Get('checks/:id')
   @RequirePermissions('inventory')
   check(@Param('id') id: string) {
@@ -277,6 +281,8 @@ export class InventoryController {
     return this.service.lossOutputs(q);
   }
 
+  // 报亏出库单（盘点盘亏链）详情含来源盘点的成本单价：金额仅“可查看 + 权限内全部”可见
+  @AmountAllScopeOnly()
   @Get('loss-outputs/:id')
   @RequirePermissions('inventory')
   lossOutput(@Param('id') id: string) {
@@ -320,6 +326,8 @@ export class InventoryController {
     return this.service.overflowInputs(q);
   }
 
+  // 报盈入库单（盘点盘盈链）详情含来源盘点的成本单价：金额仅“可查看 + 权限内全部”可见
+  @AmountAllScopeOnly()
   @Get('overflow-inputs/:id')
   @RequirePermissions('inventory')
   overflowInput(@Param('id') id: string) {
