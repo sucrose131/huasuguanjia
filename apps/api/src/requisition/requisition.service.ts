@@ -581,7 +581,12 @@ export class RequisitionService {
       },
     );
     const items = await this.enrichRequisitionStaff(referencedItems);
-    return { items, total, page, pageSize };
+    // 与采购申请口径一致：待审批=approve0 且已提交；已通过=approve1；驳回(2)/取消终止(3)不进桶。
+    const pending = records.filter(
+      (item) => Number(item.approve_status) === 0 && Number(item.status) === 1,
+    ).length;
+    const complete = records.filter((item) => Number(item.approve_status) === 1).length;
+    return { items, total, page, pageSize, summary: { total, pending, complete } };
   }
 
   async application(id: string) {
@@ -787,6 +792,8 @@ export class RequisitionService {
             : null;
         if (requestedId !== null && !current) throw new NotFoundException('领用申请不存在');
         if (current?.approve_status === 1) throw new BadRequestException('已审批申请不可修改');
+        if (current?.approve_status === 3)
+          throw new BadRequestException('已取消/终止的领用申请不可修改');
         if (current && current.created_by !== BigInt(userId))
           throw new ForbiddenException('个人无权修改他人发起的领用申请');
         if (requestedId !== null) {
@@ -992,6 +999,10 @@ export class RequisitionService {
       };
     }
     const oa = await this.oaApproval.submit(drawId, userId);
+    // B2：撤回后同单据重新发起 OA 审批成功时，撤销撤回自动生成的待确认退回单（物资回到在途审批）。
+    if (['RUNNING', 'BACKTOSTART', 'PASSED'].includes(oa.procStatus)) {
+      await this.releaseWithdrawAutoReturns(drawId, userId);
+    }
     return {
       id: drawId,
       message:
@@ -1313,21 +1324,31 @@ export class RequisitionService {
       });
       if (!application) throw new NotFoundException('OA审批对应的领用申请不存在');
 
-      const expectedApproveStatus = payload.procStatus === 'PASSED' ? 1 : 2;
+      // 与采购申请口径一致：通过(1)、驳回(2)、取消/终止(3)。OA 侧取消以 0 号操作人写入以便渠道区分。
+      const expectedApproveStatus =
+        payload.procStatus === 'PASSED' ? 1 : payload.procStatus === 'CANCELED' ? 3 : 2;
+      // 本地已撤回成草稿（创建人撤回后 OA 取消回调晚到）：不覆盖草稿，视为重复确认。
+      const withdrawnLocally =
+        payload.procStatus === 'CANCELED' &&
+        Number(application.status) === 0 &&
+        Number(application.approve_status) === 0;
       const duplicate =
-        current.proc_status === payload.procStatus &&
-        application.approve_status === expectedApproveStatus;
+        (current.proc_status === payload.procStatus &&
+          application.approve_status === expectedApproveStatus) ||
+        withdrawnLocally;
       let outputId: bigint | null = null;
       if (!duplicate) {
         const approved = payload.procStatus === 'PASSED';
+        const canceled = payload.procStatus === 'CANCELED';
         await tx.hspsi_draw_approve.update({
           where: { draw_id: application.draw_id },
           data: {
-            approve_status: approved ? 1 : 2,
+            approve_status: approved ? 1 : canceled ? 3 : 2,
             approve_comment: this.oaApprovalComment(payload.procStatus),
             approve_by: 0n,
             approve_date: new Date(),
-            status: approved ? 1 : 0,
+            // 取消/终止为终态保留提交状态（与采购一致）；驳回回退草稿态
+            status: approved ? 1 : canceled ? application.status : 0,
             updated_by: 0n,
           },
         });
@@ -1336,7 +1357,8 @@ export class RequisitionService {
           outputId = output.draw_output_id;
           await this.syncApprovedRequisitionTodos(tx, application, '0');
         } else {
-          // OA 驳回：若该申请已存在直接领用出库单（先出库后审批），自动生成待确认退回单追回物资
+          // OA 驳回/取消/删除：若该申请已存在直接领用出库单（先出库后审批），
+          // 自动生成待确认退回单追回物资（取消语义同终止，渠道由回调 0 号操作人区分展示）
           const directOutput = await tx.hspsi_draw_approve_output.findFirst({
             where: {
               draw_id: application.draw_id,
@@ -1409,6 +1431,8 @@ export class RequisitionService {
     application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
     output: Prisma.hspsi_draw_approve_outputGetPayload<Record<string, never>>,
     userId: string,
+    reason = '直接领用申请被否决，待办理退回',
+    relationKind: 'rejection_return' | 'withdraw_return' | 'terminate_return' = 'rejection_return',
   ) {
     const existing = await tx.hspsi_draw_approve_output_exit.findFirst({
       where: { draw_output_id: output.draw_output_id, deleted_at: null },
@@ -1432,7 +1456,7 @@ export class RequisitionService {
         draw_exit_no: returnNo,
         draw_id: application.draw_id,
         draw_output_id: output.draw_output_id,
-        exit_reson: '直接领用申请被否决，待办理退回',
+        exit_reson: reason,
         exit_qty: returnableDetails.reduce((sum, detail) => sum + Number(detail.fact_draw_qty), 0),
         org_id: output.org_id,
         warehouse_id: output.warehouse_id,
@@ -1470,7 +1494,7 @@ export class RequisitionService {
         downstreamType: 'requisition_return',
         downstreamId: header.draw_exit_id,
         downstreamNo: returnNo,
-        relationKind: 'rejection_return',
+        relationKind,
         createdBy: userId,
       },
       tx,
@@ -1508,6 +1532,8 @@ export class RequisitionService {
       }
       if (activeOa) throw new BadRequestException('领用申请已进入OA审批，不可删除');
       if (application.approve_status === 1) throw new BadRequestException('已审批申请不可删除');
+      if (application.approve_status === 3)
+        throw new BadRequestException('已取消/终止的领用申请不可删除');
       if (application.created_by !== BigInt(userId))
         throw new ForbiddenException('个人无权删除他人发起的领用申请');
       await tx.hspsi_draw_approve.update({
@@ -1516,6 +1542,313 @@ export class RequisitionService {
       });
     });
     return { id, message: '删除成功' };
+  }
+
+  /**
+   * 领用人主动终止审批（approve_status=3 终态）：先撤 OA 在途流程，再本地落账；
+   * OA 撤销失败时抛错，单据保持审批中，可重试。
+   */
+  async terminateApplication(id: string, userId: string) {
+    await this.revokeApplicantPendingOa(id, userId, 'terminate');
+    return this.prisma.$transaction(async (tx) => {
+      const application = await this.lockPendingApplication(tx, BigInt(id), userId, 'terminate');
+      const result = await this.applyApplicationTerminated(tx, application, userId);
+      await this.markApplicationOaCanceled(tx, application.draw_id, userId);
+      return result;
+    });
+  }
+
+  /**
+   * 领用人主动撤回审批（回草稿可改可重提）：先撤 OA 在途流程，再本地落账；
+   * 若该申请已直接领用出库（先出库后审批），同时自动生成待确认退回单追回物资。
+   */
+  async withdrawApplication(id: string, userId: string) {
+    await this.revokeApplicantPendingOa(id, userId, 'withdraw');
+    return this.prisma.$transaction(async (tx) => {
+      const application = await this.lockPendingApplication(tx, BigInt(id), userId, 'withdraw');
+      const result = await this.applyApplicationWithdrawn(tx, application, userId);
+      await this.markApplicationOaCanceled(tx, application.draw_id, userId);
+      return result;
+    });
+  }
+
+  /**
+   * 撤回草稿修改后重新提交 OA（含 OA 提交失败后的 retry-oa）。
+   * 提交成功（审批重新在途）时撤销撤回自动生成的待确认退回单（B2）。
+   */
+  async submitApplicationToOa(id: string, userId: string) {
+    const drawId = BigInt(id);
+    const result = await this.oaApproval.submit(drawId, userId);
+    if (['RUNNING', 'BACKTOSTART', 'PASSED'].includes(result.procStatus)) {
+      await this.releaseWithdrawAutoReturns(drawId, userId);
+    }
+    return {
+      ...result,
+      message:
+        result.procStatus === 'PUSH_FAILED'
+          ? `提交OA失败：${result.errorMessage ?? '请稍后重试'}`
+          : '已提交OA审批',
+    };
+  }
+
+  /** 事务外先撤销 OA 在途流程（仅借用申请走 OA；须领用人本人操作）。 */
+  private async revokeApplicantPendingOa(
+    id: string,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    const drawId = BigInt(id);
+    const application = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+    });
+    if (!application) throw new NotFoundException('领用申请不存在');
+    await this.assertApplicantCanAction(this.prisma, application, userId, action);
+    const instance = await this.prisma.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'requisition_application', business_id: drawId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (instance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    if (instance && ['RUNNING', 'BACKTOSTART'].includes(instance.proc_status)) {
+      await this.oaApproval.cancelRemoteProcess(
+        instance,
+        application.applicant_id,
+        action === 'withdraw' ? '创建人撤回审批' : '创建人终止审批',
+      );
+    }
+    return { drawId, instance };
+  }
+
+  private async assertApplicantCanAction(
+    db: Db,
+    application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    // C1：仅领用人（单据领用人在账套下的 OA 员工身份 = 操作人身份）可撤回/终止。
+    const applicant = await this.resolveApplicantIdentity(db, userId, application.org_id);
+    if (!applicant || applicant.id !== application.applicant_id) {
+      throw new ForbiddenException(
+        action === 'withdraw'
+          ? '个人无权撤回他人发起的领用申请'
+          : '个人无权终止他人发起的领用申请',
+      );
+    }
+    if (Number(application.draw_type) !== 2) {
+      throw new BadRequestException('非借用领用申请走系统内审批，不支持撤回/终止');
+    }
+    if (Number(application.status) !== 1 || Number(application.approve_status) !== 0) {
+      throw new BadRequestException(this.pendingActionError(action, application.approve_status));
+    }
+  }
+
+  private pendingActionError(action: 'terminate' | 'withdraw', approveStatus: number) {
+    if (action === 'withdraw') {
+      return Number(approveStatus) === 3
+        ? '领用申请已取消，不能撤回'
+        : Number(approveStatus) === 1
+          ? '领用申请已审批通过，不能撤回'
+          : '仅审批中的领用申请可以撤回';
+    }
+    return Number(approveStatus) === 3
+      ? '领用申请已取消，不能重复终止'
+      : Number(approveStatus) === 1
+        ? '领用申请已审批通过，不能终止'
+        : '仅审批中的领用申请可以终止';
+  }
+
+  private async lockPendingApplication(
+    tx: Prisma.TransactionClient,
+    drawId: bigint,
+    userId: string,
+    action: 'terminate' | 'withdraw',
+  ) {
+    await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', drawId);
+    const application = await tx.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+    });
+    if (!application) throw new NotFoundException('领用申请不存在');
+    await this.assertApplicantCanAction(tx, application, userId, action);
+    const activeInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: {
+        business_type: 'requisition_application',
+        business_id: drawId,
+        proc_status: { in: ['PENDING_PUSH', 'RUNNING', 'BACKTOSTART'] },
+        deleted_at: null,
+      },
+      select: { id: true, proc_status: true },
+    });
+    if (activeInstance?.proc_status === 'PENDING_PUSH')
+      throw new BadRequestException('正在推送OA，请稍后重试');
+    return application;
+  }
+
+  /** 撤回/终止本地落账后，将最近一条 OA 审批实例标记为已取消。 */
+  private async markApplicationOaCanceled(
+    tx: Prisma.TransactionClient,
+    drawId: bigint,
+    userId: string,
+  ) {
+    const lockedInstance = await tx.hspsi_oa_approval_instance.findFirst({
+      where: { business_type: 'requisition_application', business_id: drawId, deleted_at: null },
+      orderBy: { id: 'desc' },
+    });
+    if (!lockedInstance) return;
+    await tx.hspsi_oa_approval_instance.update({
+      where: { id: lockedInstance.id },
+      data: { proc_status: 'CANCELED', updated_by: BigInt(userId), updated_at: new Date() },
+    });
+  }
+
+  private async findDirectOutput(tx: Db, drawId: bigint) {
+    return tx.hspsi_draw_approve_output.findFirst({
+      where: {
+        draw_id: drawId,
+        generation_key: { startsWith: 'direct-requisition-output:' },
+        deleted_at: null,
+      },
+      orderBy: { draw_output_id: 'desc' },
+    });
+  }
+
+  /** 撤回本地落账：回草稿（可编辑重提），直接领用已出库的单据同步追回（生成待确认退回单）。 */
+  private async applyApplicationWithdrawn(
+    tx: Prisma.TransactionClient,
+    application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
+    userId: string,
+  ) {
+    const drawId = application.draw_id;
+    if (Number(application.status) === 0 && Number(application.approve_status) === 0) {
+      return { id: String(drawId), message: '领用申请已撤回', returnId: null };
+    }
+    const directOutput = await this.findDirectOutput(tx, drawId);
+    if (directOutput && directOutput.comfirm_status !== 1) {
+      throw new BadRequestException('直接领用出库尚未生效，不能撤回');
+    }
+    await tx.hspsi_draw_approve.update({
+      where: { draw_id: drawId },
+      data: {
+        status: 0,
+        approve_status: 0,
+        approve_comment: '创建人撤回审批',
+        approve_by: 0n,
+        approve_date: null,
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+    await this.todoService.completeByBusiness('draw_approve', Number(drawId), tx);
+    let returnId: bigint | null = null;
+    if (directOutput) {
+      const returnDocument = await this.ensureRejectedDirectOutputReturn(
+        tx,
+        application,
+        directOutput,
+        userId,
+        '领用申请被撤回，待办理退回',
+        'withdraw_return',
+      );
+      returnId = returnDocument.draw_exit_id;
+    }
+    return {
+      id: String(drawId),
+      message: returnId
+        ? '领用申请已撤回，并已生成待确认退回单'
+        : '领用申请已撤回',
+      returnId,
+    };
+  }
+
+  /** 终止本地落账：approve_status=3 终态（不可编辑重提），直接领用已出库的单据同步追回。 */
+  private async applyApplicationTerminated(
+    tx: Prisma.TransactionClient,
+    application: Prisma.hspsi_draw_approveGetPayload<Record<string, never>>,
+    userId: string,
+  ) {
+    const drawId = application.draw_id;
+    if (Number(application.approve_status) === 3) {
+      return { id: String(drawId), message: '领用申请已取消，不能重复终止', returnId: null };
+    }
+    const directOutput = await this.findDirectOutput(tx, drawId);
+    if (directOutput && directOutput.comfirm_status !== 1) {
+      throw new BadRequestException('直接领用出库尚未生效，不能终止');
+    }
+    await tx.hspsi_draw_approve.update({
+      where: { draw_id: drawId },
+      data: {
+        approve_status: 3,
+        approve_comment: '创建人终止审批',
+        approve_by: BigInt(userId),
+        approve_date: new Date(),
+        updated_by: BigInt(userId),
+        updated_at: new Date(),
+      },
+    });
+    await this.todoService.completeByBusiness('draw_approve', Number(drawId), tx);
+    let returnId: bigint | null = null;
+    if (directOutput) {
+      const returnDocument = await this.ensureRejectedDirectOutputReturn(
+        tx,
+        application,
+        directOutput,
+        userId,
+        '领用申请被终止，待办理退回',
+        'terminate_return',
+      );
+      returnId = returnDocument.draw_exit_id;
+    }
+    return {
+      id: String(drawId),
+      message: returnId
+        ? '领用申请已终止，并已生成待确认退回单'
+        : '领用申请已终止',
+      returnId,
+    };
+  }
+
+  /**
+   * B2：撤回后同单据重新发起 OA 审批（提交成功）时，撤销撤回自动生成的“待确认退回单”。
+   * 仅清理仍待确认（未办理入库确认）且由撤回生成的退回单；已确认或人工创建的退回单不受影响。
+   */
+  private async releaseWithdrawAutoReturns(drawId: bigint, userId: string) {
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockRow(tx, 'hspsi_draw_approve', 'draw_id', drawId);
+      const outputs = await tx.hspsi_draw_approve_output.findMany({
+        where: { draw_id: drawId, deleted_at: null },
+        select: { draw_output_id: true },
+      });
+      if (!outputs.length) return;
+      const relations = await tx.hspsi_business_document_relation.findMany({
+        where: {
+          upstream_type: 'requisition_output',
+          upstream_id: { in: outputs.map((item) => item.draw_output_id) },
+          downstream_type: 'requisition_return',
+          relation_kind: 'withdraw_return',
+          deleted_at: null,
+        },
+        select: { downstream_id: true },
+      });
+      if (!relations.length) return;
+      const pending = await tx.hspsi_draw_approve_output_exit.findMany({
+        where: {
+          draw_exit_id: { in: relations.map((item) => item.downstream_id) },
+          comfirm_status: 0,
+          deleted_at: null,
+        },
+        select: { draw_exit_id: true },
+      });
+      for (const item of pending) {
+        await tx.hspsi_draw_approve_output_exit.update({
+          where: { draw_exit_id: item.draw_exit_id },
+          data: { deleted_at: new Date(), updated_by: BigInt(userId), updated_at: new Date() },
+        });
+        await this.documentTrace.removeForDocument(
+          'requisition_return',
+          String(item.draw_exit_id),
+          tx,
+        );
+      }
+    });
   }
 
   async applicationOptions() {

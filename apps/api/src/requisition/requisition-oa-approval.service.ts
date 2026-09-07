@@ -213,6 +213,50 @@ export class RequisitionOaApprovalService {
     }
   }
 
+  /**
+   * 领用人（创建人）主动撤销已在 OA 运行中的借用申请流程。
+   * 以领用人在单据账套下的 OA 员工身份执行撤销；OA 已撤销（上次本地落账失败后的重试）视为成功。
+   * OA 失败时抛错，由调用方保证本地单据仍保持审批中。
+   */
+  async cancelRemoteProcess(
+    instance: { account_set_id: bigint; bus_key: string; business_id: bigint },
+    applicantStaffId: bigint,
+    approveComment = '创建人终止审批',
+  ): Promise<void> {
+    const credential = await this.credentialService.getById(instance.account_set_id);
+    if (!credential) throw new BadRequestException('领用申请所属账套未启用，无法撤销OA审批');
+    const staff = await this.prisma.hspsi_basic_staff.findFirst({
+      where: {
+        id: applicantStaffId,
+        account_set_id: instance.account_set_id,
+        status: 1,
+        deleted_at: null,
+      },
+      select: { outer_ref_id: true },
+    });
+    if (!staff?.outer_ref_id) {
+      throw new BadRequestException('领用人尚未关联有效OA账号，请先同步OA组织人员');
+    }
+    const busKey = instance.bus_key || `${BUSINESS_TYPE}:${instance.business_id}`;
+    try {
+      await this.approvalService.dealProcess(credential, {
+        approverId: staff.outer_ref_id,
+        operateType: 'cancel',
+        busKey,
+        approveComment,
+      });
+    } catch (error) {
+      if (this.isAlreadyCanceledError(error)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`撤销OA审批失败：${message}`);
+    }
+  }
+
+  private isAlreadyCanceledError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /已撤销|已取消|已经撤销|已经取消|already\s*cancel|already\s*revok/i.test(message);
+  }
+
   private async prepareOaAttachments(
     drawId: bigint,
     accountSetId: bigint,

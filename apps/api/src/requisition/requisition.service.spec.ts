@@ -45,7 +45,7 @@ function serviceWithTransaction(tx: Record<string, any>, root: Record<string, an
     completeByBusiness: vi.fn().mockResolvedValue(0),
     resolveRecipients: vi.fn().mockResolvedValue([]),
   };
-  const oaApproval = { submit: vi.fn() };
+  const oaApproval = { submit: vi.fn(), cancelRemoteProcess: vi.fn().mockResolvedValue(undefined) };
   const references = {
     enrich: vi.fn(async (rows: unknown) => rows),
     enrichGoods: vi.fn(async (rows: unknown) => rows),
@@ -1211,6 +1211,8 @@ describe('RequisitionService non-borrow applications auto-approve without OA', (
         deleteMany: vi.fn(),
         createMany: vi.fn(),
       },
+      // 提交 OA 成功后触发 B2：释放撤回时自动生成的待确认退回单（本用例无退回单，早退）
+      hspsi_draw_approve_output: { findMany: vi.fn().mockResolvedValue([]) },
       hspsi_basic_organization: { findFirst: vi.fn().mockResolvedValue({ account_set_id: 1n }) },
       hspsi_sys_user_oa_staff: { findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }) },
       hspsi_basic_staff: {
@@ -1670,6 +1672,383 @@ describe('RequisitionService direct output cross-org options and authorization',
     expect(result[0]!.skuStockByWarehouse).toEqual({
       '201': { '49': 5 },
       '202': { '49': 3 },
+    });
+  });
+});
+
+describe('RequisitionService creator withdraw/terminate (OA cancel)', () => {
+  const application = (overrides: Record<string, unknown> = {}) => ({
+    draw_id: 7n,
+    draw_no: 'RA2026',
+    org_id: 2n,
+    warehouse_id: 3n,
+    dept_id: 6n,
+    applicant_id: 9n,
+    draw_type: 2,
+    status: 1,
+    approve_status: 0,
+    approve_comment: '',
+    approve_by: 0n,
+    approve_date: null,
+    created_by: 5n,
+    updated_by: 5n,
+    deleted_at: null,
+    ...overrides,
+  });
+  const instance = (overrides: Record<string, unknown> = {}) => ({
+    id: 31n,
+    business_type: 'requisition_application',
+    business_id: 7n,
+    bus_key: 'requisition_application:7',
+    proc_inst_id: 'PROC-7',
+    proc_status: 'RUNNING',
+    account_set_id: 1n,
+    ...overrides,
+  });
+  const identityRoot = {
+    hspsi_basic_organization: {
+      findFirst: vi.fn().mockResolvedValue({ org_id: 2n, account_set_id: 1n }),
+    },
+    hspsi_sys_user_oa_staff: {
+      findFirst: vi.fn().mockResolvedValue({ staff_id: 9n }),
+    },
+    hspsi_basic_staff: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 9n,
+        name: '张三',
+        account_set_id: 1n,
+        outer_ref_id: 'MEMBER-9',
+        out_staff_id: 'STAFF-9',
+      }),
+    },
+    hspsi_basic_staff_organizations: {
+      findFirst: vi.fn().mockResolvedValue({ id: 1n, org_id: 6n, org_type: 2, type: 1 }),
+    },
+  };
+  function txFor(
+    app: Record<string, unknown> = application(),
+    overrides: Record<string, any> = {},
+  ): Record<string, any> {
+    return {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(instance()),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(app),
+        update: vi.fn().mockResolvedValue(app),
+      },
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_business_document_relation: {},
+      ...identityRoot,
+      ...overrides,
+    };
+  }
+  function withRoot(app: Record<string, unknown>, overrides: Record<string, any> = {}) {
+    return {
+      hspsi_draw_approve: { findFirst: vi.fn().mockResolvedValue(app) },
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance()) },
+      ...identityRoot,
+      ...overrides,
+    };
+  }
+
+  it('withdraws a running OA borrow application back to draft and marks the instance canceled', async () => {
+    const app = application();
+    const tx = txFor(app);
+    const { service, oaApproval, todoService } = serviceWithTransaction(tx, withRoot(app));
+
+    const result = await service.withdrawApplication('7', '9');
+
+    expect(oaApproval.cancelRemoteProcess).toHaveBeenCalledWith(instance(), 9n, '创建人撤回审批');
+    expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith({
+      where: { draw_id: 7n },
+      data: expect.objectContaining({
+        status: 0,
+        approve_status: 0,
+        approve_comment: '创建人撤回审批',
+        approve_by: 0n,
+        approve_date: null,
+      }),
+    });
+    expect(todoService.completeByBusiness).toHaveBeenCalledWith('draw_approve', 7, tx);
+    expect(tx.hspsi_oa_approval_instance.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ proc_status: 'CANCELED', updated_by: 9n }),
+      }),
+    );
+    expect(result).toMatchObject({ message: '领用申请已撤回' });
+  });
+
+  it('terminates a running OA borrow application into the canceled state', async () => {
+    const app = application();
+    const tx = txFor(app);
+    const { service, oaApproval } = serviceWithTransaction(tx, withRoot(app));
+
+    const result = await service.terminateApplication('7', '9');
+
+    expect(oaApproval.cancelRemoteProcess).toHaveBeenCalledWith(instance(), 9n, '创建人终止审批');
+    expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith({
+      where: { draw_id: 7n },
+      data: expect.objectContaining({
+        approve_status: 3,
+        approve_comment: '创建人终止审批',
+        approve_by: 9n,
+        approve_date: expect.any(Date),
+      }),
+    });
+    expect(result.message).toBe('领用申请已终止');
+  });
+
+  it('forbids a user who is not the applicant from withdrawing', async () => {
+    const app = application();
+    const tx = txFor(app);
+    const { service } = serviceWithTransaction(
+      tx,
+      withRoot(app, {
+        hspsi_basic_staff: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 8n,
+            name: '李四',
+            account_set_id: 1n,
+            outer_ref_id: 'MEMBER-8',
+            out_staff_id: 'STAFF-8',
+          }),
+        },
+      }),
+    );
+
+    await expect(service.withdrawApplication('7', '9')).rejects.toThrow(
+      '个人无权撤回他人发起的领用申请',
+    );
+  });
+
+  it('rejects non-borrow applications which never go through OA', async () => {
+    const app = application({ draw_type: 1 });
+    const tx = txFor(app);
+    const { service } = serviceWithTransaction(tx, withRoot(app));
+
+    await expect(service.terminateApplication('7', '9')).rejects.toThrow(
+      '非借用领用申请走系统内审批，不支持撤回/终止',
+    );
+  });
+
+  it('blocks while the OA instance is still being pushed', async () => {
+    const app = application();
+    const tx = txFor(app);
+    const { service } = serviceWithTransaction(
+      tx,
+      withRoot(app, {
+        hspsi_oa_approval_instance: {
+          findFirst: vi.fn().mockResolvedValue(instance({ proc_status: 'PENDING_PUSH' })),
+        },
+      }),
+    );
+
+    await expect(service.withdrawApplication('7', '9')).rejects.toThrow('正在推送OA，请稍后重试');
+  });
+
+  it('keeps the document in approval and rethrows when the OA cancel fails', async () => {
+    const app = application();
+    const tx = txFor(app);
+    const { service, oaApproval } = serviceWithTransaction(tx, withRoot(app));
+    oaApproval.cancelRemoteProcess.mockRejectedValue(new Error('撤销OA审批失败：网络超时'));
+
+    await expect(service.withdrawApplication('7', '9')).rejects.toThrow('撤销OA审批失败：网络超时');
+    expect(tx.hspsi_draw_approve.update).not.toHaveBeenCalled();
+  });
+
+  it('withdrawing an issued direct-output borrow auto-generates a pending withdraw return', async () => {
+    const app = application();
+    const directOutput = {
+      draw_output_id: 12n,
+      draw_output_no: 'RO1',
+      draw_id: 7n,
+      org_id: 2n,
+      warehouse_id: 3n,
+      dept_id: 6n,
+      receiver_id: 9n,
+      comfirm_status: 1,
+      deleted_at: null,
+    };
+    const tx = txFor(app, {
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(directOutput) },
+      hspsi_draw_approve_output_detail: {
+        findMany: vi.fn().mockResolvedValue([
+          { output_detail_id: 120n, draw_output_id: 12n, is_returnable: 1, fact_draw_qty: 2 },
+        ]),
+      },
+      hspsi_draw_approve_output_exit: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ draw_exit_id: 20n }),
+      },
+      hspsi_draw_approve_output_exit_detail: { createMany: vi.fn() },
+      hspsi_business_document_relation: { upsert: vi.fn() },
+    });
+    const { service, documentTrace } = serviceWithTransaction(tx, withRoot(app));
+
+    const result = await service.withdrawApplication('7', '9');
+
+    expect(tx.hspsi_draw_approve_output_exit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          exit_reson: '领用申请被撤回，待办理退回',
+          comfirm_status: 0,
+        }),
+      }),
+    );
+    expect(documentTrace.link).toHaveBeenCalledWith(
+      expect.objectContaining({ relationKind: 'withdraw_return' }),
+      tx,
+    );
+    expect(result).toMatchObject({
+      message: '领用申请已撤回，并已生成待确认退回单',
+      returnId: 20n,
+    });
+  });
+
+  it('does not withdraw before the direct output takes effect (mirrors the reject guard)', async () => {
+    const app = application();
+    const tx = txFor(app, {
+      hspsi_draw_approve_output: {
+        findFirst: vi.fn().mockResolvedValue({
+          draw_output_id: 12n,
+          comfirm_status: 0,
+          deleted_at: null,
+        }),
+      },
+    });
+    const { service } = serviceWithTransaction(tx, withRoot(app));
+
+    await expect(service.withdrawApplication('7', '9')).rejects.toThrow(
+      '直接领用出库尚未生效，不能撤回',
+    );
+  });
+
+  it('releases the auto-generated withdraw return when the same document re-enters OA', async () => {
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_draw_approve_output: {
+        findMany: vi.fn().mockResolvedValue([{ draw_output_id: 12n }]),
+      },
+      hspsi_business_document_relation: {
+        findMany: vi.fn().mockResolvedValue([{ downstream_id: 20n }]),
+      },
+      hspsi_draw_approve_output_exit: {
+        findMany: vi.fn().mockResolvedValue([{ draw_exit_id: 20n }]),
+        update: vi.fn(),
+      },
+    };
+    const { service, oaApproval, documentTrace } = serviceWithTransaction(tx);
+    oaApproval.submit.mockResolvedValue({
+      instanceId: 1n,
+      procInstId: 'P-1',
+      procStatus: 'RUNNING',
+      busKey: 'requisition_application:7',
+      errorMessage: '',
+    });
+
+    const result = await service.submitApplicationToOa('7', '9');
+
+    expect(oaApproval.submit).toHaveBeenCalledWith(7n, '9');
+    expect(tx.hspsi_draw_approve_output_exit.update).toHaveBeenCalledWith({
+      where: { draw_exit_id: 20n },
+      data: expect.objectContaining({ deleted_at: expect.any(Date) }),
+    });
+    expect(documentTrace.removeForDocument).toHaveBeenCalledWith(
+      'requisition_return',
+      '20',
+      tx,
+    );
+    expect(result.message).toBe('已提交OA审批');
+  });
+});
+
+describe('RequisitionService OA cancel callback alignment', () => {
+  const instance = (overrides: Record<string, unknown> = {}) => ({
+    id: 31n,
+    business_type: 'requisition_application',
+    business_id: 7n,
+    bus_key: 'requisition_application:7',
+    proc_inst_id: 'PROC-7',
+    proc_status: 'RUNNING',
+    account_set_id: 1n,
+    ...overrides,
+  });
+  const payload = (procStatus: 'CANCELED' | 'REJECTED' | 'PASSED') => ({
+    prjCod: 'PRJ-1',
+    procStatus,
+    busKey: 'requisition_application:7',
+    procInstId: 'PROC-7',
+    procKey: 'PROC-KEY',
+    formKey: 'PROC-KEY',
+  });
+
+  it('maps an OA CANCELED callback to approve_status 3 and keeps the submitted status', async () => {
+    const app = { draw_id: 7n, approve_status: 0, status: 1 };
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance()),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(app),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve_output: { findFirst: vi.fn().mockResolvedValue(null) },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const { service, todoService } = serviceWithTransaction(tx, {
+      hspsi_oa_approval_instance: { findFirst: vi.fn().mockResolvedValue(instance()) },
+    });
+
+    const result = await service.handleOaApprovalResult(payload('CANCELED'), payload('CANCELED'), 99n);
+
+    expect(result).toMatchObject({ processed: true, duplicate: false, procStatus: 'CANCELED' });
+    expect(tx.hspsi_draw_approve.update).toHaveBeenCalledWith({
+      where: { draw_id: 7n },
+      data: expect.objectContaining({
+        approve_status: 3,
+        approve_comment: 'OA审批取消',
+        approve_by: 0n,
+        status: 1,
+      }),
+    });
+    expect(todoService.completeByBusiness).toHaveBeenCalledWith('draw_approve', 7, tx);
+  });
+
+  it('does not overwrite a locally withdrawn draft when the OA CANCELED callback arrives later', async () => {
+    // 创建人撤回成功（草稿 0/0）后 OA 取消回调晚到：视为重复，不覆盖草稿
+    const app = { draw_id: 7n, approve_status: 0, status: 0 };
+    const tx = {
+      $queryRawUnsafe: vi.fn(),
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(instance({ proc_status: 'CANCELED' })),
+        update: vi.fn(),
+      },
+      hspsi_draw_approve: {
+        findFirst: vi.fn().mockResolvedValue(app),
+        update: vi.fn(),
+      },
+      hspsi_oa_approval_callback_log: { update: vi.fn() },
+    };
+    const { service } = serviceWithTransaction(tx, {
+      hspsi_oa_approval_instance: {
+        findFirst: vi.fn().mockResolvedValue(instance({ proc_status: 'CANCELED' })),
+      },
+    });
+
+    const result = await service.handleOaApprovalResult(payload('CANCELED'), payload('CANCELED'), 99n);
+
+    expect(result).toMatchObject({ processed: true, duplicate: true });
+    expect(tx.hspsi_draw_approve.update).not.toHaveBeenCalled();
+    expect(tx.hspsi_oa_approval_callback_log.update).toHaveBeenCalledWith({
+      where: { id: 99n },
+      data: expect.objectContaining({ process_result: '重复回调，已幂等确认' }),
     });
   });
 });

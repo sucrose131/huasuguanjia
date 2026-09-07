@@ -16,14 +16,12 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { RequisitionService } from './requisition.service';
-import { RequisitionOaApprovalService } from './requisition-oa-approval.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('requisitions')
 export class RequisitionController {
   constructor(
     @Inject(RequisitionService) private readonly service: RequisitionService,
-    @Inject(RequisitionOaApprovalService) private readonly oaApproval: RequisitionOaApprovalService,
   ) {}
 
   @RequirePermissions('requisitions')
@@ -85,15 +83,20 @@ export class RequisitionController {
 
   @RequirePermissions('requisitions')
   @Post('applications/:id/submit-oa')
-  async submitApplicationToOa(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    const result = await this.oaApproval.submit(BigInt(id), user.id);
-    return {
-      ...result,
-      message:
-        result.procStatus === 'PUSH_FAILED'
-          ? `提交OA失败：${result.errorMessage ?? '请稍后重试'}`
-          : '已提交OA审批',
-    };
+  submitApplicationToOa(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.submitApplicationToOa(id, user.id);
+  }
+
+  @RequirePermissions('requisitions')
+  @Post('applications/:id/withdraw')
+  withdrawApplication(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.withdrawApplication(id, user.id);
+  }
+
+  @RequirePermissions('requisitions')
+  @Post('applications/:id/terminate')
+  terminateApplication(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.terminateApplication(id, user.id);
   }
 
   @RequirePermissions('requisitions')

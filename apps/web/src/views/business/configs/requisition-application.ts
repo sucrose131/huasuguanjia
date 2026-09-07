@@ -1,6 +1,7 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage } from 'element-plus';
+import { useAuthStore } from '@/stores/auth';
 import RequisitionApplicationForm from '../forms/RequisitionApplicationForm.vue';
 import {
   approvalStatusText,
@@ -20,12 +21,28 @@ const canRejectApplication = (row: Record<string, any>) =>
   canApproveApplication(row) ||
   (Boolean(row.reverseGenerated) && Number(row.approveStatus ?? row.approve_status) === 1);
 
+/** C1：撤回/终止仅限领用人本人（单据领用人 = 当前登录用户的 OA 员工身份） */
+const isCurrentApplicant = (row: Record<string, any>) =>
+  Boolean(useAuthStore().user?.staffId) &&
+  String(row.applicantId ?? row.applicant_id ?? '') === String(useAuthStore().user?.staffId);
+/** 本期范围：仅 OA 渠道的借用（drawType=2）审批中单据可撤回/终止 */
+const canWithdrawOrTerminate = (row: Record<string, any>) =>
+  isCurrentApplicant(row) &&
+  Number(row.drawType ?? row.draw_type) === 2 &&
+  Number(row.status) === 1 &&
+  Number(row.approveStatus ?? row.approve_status) === 0;
+
 export const requisitionApplicationConfig: BusinessDocumentConfig = {
   key: 'requisitions/applications',
   title: '领用申请单',
   endpoint: '/requisitions/applications',
   documentType: 'requisition_application',
   no: 'applicationNo',
+  summaryLabels: [
+    { label: '申请单总数', key: 'total', kind: 'number' },
+    { label: '待审批数', key: 'pending', kind: 'number' },
+    { label: '已审批数', key: 'complete', kind: 'number' },
+  ],
   columns: [
     { prop: 'applicationNo', label: '申请单号', minWidth: 160, tooltip: true },
     { prop: 'deptName', label: '领用部门', minWidth: 130 },
@@ -93,6 +110,33 @@ export const requisitionApplicationConfig: BusinessDocumentConfig = {
         const result: any = await api.post(`/requisitions/applications/${row.id}/submit-oa`, {});
         if (result?.procStatus === 'PUSH_FAILED') ElMessage.warning(result?.message ?? '提交OA失败');
         else ElMessage.success(result?.message ?? '已提交OA审批');
+      },
+    },
+    {
+      key: 'withdraw',
+      label: '撤回',
+      kind: 'warning',
+      primary: false,
+      show: canWithdrawOrTerminate,
+      confirm:
+        '撤回后将撤销OA审批，单据回到草稿可修改后重新提交；若已直接领用出库将同时生成待确认退回单，是否继续？',
+      confirmTitle: '撤回审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/requisitions/applications/${row.id}/withdraw`, {});
+        ElMessage.success(result?.message ?? '领用申请已撤回');
+      },
+    },
+    {
+      key: 'terminate',
+      label: '终止',
+      kind: 'danger',
+      primary: false,
+      show: canWithdrawOrTerminate,
+      confirm: '终止后将撤销OA审批并结束单据，不能再编辑或提交，是否继续？',
+      confirmTitle: '终止审批',
+      handler: async (row) => {
+        const result: any = await api.post(`/requisitions/applications/${row.id}/terminate`, {});
+        ElMessage.success(result?.message ?? '领用申请已终止');
       },
     },
     {
