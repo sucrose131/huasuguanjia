@@ -24,6 +24,7 @@ describe('P1 restored frontend UI contract', () => {
     expect(order).toContain('运输方式');
     expect(order).toContain('物流单号');
     expect(order).toContain('金额与付款');
+    expect(order).toContain('申请数量');
 
     const application = [
       source('../forms/PurchaseApplicationForm.vue'),

@@ -25,7 +25,10 @@ const emit = defineEmits<{
 }>();
 
 const isView = computed(() => props.mode === 'view');
-const canEditLines = computed(() => !isView.value && !props.form.applicationId);
+const canEditCatalog = computed(
+  () => !isView.value && !props.form.applicationId && props.canEditAmount,
+);
+const canEditExecution = computed(() => !isView.value);
 
 const auth = useAuthStore();
 /** 记录级掩码：无查看权，或（范围 own 且单据非本人创建）→ 金额统一 ¥ ****；新建中的单据不掩码 */
@@ -63,7 +66,7 @@ function protectedMoney(value: unknown) {
       </el-table-column>
       <el-table-column label="商品名称" min-width="170">
         <template #default="scope">
-          <div v-if="canEditLines" class="quick-catalog-cell">
+          <div v-if="canEditCatalog" class="quick-catalog-cell">
             <RemoteSelect
               v-model="scope.row.goodsId"
               :fetch="searchGoodsOptions"
@@ -96,7 +99,7 @@ function protectedMoney(value: unknown) {
           <div class="sku-cell">
             <span class="readonly-cell">{{ scope.row.skuSpec || scope.row.skuId || '—' }}</span>
             <el-button
-              v-if="canEditLines && scope.row.goodsId && !scope.row.newGoods"
+              v-if="canEditCatalog && scope.row.goodsId && !scope.row.newGoods"
               link
               type="primary"
               @click="emit('quick-catalog', scope.row, 'sku')"
@@ -109,10 +112,15 @@ function protectedMoney(value: unknown) {
       <el-table-column label="单位" width="72" align="center">
         <template #default="scope">{{ unitName(scope.row) }}</template>
       </el-table-column>
+      <el-table-column v-if="form.applicationId" label="申请数量" width="104" align="right">
+        <template #default="scope">
+          <span class="readonly-cell number-cell">{{ scope.row.applicationQuantity ?? '—' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="采购数量" width="112" align="right">
         <template #default="scope">
           <el-input-number
-            v-if="canEditLines"
+            v-if="canEditExecution"
             v-model="scope.row.quantity"
             :min="1"
             :precision="0"
@@ -125,7 +133,7 @@ function protectedMoney(value: unknown) {
       <el-table-column label="明细总价" width="132" align="right">
         <template #default="scope">
           <el-input-number
-            v-if="canEditLines && canEditAmount"
+            v-if="canEditExecution && canEditAmount"
             v-model="scope.row.totalAmount"
             :min="0"
             :precision="2"
@@ -144,12 +152,12 @@ function protectedMoney(value: unknown) {
       </el-table-column>
       <el-table-column label="备注" min-width="140" show-overflow-tooltip>
         <template #default="scope">
-          <el-input v-if="canEditLines" v-model="scope.row.remark" />
+          <el-input v-if="canEditExecution" v-model="scope.row.remark" />
           <span v-else class="readonly-cell">{{ scope.row.remark || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column
-        v-if="canEditLines"
+        v-if="canEditCatalog"
         label="操作"
         width="72"
         fixed="right"
@@ -168,7 +176,7 @@ function protectedMoney(value: unknown) {
       </el-table-column>
     </el-table>
 
-    <el-button v-if="canEditLines" class="add-line" @click="emit('add')">添加明细行</el-button>
+    <el-button v-if="canEditCatalog" class="add-line" @click="emit('add')">添加明细行</el-button>
 
     <div class="purchase-order-total">
       合计：{{ orderQuantity }} 件　订单金额 {{ protectedMoney(orderTotal) }}

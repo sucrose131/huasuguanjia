@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { useAuthStore } from '@/stores/auth';
+import { canEditAmountRecord, useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import {
   filterGoodsByWarehouseType,
@@ -35,7 +35,15 @@ const options = reactive<Record<string, any>>({
 });
 const dicts = reactive<Record<string, any[]>>({});
 const isView = computed(() => props.mode === 'view');
-const canEditAmount = computed(() => auth.amountAccess.canEditAmount);
+const canEditAmount = computed(() => {
+  if (props.mode === 'create' || !(form.value?.id ?? form.value?.po_id))
+    return auth.amountAccess.canEditAmount;
+  return canEditAmountRecord(
+    auth.amountAccess,
+    auth.user?.id,
+    form.value?.createdBy ?? form.value?.created_by,
+  );
+});
 const canViewAmount = computed(() => auth.amountAccess.canViewAmount);
 const quickCatalogRef = ref<InstanceType<typeof PurchaseQuickCatalogDialog>>();
 const organizationTree = computed(() =>
@@ -395,7 +403,7 @@ function validate() {
       ElMessage.warning('明细数量必须大于 0');
       return false;
     }
-    if (!(Number(line.totalAmount) > 0)) {
+    if (canEditAmount.value && !(Number(line.totalAmount) > 0)) {
       ElMessage.warning('明细总金额必须大于 0');
       return false;
     }
@@ -543,7 +551,7 @@ onMounted(async () => {
 
     <div v-if="!isView" class="form-actions">
       <el-button @click="emit('cancel')">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="!canEditAmount" @click="save">
+      <el-button type="primary" :loading="saving" @click="save">
         保存
       </el-button>
     </div>

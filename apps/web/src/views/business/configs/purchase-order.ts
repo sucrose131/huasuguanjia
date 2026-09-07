@@ -1,23 +1,15 @@
 import type { BusinessDocumentConfig } from '../business-document-config';
 import { api } from '@/api';
 import { ElMessage } from 'element-plus';
-import { useAuthStore, canEditAmountRecord } from '@/stores/auth';
+import { useAuthStore } from '@/stores/auth';
 import PurchaseOrderForm from '../forms/PurchaseOrderForm.vue';
 
 const canEditAmount = () => useAuthStore().amountAccess.canEditAmount;
 
-/** 记录级金额编辑判定：范围 own 时只允许编辑自己创建(createdBy=本人)的订单 */
-const canEditRecordAmount = (row: Record<string, any>) => {
-  const auth = useAuthStore();
-  return canEditAmountRecord(auth.amountAccess, auth.user?.id, row.createdBy);
-};
-
-/** 详情级归属判定：金额范围 own 时路由直达他人订单只能查看 */
-const routeOpensOwnEditableOrder = async (id: string) => {
-  const auth = useAuthStore();
-  if ((auth.amountAccess.amountScope ?? 'all') === 'all') return true;
+/** 路由直达时只允许待采购订单进入编辑态，金额权限仅控制金额字段。 */
+const routeOpensEditableOrder = async (id: string) => {
   const detail: any = await api.get(`/purchase/orders/${id}`);
-  return String(detail?.createdBy ?? '') === String(auth.user?.id ?? '');
+  return Number(detail?.orderStatus ?? detail?.status) === 1;
 };
 
 /**
@@ -178,8 +170,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
       const viewOnly =
         String(query.view ?? '') === '1' ||
         Boolean(query.viewId) ||
-        !canEditAmount() ||
-        !(await routeOpensOwnEditableOrder(id));
+        !(await routeOpensEditableOrder(id));
       const row = { id };
       if (viewOnly) ctx.openView(row);
       else ctx.openEdit(row);
@@ -190,8 +181,7 @@ export const purchaseOrderConfig: BusinessDocumentConfig = {
     {
       key: 'edit',
       label: '编辑',
-      show: (row) =>
-        Number(row.orderStatus) === 1 && canEditRecordAmount(row) && !row.applicationId,
+      show: (row) => Number(row.orderStatus) === 1,
       handler: (row, ctx) => ctx.openEdit(row),
     },
     {
