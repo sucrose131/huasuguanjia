@@ -2,12 +2,13 @@
   <div
     ref="contentRef"
     class="overflow-tooltip-cell"
-    @mouseenter="checkOverflow"
-    @mouseleave="visible = false"
+    @mouseenter="onEnter"
+    @mouseleave="onLeave"
   >
     <slot>{{ content }}</slot>
   </div>
   <el-tooltip
+    v-if="active"
     v-model:visible="visible"
     :virtual-ref="contentRef"
     virtual-triggering
@@ -21,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 
 /**
  * 单元格溢出 Tooltip：替代 el-table 原生 show-overflow-tooltip。
@@ -31,6 +32,9 @@ import { computed, ref } from 'vue';
  * 本组件以单元格自身为虚拟触发元素（virtual-triggering），定位由
  * el-tooltip 基于真实单元格矩形计算，不存在固定列偏移问题；
  * 仅当内容溢出时才显示 Tooltip，行为与原版一致。
+ *
+ * 性能：el-tooltip 只在首次 hover 且内容确溢出时才创建（active），
+ * 大列表下不会为每个单元格常驻 tooltip 实例与 popper 逻辑。
  */
 const props = withDefaults(
   defineProps<{
@@ -42,11 +46,24 @@ const props = withDefaults(
 
 const contentRef = ref<HTMLElement>();
 const visible = ref(false);
+const active = ref(false);
 
-function checkOverflow() {
+function overflows() {
   const el = contentRef.value;
-  if (!el) return;
-  visible.value = el.scrollWidth > el.clientWidth + 1;
+  return !!el && el.scrollWidth > el.clientWidth + 1;
+}
+
+function onEnter() {
+  if (!overflows()) return;
+  active.value = true;
+  void nextTick(() => {
+    visible.value = true;
+  });
+}
+
+function onLeave() {
+  visible.value = false;
+  active.value = false;
 }
 
 const tooltipContent = computed(() => {

@@ -15,7 +15,6 @@ import {
   assertGeneratedDamageLinesUnchanged,
   calculateInventoryCheckProgress,
   classifyInventoryCheckQuantities,
-  filterQuantityAlertsByStatus,
   parseInventoryLossDisposal,
   partitionInventoryCheckDetails,
   splitInventoryDamageDetails,
@@ -24,6 +23,49 @@ import {
 export type { InventoryCheckQuantityResult };
 
 type Body = Record<string, any>;
+
+/** quantityAlerts 页行（$queryRaw 原样行，字段值以驱动返回为准） */
+type QuantityAlertRow = {
+  stock_id: unknown;
+  config_id: unknown;
+  org_id: unknown;
+  warehouse_id: unknown;
+  goods_id: unknown;
+  sku_id: unknown;
+  fact_qty: unknown;
+  inventory_amount: unknown;
+  safe_qty: unknown;
+  gap_qty: unknown;
+  purchase_qty: unknown;
+};
+
+/** quantityAlerts 按仓库统计行 */
+type QuantityAlertStatRow = {
+  warehouse_id: unknown;
+  item_count: unknown;
+  total_amount: unknown;
+  warning_count: unknown;
+};
+
+/** expiryAlerts 页行（$queryRaw 原样行） */
+type ExpiryAlertRow = {
+  period_id: unknown;
+  warehouse_id: unknown;
+  goods_id: unknown;
+  sku_id: unknown;
+  batch_no: unknown;
+  end_day: unknown;
+  alter_type: unknown;
+  alter_day: unknown;
+  inventory_qty: unknown;
+  inventory_amount: unknown;
+};
+
+/** expiryAlerts 按仓库统计行 */
+type ExpiryAlertStatRow = {
+  warehouse_id: unknown;
+  item_count: unknown;
+};
 
 @Injectable()
 export class InventoryService {
@@ -3721,7 +3763,10 @@ export class InventoryService {
     ).length;
   }
   async quantityAlerts(query: Body) {
-    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计
+    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计。
+    // SQL 真分页：页行按派生条件 + 仓库过滤 LIMIT/OFFSET 返回；统计/摘要走 GROUP BY
+    // 聚合（不带仓库过滤），保证 warehouseCounts、total、summary 不随选中仓库与页码变化，
+    // 统计口径与 2026-08-31 确认口径一致：全部 = 各仓库之和 = 当前筛选下列表条数。
     const enabledWarehouseIds = (
       await this.prisma.hspsi_basic_warehouse.findMany({
         where: {
@@ -3732,78 +3777,114 @@ export class InventoryService {
         select: { warehouse_id: true },
       })
     ).map((warehouse) => warehouse.warehouse_id);
-    const where: Prisma.hspsi_inventory_totalWhereInput = { deleted_at: null };
-    if (query.orgId) where.org_id = BigInt(query.orgId);
-    // 查询组织级全量（启用仓库范围内），warehouseId 在内存中过滤，保证 warehouseCounts 稳定不随选中仓库变化
-    where.warehouse_id = { in: enabledWarehouseIds };
+    const { page, pageSize } = this.page(query);
+    const status = query.status == null ? '' : String(query.status).trim();
+    if (!['', '0', '1'].includes(status)) throw new BadRequestException('库存状态参数无效');
     const keywordIds = await this.inventoryKeywordIds(query.keyword);
-    if (keywordIds)
-      where.OR = [{ goods_id: { in: keywordIds.goodsIds } }, { sku_id: { in: keywordIds.skuIds } }];
-    const stocks = await this.prisma.hspsi_inventory_total.findMany({ where });
-    const configs = await this.prisma.hspsi_inventory_alert_qty.findMany({
-      where: stocks.length
-        ? {
-            OR: stocks.map((stock) => ({
-              warehouse_id: stock.warehouse_id,
-              goods_id: stock.goods_id,
-              sku_id: stock.sku_id,
-            })),
-          }
-        : { id: { in: [] } },
-    });
+    const warehouseFilter = query.warehouseId ? String(query.warehouseId) : undefined;
+
+    const scope = (includeWarehouse: boolean) =>
+      this.quantityAlertConditions(
+        enabledWarehouseIds,
+        query.orgId,
+        keywordIds,
+        status,
+        includeWarehouse ? warehouseFilter : undefined,
+      );
+    const join = Prisma.sql`hspsi_inventory_total s
+      LEFT JOIN hspsi_inventory_alert_qty c
+        ON c.warehouse_id = s.warehouse_id
+       AND c.goods_id = s.goods_id
+       AND c.sku_id = s.sku_id`;
+
+    const stats = await this.prisma.$queryRaw<QuantityAlertStatRow[]>(
+      Prisma.sql`
+        SELECT s.warehouse_id AS warehouse_id,
+               COUNT(*) AS item_count,
+               COALESCE(SUM(s.inventory_amount), 0) AS total_amount,
+               COALESCE(SUM(s.inventory_qty < COALESCE(c.safe_qty, 0)), 0) AS warning_count
+        FROM ${join}
+        WHERE ${scope(false)}
+        GROUP BY s.warehouse_id
+      `,
+    );
+    const statByWarehouse = new Map(stats.map((row) => [String(row.warehouse_id), row]));
+    // 选中仓库时取该仓库统计（列表即该仓库分页），未选仓库时对全部仓库求和；行按仓库互斥，等价改动前逐行统计口径。
+    const scopedStats = warehouseFilter
+      ? statByWarehouse.get(warehouseFilter)
+        ? [statByWarehouse.get(warehouseFilter)!]
+        : []
+      : stats;
+    const itemCount = scopedStats.reduce((sum, row) => sum + Number(row.item_count), 0);
+    const totalAmount = scopedStats.reduce((sum, row) => sum + Number(row.total_amount), 0);
+    const warningCount = scopedStats.reduce((sum, row) => sum + Number(row.warning_count), 0);
+    const warehouseCounts = Object.fromEntries(
+      stats.map((row) => [String(row.warehouse_id), Number(row.item_count)]),
+    );
+
+    const rows = await this.prisma.$queryRaw<QuantityAlertRow[]>(
+      Prisma.sql`
+        SELECT s.id AS stock_id,
+               c.id AS config_id,
+               s.org_id AS org_id,
+               s.warehouse_id AS warehouse_id,
+               s.goods_id AS goods_id,
+               s.sku_id AS sku_id,
+               s.inventory_qty AS fact_qty,
+               s.inventory_amount AS inventory_amount,
+               COALESCE(c.safe_qty, 0) AS safe_qty,
+               GREATEST(0, COALESCE(c.safe_qty, 0) - s.inventory_qty) AS gap_qty,
+               COALESCE(
+                 c.purchase_qty,
+                 GREATEST(0, COALESCE(c.safe_qty, 0) - s.inventory_qty)
+               ) AS purchase_qty
+        FROM ${join}
+        WHERE ${scope(true)}
+        ORDER BY s.warehouse_id ASC, s.goods_id ASC, s.sku_id ASC, s.id ASC
+        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+      `,
+    );
     const refs = await this.names(
-      stocks.map((s) => ({
-        goodsId: s.goods_id,
-        skuId: s.sku_id,
-        warehouseId: s.warehouse_id,
-        orgId: s.org_id,
+      rows.map((row) => ({
+        goodsId: BigInt(String(row.goods_id)),
+        skuId: BigInt(String(row.sku_id)),
+        warehouseId: BigInt(String(row.warehouse_id)),
+        orgId: BigInt(String(row.org_id)),
       })),
     );
-    const allItems = stocks.map((s) => {
-      const c = configs.find(
-        (i) =>
-          i.warehouse_id === s.warehouse_id && i.goods_id === s.goods_id && i.sku_id === s.sku_id,
+    const items = rows.map((row) => {
+      const goods = refs.goods.find((g) => g.goods_id === BigInt(String(row.goods_id)));
+      const sku = refs.skus.find((k) => k.sku_id === BigInt(String(row.sku_id)));
+      const warehouse = refs.warehouses.find(
+        (w) => w.warehouse_id === BigInt(String(row.warehouse_id)),
       );
-      const safe = Number(c?.safe_qty ?? 0),
-        fact = Number(s.inventory_qty),
-        gap = Math.max(0, safe - fact);
+      const fact = Number(row.fact_qty),
+        safe = Number(row.safe_qty);
       return {
-        id: c?.id,
-        orgId: s.org_id,
-        goodsId: s.goods_id,
-        goodsCode: refs.goods.find((g) => g.goods_id === s.goods_id)?.query_code,
-        goodsName: refs.goods.find((g) => g.goods_id === s.goods_id)?.goods_name,
-        skuId: s.sku_id,
-        skuSpec: refs.skus.find((k) => k.sku_id === s.sku_id)?.spec_models,
-        warehouseId: s.warehouse_id,
-        warehouseName: refs.warehouses.find((w) => w.warehouse_id === s.warehouse_id)?.name,
+        id: row.config_id == null ? undefined : BigInt(String(row.config_id)),
+        orgId: BigInt(String(row.org_id)),
+        goodsId: BigInt(String(row.goods_id)),
+        goodsCode: goods?.query_code,
+        goodsName: goods?.goods_name,
+        skuId: BigInt(String(row.sku_id)),
+        skuSpec: sku?.spec_models,
+        warehouseId: BigInt(String(row.warehouse_id)),
+        warehouseName: warehouse?.name,
         factQty: fact,
         safeQty: safe,
-        gapQty: gap,
-        purchaseQty: Number(c?.purchase_qty ?? gap),
-        inventoryAmount: s.inventory_amount,
+        gapQty: Number(row.gap_qty),
+        purchaseQty: Number(row.purchase_qty),
+        inventoryAmount: Number(row.inventory_amount),
         warning: fact < safe,
       };
     });
-    const statusItems = filterQuantityAlertsByStatus(allItems, query.status);
-    const warehouseCounts = Object.fromEntries(
-      [...new Set(statusItems.map((item) => String(item.warehouseId)))].map((warehouseId) => [
-        warehouseId,
-        statusItems.filter((item) => String(item.warehouseId) === warehouseId).length,
-      ]),
-    );
-    const items = query.warehouseId
-      ? statusItems.filter((item) => String(item.warehouseId) === String(query.warehouseId))
-      : statusItems;
     return {
       items,
-      total: items.length,
+      total: itemCount,
+      page,
+      pageSize,
       warehouseCounts,
-      summary: {
-        itemCount: items.length,
-        totalAmount: items.reduce((sum, item) => sum + Number(item.inventoryAmount), 0),
-        warningCount: items.filter((item) => item.warning).length,
-      },
+      summary: { itemCount, totalAmount, warningCount },
     };
   }
   async saveQuantityAlert(body: Body) {
@@ -3850,7 +3931,9 @@ export class InventoryService {
     return { id: item.id, message: '安全库存与建议补货量已更新' };
   }
   async expiryAlerts(query: Body) {
-    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计
+    // 仅统计/展示启用仓库（status=1）的预警项；停用仓库不计入「全部」与各仓库统计。
+    // SQL 真分页：period × batch_total 内连接确认有库存批次；页行 LIMIT/OFFSET，
+    // warehouseCounts/total 走 GROUP BY 聚合（不带仓库过滤，稳定不随选中仓库/页码变化）。
     const enabledWarehouseIds = (
       await this.prisma.hspsi_basic_warehouse.findMany({
         where: {
@@ -3861,87 +3944,167 @@ export class InventoryService {
         select: { warehouse_id: true },
       })
     ).map((warehouse) => warehouse.warehouse_id);
-    const where: Prisma.hspsi_inventory_alert_periodWhereInput = {
-      end_day: { not: null },
-      warehouse_id: { in: enabledWarehouseIds },
-    };
+    const { page, pageSize } = this.page(query);
     const keywordIds = await this.inventoryKeywordIds(query.keyword);
-    if (keywordIds)
-      where.OR = [{ goods_id: { in: keywordIds.goodsIds } }, { sku_id: { in: keywordIds.skuIds } }];
-    const configs = await this.prisma.hspsi_inventory_alert_period.findMany({
-      where,
-      orderBy: { end_day: 'asc' },
-    });
-    const stocks = configs.length
-      ? await this.prisma.hspsi_inventory_batch_total.findMany({
-          where: {
-            inventory_qty: { gt: 0 },
-            OR: configs.map((item) => ({
-              goods_id: item.goods_id,
-              sku_id: item.sku_id,
-              warehouse_id: item.warehouse_id,
-              batch_no: item.batch_no,
-            })),
-          },
-        })
-      : [];
-    const refs = await this.names(
-      configs.map((item) => ({
-        goodsId: item.goods_id,
-        skuId: item.sku_id,
-        warehouseId: item.warehouse_id,
-      })),
-    );
-    const types = await this.dictionary('expiry_alert_type');
-    const allItems = configs.flatMap((config) => {
-      const stock = stocks.find(
-        (item) =>
-          item.goods_id === config.goods_id &&
-          item.sku_id === config.sku_id &&
-          item.warehouse_id === config.warehouse_id &&
-          item.batch_no === config.batch_no,
+    const warehouseFilter = query.warehouseId ? String(query.warehouseId) : undefined;
+
+    const scope = (includeWarehouse: boolean) =>
+      this.expiryAlertConditions(
+        enabledWarehouseIds,
+        keywordIds,
+        includeWarehouse ? warehouseFilter : undefined,
       );
-      if (!stock || !config.end_day) return [];
-      const remainingDays = Math.ceil((new Date(config.end_day).getTime() - Date.now()) / 86400000);
-      return [
-        {
-          id: config.id,
-          goodsId: config.goods_id,
-          goodsCode: refs.goods.find((goods) => goods.goods_id === config.goods_id)?.query_code,
-          goodsName: refs.goods.find((goods) => goods.goods_id === config.goods_id)?.goods_name,
-          skuId: config.sku_id,
-          skuSpec: refs.skus.find((sku) => sku.sku_id === config.sku_id)?.spec_models,
-          warehouseId: config.warehouse_id,
-          warehouseName: refs.warehouses.find(
-            (warehouse) => warehouse.warehouse_id === config.warehouse_id,
-          )?.name,
-          batchNo: config.batch_no,
-          endDay: config.end_day,
-          remainingDays,
-          inventoryQty: stock.inventory_qty,
-          alertQty: stock.inventory_qty,
-          alertType: config.alter_type,
-          alertTypeName: types.get(String(config.alter_type)),
-          alertDays: config.alter_day,
-          alertValue: stock.inventory_amount,
-          expiryStatus:
-            remainingDays < 0
-              ? '已过期'
-              : remainingDays <= Number(config.alter_day ?? 0)
-                ? '临期'
-                : '正常',
-        },
-      ];
-    });
-    const warehouseCounts = Object.fromEntries(
-      [...new Set(allItems.map((item) => String(item.warehouseId)))].map((warehouseId) => [
-        warehouseId,
-        allItems.filter((item) => String(item.warehouseId) === warehouseId).length,
-      ]),
+    const join = Prisma.sql`hspsi_inventory_alert_period p
+      JOIN hspsi_inventory_batch_total b
+        ON b.goods_id = p.goods_id
+       AND b.sku_id = p.sku_id
+       AND b.warehouse_id = p.warehouse_id
+       AND b.batch_no = p.batch_no`;
+
+    const stats = await this.prisma.$queryRaw<ExpiryAlertStatRow[]>(
+      Prisma.sql`
+        SELECT p.warehouse_id AS warehouse_id, COUNT(*) AS item_count
+        FROM ${join}
+        WHERE ${scope(false)}
+        GROUP BY p.warehouse_id
+      `,
     );
-    const items = query.warehouseId
-      ? allItems.filter((item) => String(item.warehouseId) === String(query.warehouseId))
-      : allItems;
-    return { items, total: items.length, warehouseCounts };
+    const statByWarehouse = new Map(stats.map((row) => [String(row.warehouse_id), row]));
+    const warehouseCounts = Object.fromEntries(
+      stats.map((row) => [String(row.warehouse_id), Number(row.item_count)]),
+    );
+    const total = warehouseFilter
+      ? Number(statByWarehouse.get(warehouseFilter)?.item_count ?? 0)
+      : stats.reduce((sum, row) => sum + Number(row.item_count), 0);
+
+    const rows = await this.prisma.$queryRaw<ExpiryAlertRow[]>(
+      Prisma.sql`
+        SELECT p.id AS period_id,
+               p.warehouse_id AS warehouse_id,
+               p.goods_id AS goods_id,
+               p.sku_id AS sku_id,
+               p.batch_no AS batch_no,
+               p.alter_type AS alter_type,
+               p.alter_day AS alter_day,
+               b.inventory_qty AS inventory_qty,
+               b.inventory_amount AS inventory_amount
+        FROM ${join}
+        WHERE ${scope(true)}
+        ORDER BY p.end_day ASC, p.id ASC
+        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
+      `,
+    );
+    const [types, refs, endDays] = await Promise.all([
+      this.dictionary('expiry_alert_type'),
+      this.names(
+        rows.map((row) => ({
+          goodsId: BigInt(String(row.goods_id)),
+          skuId: BigInt(String(row.sku_id)),
+          warehouseId: BigInt(String(row.warehouse_id)),
+        })),
+      ),
+      // 仅当前页取日期：end_day 为 DATE 列，经模型读取保持与旧实现一致的 Date 语义，
+      // 避免 raw 结果对剩余天数/效期状态的时区漂移。
+      rows.length
+        ? this.prisma.hspsi_inventory_alert_period.findMany({
+            where: { id: { in: rows.map((row) => BigInt(String(row.period_id))) } },
+            select: { id: true, end_day: true },
+          })
+        : [],
+    ]);
+    const endDayById = new Map(endDays.map((item) => [String(item.id), item.end_day]));
+    const items = rows.map((row) => {
+      const goods = refs.goods.find((g) => g.goods_id === BigInt(String(row.goods_id)));
+      const sku = refs.skus.find((k) => k.sku_id === BigInt(String(row.sku_id)));
+      const warehouse = refs.warehouses.find(
+        (w) => w.warehouse_id === BigInt(String(row.warehouse_id)),
+      );
+      const endDay = endDayById.get(String(row.period_id));
+      const remainingDays = endDay
+        ? Math.ceil((new Date(endDay).getTime() - Date.now()) / 86400000)
+        : 0;
+      return {
+        id: BigInt(String(row.period_id)),
+        goodsId: BigInt(String(row.goods_id)),
+        goodsCode: goods?.query_code,
+        goodsName: goods?.goods_name,
+        skuId: BigInt(String(row.sku_id)),
+        skuSpec: sku?.spec_models,
+        warehouseId: BigInt(String(row.warehouse_id)),
+        warehouseName: warehouse?.name,
+        batchNo: String(row.batch_no ?? ''),
+        endDay,
+        remainingDays,
+        inventoryQty: Number(row.inventory_qty),
+        alertQty: Number(row.inventory_qty),
+        alertType: Number(row.alter_type),
+        alertTypeName: types.get(String(row.alter_type)),
+        alertDays: row.alter_day == null ? null : Number(row.alter_day),
+        alertValue: Number(row.inventory_amount),
+        expiryStatus:
+          remainingDays < 0
+            ? '已过期'
+            : remainingDays <= Number(row.alter_day ?? 0)
+              ? '临期'
+              : '正常',
+      };
+    });
+    return { items, total, page, pageSize, warehouseCounts };
+  }
+
+  /** quantityAlerts 公共 WHERE 片段（不含 WHERE 关键字），供页查询与统计查询复用 */
+  private quantityAlertConditions(
+    enabledWarehouseIds: bigint[],
+    orgId: string | undefined,
+    keywordIds: { goodsIds: bigint[]; skuIds: bigint[] } | null,
+    status: string,
+    warehouseId: string | undefined,
+  ) {
+    const parts: Prisma.Sql[] = [Prisma.sql`s.deleted_at IS NULL`];
+    if (enabledWarehouseIds.length)
+      parts.push(Prisma.sql`s.warehouse_id IN (${Prisma.join(enabledWarehouseIds)})`);
+    else parts.push(Prisma.sql`1 = 0`);
+    if (orgId) parts.push(Prisma.sql`s.org_id = ${BigInt(orgId)}`);
+    if (keywordIds) {
+      const matched = this.keywordIdConditions(keywordIds, 's');
+      parts.push(matched ?? Prisma.sql`1 = 0`);
+    }
+    if (status === '1') parts.push(Prisma.sql`s.inventory_qty < COALESCE(c.safe_qty, 0)`);
+    if (status === '0') parts.push(Prisma.sql`NOT (s.inventory_qty < COALESCE(c.safe_qty, 0))`);
+    if (warehouseId) parts.push(Prisma.sql`s.warehouse_id = ${BigInt(warehouseId)}`);
+    return Prisma.join(parts, ' AND ');
+  }
+
+  /** expiryAlerts 公共 WHERE 片段（不含 WHERE 关键字），供页查询与统计查询复用 */
+  private expiryAlertConditions(
+    enabledWarehouseIds: bigint[],
+    keywordIds: { goodsIds: bigint[]; skuIds: bigint[] } | null,
+    warehouseId: string | undefined,
+  ) {
+    const parts: Prisma.Sql[] = [Prisma.sql`p.end_day IS NOT NULL`];
+    if (enabledWarehouseIds.length)
+      parts.push(Prisma.sql`p.warehouse_id IN (${Prisma.join(enabledWarehouseIds)})`);
+    else parts.push(Prisma.sql`1 = 0`);
+    if (keywordIds) {
+      const matched = this.keywordIdConditions(keywordIds, 'p');
+      parts.push(matched ?? Prisma.sql`1 = 0`);
+    }
+    parts.push(Prisma.sql`b.inventory_qty > 0`);
+    if (warehouseId) parts.push(Prisma.sql`p.warehouse_id = ${BigInt(warehouseId)}`);
+    return Prisma.join(parts, ' AND ');
+  }
+
+  /** 关键字命中的商品/SKU id 集合 OR 片段；未命中（两表都为空）返回 null 表示无条件匹配 */
+  private keywordIdConditions(
+    keywordIds: { goodsIds: bigint[]; skuIds: bigint[] },
+    alias: 's' | 'p',
+  ) {
+    const ors: Prisma.Sql[] = [];
+    if (keywordIds.goodsIds.length)
+      ors.push(Prisma.sql`${Prisma.raw(alias)}.goods_id IN (${Prisma.join(keywordIds.goodsIds)})`);
+    if (keywordIds.skuIds.length)
+      ors.push(Prisma.sql`${Prisma.raw(alias)}.sku_id IN (${Prisma.join(keywordIds.skuIds)})`);
+    if (!ors.length) return null;
+    return ors.length === 1 ? ors[0] : Prisma.sql`(${Prisma.join(ors, ' OR ')})`;
   }
 }

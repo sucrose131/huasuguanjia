@@ -37,7 +37,6 @@ export const inventoryExpiryAlertConfig: BusinessDocumentConfig = {
     },
   ],
   creatable: false,
-  pagination: false,
   formComponent: InventoryExpiryAlertForm,
   viewCloseInForm: true,
   rowActions: [],
