@@ -77,12 +77,14 @@ const status = (row: Row) =>
   );
 const num = (value: any) =>
   value === '' || value === null || value === undefined ? null : Number(value);
-const money = (value: any) =>
-  !auth.amountAccess.canViewAmount
-    ? '****'
-    : value === '' || value === null || value === undefined
-    ? ''
-    : `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`;
+const money = (value: any) => {
+  // 金额无查看权：统一掩码（保留旧版纯 **** 展示）
+  if (!auth.amountAccess.canViewAmount) return '****';
+  // 后端对 own 范围脱敏后金额为 null：显示掩码，避免被兜成 ¥0 误导为真实金额为 0
+  if (value === '' || value === null || value === undefined)
+    return (auth.amountAccess.amountScope ?? 'all') === 'own' ? '¥ ****' : '';
+  return `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`;
+};
 const c = (key: string, label: string, min = 110, kind: Kind = 'text'): Column => ({
   key,
   label,
@@ -680,14 +682,21 @@ const visibleRows = computed(() =>
       }),
 );
 const displayedRows = computed(() => visibleRows.value.slice(0, 200));
-const amountTotal = computed(() =>
-  current.value.amountKey
-    ? visibleRows.value.reduce((sum, row) => {
-        const value = num(row[current.value.amountKey!]);
-        return sum + (value == null || !Number.isFinite(value) ? 0 : value);
-      }, 0)
-    : null,
-);
+/** 合计是否包含服务端脱敏金额（null）：存在则合计不展示数字，避免「只算可见部分」误导 */
+const amountMasked = computed(() => {
+  if (!current.value.amountKey) return false;
+  const restricted =
+    !auth.amountAccess.canViewAmount || (auth.amountAccess.amountScope ?? 'all') === 'own';
+  if (!restricted) return false;
+  return visibleRows.value.some((row) => num(row[current.value.amountKey!]) == null);
+});
+const amountTotal = computed(() => {
+  if (!current.value.amountKey || amountMasked.value) return null;
+  return visibleRows.value.reduce((sum, row) => {
+    const value = num(row[current.value.amountKey!]);
+    return sum + (value == null || !Number.isFinite(value) ? 0 : value);
+  }, 0);
+});
 
 function initializeDates() {
   const now = new Date();
@@ -709,7 +718,9 @@ async function load() {
 }
 function cell(row: Row, column: Column) {
   const value = row[column.key];
-  if (value === null || value === undefined || value === '') return '';
+  // money 列遇 null（服务端对 own 范围脱敏）交给 money 统一呈现掩码，避免空/0 误导
+  if (value === null || value === undefined || value === '')
+    return column.kind === 'money' ? money(null) : '';
   return column.kind === 'money' ? money(value) : String(value);
 }
 function exportReport() {
@@ -792,6 +803,10 @@ onMounted(() => {
         <article v-if="amountTotal !== null">
           <span>金额合计</span><strong>{{ money(amountTotal) }}</strong
           ><small>按当前报表业务金额口径</small>
+        </article>
+        <article v-else-if="amountMasked && current.amountKey">
+          <span>金额合计</span><strong>¥ ****</strong
+          ><small>报表含无权查看金额，合计不展示</small>
         </article>
         <article>
           <span>数据来源</span><strong>业务接口</strong><small>{{ current.source }}</small>
