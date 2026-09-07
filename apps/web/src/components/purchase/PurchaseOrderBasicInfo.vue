@@ -58,7 +58,7 @@ const isView = computed(() => props.mode === 'view');
         <el-select
           v-model="form.warehouseId"
           filterable
-          :disabled="isView || Boolean(form.applicationId) || !form.orgId"
+          :disabled="isView || !form.orgId"
           @change="emit('warehouse-change')"
         >
           <el-option
@@ -79,7 +79,7 @@ const isView = computed(() => props.mode === 'view');
         <el-select
           v-model="form.deptId"
           filterable
-          :disabled="isView || Boolean(form.applicationId) || !form.orgId"
+          :disabled="isView || !form.orgId"
           @change="emit('department-change')"
         >
           <el-option

@@ -4,6 +4,14 @@ import { useRoute } from 'vue-router';
 import { Download, Refresh, Warning } from '@element-plus/icons-vue';
 import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
+import {
+  REPORT_REQUEST_PARAMS,
+  protectReportRows,
+  reportAmountTotal,
+  reportExportCell,
+  reportMoney,
+  reportNumber,
+} from './reports/amount-policy';
 
 type Kind = 'text' | 'money' | 'number';
 type Column = { key: string; label: string; kind?: Kind; min?: number };
@@ -27,6 +35,8 @@ const rows = ref<Row[]>([]);
 const query = reactive({ startDate: '', endDate: '' });
 const cache = new Map<string, Row[]>();
 const dictionaryCache = new Map<string, Array<{ value: string | number; label: string }>>();
+let accessVersion = 0;
+let loadVersion = 0;
 
 async function dictionary(code: string) {
   if (!dictionaryCache.has(code))
@@ -75,16 +85,8 @@ const status = (row: Row) =>
     'approveStatus',
     'confirmStatus',
   );
-const num = (value: any) =>
-  value === '' || value === null || value === undefined ? null : Number(value);
-const money = (value: any) => {
-  // 金额无查看权：统一掩码（保留旧版纯 **** 展示）
-  if (!auth.amountAccess.canViewAmount) return '****';
-  // 后端对 own 范围脱敏后金额为 null：显示掩码，避免被兜成 ¥0 误导为真实金额为 0
-  if (value === '' || value === null || value === undefined)
-    return (auth.amountAccess.amountScope ?? 'all') === 'own' ? '¥ ****' : '';
-  return `¥${Math.round(Number(value) || 0).toLocaleString('zh-CN')}`;
-};
+const num = reportNumber;
+const money = (value: unknown) => reportMoney(value, auth.amountAccess);
 const c = (key: string, label: string, min = 110, kind: Kind = 'text'): Column => ({
   key,
   label,
@@ -97,12 +99,15 @@ const inPeriod = (row: Row) => {
 };
 
 async function fetchAll(url: string, params: Row = {}) {
+  const version = accessVersion;
   if (cache.has(`${url}:${JSON.stringify(params)}`))
     return cache.get(`${url}:${JSON.stringify(params)}`)!;
   let page = 1;
   let result: Row[] = [];
   while (page <= 100) {
-    const response = (await api.get(url, { params: { ...params, page, pageSize: 100 } })) as any;
+    const response = (await api.get(url, {
+      params: { ...params, page, pageSize: 100, ...REPORT_REQUEST_PARAMS },
+    })) as any;
     if (Array.isArray(response)) {
       result = response;
       break;
@@ -113,6 +118,7 @@ async function fetchAll(url: string, params: Row = {}) {
     if (!items.length || result.length >= total) break;
     page += 1;
   }
+  if (version !== accessVersion) throw new Error('报表权限已变化，请重新加载');
   cache.set(`${url}:${JSON.stringify(params)}`, result);
   return result;
 }
@@ -145,8 +151,10 @@ function group(values: Row[], keyOf: (row: Row) => string, amountOf?: (row: Row)
     const current = groups.get(name) ?? { group: name, count: 0, amount: amountOf ? 0 : '' };
     current.count += 1;
     const amount = amountOf?.(item);
-    if (amount !== null && amount !== undefined && Number.isFinite(amount))
-      current.amount = Number(current.amount || 0) + amount;
+    if (amountOf) {
+      if (amount == null || !Number.isFinite(amount)) current.amount = null;
+      else if (current.amount !== null) current.amount += amount;
+    }
     groups.set(name, current);
   });
   return [...groups.values()];
@@ -556,7 +564,9 @@ const reports: Record<string, Report> = {
         };
         item.skuCount += 1;
         item.quantity += Number(first(row, 'inventoryQty', 'stock', 'quantity') || 0);
-        item.inventoryAmount += Number(first(row, 'inventoryAmount', 'inventoryValue') || 0);
+        const amount = num(first(row, 'inventoryAmount', 'inventoryValue'));
+        if (amount === null) item.inventoryAmount = null;
+        else if (item.inventoryAmount !== null) item.inventoryAmount += amount;
         groups.set(name, item);
       });
       return [...groups.values()];
@@ -658,13 +668,16 @@ const reports: Record<string, Report> = {
     load: async () =>
       (await loadPurchaseOrders()).map((row) => {
         const orderAmount = num(first(row, 'totalAmount', 'payableAmount', 'amount'));
-        const paidAmount = num(first(row, 'paidAmount', 'payAmountDone')) ?? 0;
+        const paidAmount = num(first(row, 'paidAmount', 'payAmountDone'));
         return {
           no: first(row, 'orderNo', 'id'),
           vendor: first(row, 'vendorName', 'counterparty'),
           orderAmount,
           paidAmount,
-          balance: orderAmount == null ? null : Math.max(orderAmount - paidAmount, 0),
+          balance:
+            orderAmount == null || paidAmount == null
+              ? null
+              : Math.max(orderAmount - paidAmount, 0),
           status: status(row),
           date: date(row),
         };
@@ -681,22 +694,14 @@ const visibleRows = computed(() =>
         return value && value >= query.startDate && value <= query.endDate;
       }),
 );
-const displayedRows = computed(() => visibleRows.value.slice(0, 200));
-/** 合计是否包含服务端脱敏金额（null）：存在则合计不展示数字，避免「只算可见部分」误导 */
-const amountMasked = computed(() => {
-  if (!current.value.amountKey) return false;
-  const restricted =
-    !auth.amountAccess.canViewAmount || (auth.amountAccess.amountScope ?? 'all') === 'own';
-  if (!restricted) return false;
-  return visibleRows.value.some((row) => num(row[current.value.amountKey!]) == null);
-});
-const amountTotal = computed(() => {
-  if (!current.value.amountKey || amountMasked.value) return null;
-  return visibleRows.value.reduce((sum, row) => {
-    const value = num(row[current.value.amountKey!]);
-    return sum + (value == null || !Number.isFinite(value) ? 0 : value);
-  }, 0);
-});
+const safeRows = computed(() =>
+  protectReportRows(visibleRows.value, current.value.columns, auth.amountAccess),
+);
+const displayedRows = computed(() => safeRows.value.slice(0, 200));
+const amountTotal = computed(() =>
+  reportAmountTotal(safeRows.value, current.value.amountKey, auth.amountAccess),
+);
+const amountMasked = computed(() => !!current.value.amountKey && amountTotal.value === null);
 
 function initializeDates() {
   const now = new Date();
@@ -705,15 +710,19 @@ function initializeDates() {
   query.endDate = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
 }
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
   error.value = '';
   try {
-    rows.value = await current.value.load();
+    const result = await current.value.load();
+    if (version === loadVersion)
+      rows.value = protectReportRows(result, current.value.columns, auth.amountAccess);
   } catch (caught: any) {
+    if (version !== loadVersion) return;
     error.value = caught?.response?.data?.message ?? '报表加载失败';
     rows.value = [];
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 function cell(row: Row, column: Column) {
@@ -727,11 +736,9 @@ function exportReport() {
   const escape = (value: any) => `"${String(value ?? '').replaceAll('"', '""')}"`;
   const lines = [
     current.value.columns.map((column) => escape(column.label)).join(','),
-    ...visibleRows.value.map((row) =>
+    ...safeRows.value.map((row) =>
       current.value.columns
-        .map((column) =>
-          escape(column.kind === 'money' ? (num(row[column.key]) ?? '') : row[column.key]),
-        )
+        .map((column) => escape(reportExportCell(row, column, auth.amountAccess)))
         .join(','),
     ),
   ];
@@ -743,6 +750,21 @@ function exportReport() {
   link.click();
   URL.revokeObjectURL(url);
 }
+watch(
+  () => [
+    auth.user?.id,
+    auth.token,
+    auth.amountAccess.canViewAmount,
+    auth.amountAccess.amountScope,
+    JSON.stringify(auth.user?.authorizedOrganizations),
+  ],
+  () => {
+    accessVersion += 1;
+    cache.clear();
+    rows.value = [];
+    if (query.startDate && query.endDate) load();
+  },
+);
 watch(
   () => [query.startDate, query.endDate],
   () => {
@@ -806,7 +828,7 @@ onMounted(() => {
         </article>
         <article v-else-if="amountMasked && current.amountKey">
           <span>金额合计</span><strong>¥ ****</strong
-          ><small>报表含无权查看金额，合计不展示</small>
+          ><small>金额需具备查看能力且范围为权限内全部；数据金额缺失时也不显示合计</small>
         </article>
         <article>
           <span>数据来源</span><strong>业务接口</strong><small>{{ current.source }}</small>

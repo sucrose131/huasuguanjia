@@ -2684,6 +2684,18 @@ export class PurchaseService {
     const details = await this.prisma.hspsi_purchase_order_detail.findMany({
       where: { po_id: header.po_id },
     });
+    const sourceApplicationDetailIds = details.flatMap((line) =>
+      line.source_application_detail_id ? [line.source_application_detail_id] : [],
+    );
+    const sourceApplicationDetails = sourceApplicationDetailIds.length
+      ? await this.prisma.hspsi_purchase_approve_detail.findMany({
+          where: { id: { in: sourceApplicationDetailIds } },
+          select: { id: true, qty: true },
+        })
+      : [];
+    const applicationQuantityByDetail = new Map(
+      sourceApplicationDetails.map((line) => [String(line.id), Number(line.qty)]),
+    );
     const [goods, receiptHeads, sourceApplication] = await Promise.all([
       details.length
         ? this.prisma.hspsi_goods_info.findMany({
@@ -2755,6 +2767,9 @@ export class PurchaseService {
       return {
         id: line.id,
         sourceApplicationDetailId: line.source_application_detail_id,
+        applicationQuantity: line.source_application_detail_id
+          ? (applicationQuantityByDetail.get(String(line.source_application_detail_id)) ?? null)
+          : null,
         goodsId: line.goods_id,
         goodsCode: product?.query_code ?? '',
         goodsName: product?.goods_name ?? '',
@@ -2827,7 +2842,7 @@ export class PurchaseService {
       details: enrichedDetails,
     };
   }
-  async saveOrder(id: string | null, body: Body, userId: string) {
+  async saveOrder(id: string | null, body: Body, userId: string, canEditAmount = true) {
     const lines = this.details(body.details);
     let poId = id ? BigInt(id) : 0n;
     const existingOrder = id ? await this.order(id) : null;
@@ -2847,23 +2862,47 @@ export class PurchaseService {
       sourceApplication = await this.application(String(effectiveApplicationId));
       if (Number(sourceApplication.approveStatus) !== 1)
         throw new BadRequestException('仅审批通过的采购申请可生成订单');
-      const used = await this.prisma.hspsi_purchase_order.count({
-        where: {
-          pur_id: effectiveApplicationId,
-          deleted_at: null,
-          NOT: id ? { po_id: poId } : undefined,
-        },
-      });
-      if (used) throw new BadRequestException('采购申请已生成订单');
+      if (!id) {
+        const used = await this.prisma.hspsi_purchase_order.count({
+          where: { pur_id: effectiveApplicationId, deleted_at: null },
+        });
+        if (used) throw new BadRequestException('采购申请已生成订单');
+      }
     }
     const authoritativeApplication =
       sourceApplication?.sourceType === 'direct_order' ? null : sourceApplication;
-    if (authoritativeApplication)
-      throw new BadRequestException(
-        id
-          ? '采购申请生成的订单不允许直接修改，请删除后重新生成'
-          : '请从采购申请列表使用整单生成或选品生成',
-      );
+    if (authoritativeApplication && !id)
+      throw new BadRequestException('请从采购申请列表使用整单生成或选品生成');
+    const applicationGenerated = Boolean(authoritativeApplication && id);
+    const existingLines = Array.isArray(existingOrder?.details) ? existingOrder.details : [];
+    const existingLineById = new Map(existingLines.map((line: Body) => [String(line.id), line]));
+    if (id && !canEditAmount) {
+      if (lines.length !== existingLines.length)
+        throw new BadRequestException('当前账号没有金额编辑权限，不能增加或删除采购明细');
+      for (const line of lines) {
+        const existingLine = existingLineById.get(String(line.id ?? ''));
+        if (!existingLine)
+          throw new BadRequestException('当前账号没有金额编辑权限，不能替换采购明细');
+        line.totalAmount = existingLine.totalAmount;
+      }
+    }
+    if (applicationGenerated) {
+      if (lines.length !== existingLines.length)
+        throw new BadRequestException('采购申请生成的订单不允许增加或删除商品明细');
+      for (const line of lines) {
+        const existingLine = existingLineById.get(String(line.id ?? ''));
+        if (!existingLine) throw new BadRequestException('采购申请生成的订单明细不允许替换');
+        if (
+          String(line.goodsId) !== String(existingLine.goodsId) ||
+          String(line.skuId) !== String(existingLine.skuId)
+        )
+          throw new BadRequestException('采购申请生成的订单不允许修改商品或SKU');
+        line.sourceApplicationDetailId = existingLine.sourceApplicationDetailId;
+        if (!canEditAmount) line.totalAmount = existingLine.totalAmount;
+      }
+      if (String(body.orgId) !== String(existingOrder?.org_id))
+        throw new BadRequestException('采购申请生成的订单不允许修改成本承担组织');
+    }
     const effectiveLines = lines;
     const pricedLines: Body[] = effectiveLines.map((line) => {
       const quantity = this.quantity(line.quantity, '采购数量');
@@ -2915,11 +2954,14 @@ export class PurchaseService {
         await tx.$queryRaw`SELECT po_id FROM hspsi_purchase_order WHERE po_id=${poId} FOR UPDATE`;
         const locked = await tx.hspsi_purchase_order.findFirst({
           where: { po_id: poId, deleted_at: null },
-          select: { pur_id: true },
+          select: { pur_id: true, status: true, org_id: true },
         });
         if (!locked) throw new NotFoundException('采购订单不存在');
+        if (locked.status !== 1) throw new BadRequestException('仅待采购订单可以编辑');
         if (locked.pur_id !== effectiveApplicationId)
           throw new BadRequestException('采购订单来源已变化，请刷新后重试');
+        if (applicationGenerated && locked.org_id !== data.org_id)
+          throw new BadRequestException('采购申请生成的订单不允许修改成本承担组织');
       }
       if (effectiveApplicationId > 0n) {
         await tx.$queryRaw`SELECT pur_id FROM hspsi_purchase_approve WHERE pur_id=${effectiveApplicationId} FOR UPDATE`;
@@ -2929,18 +2971,20 @@ export class PurchaseService {
         });
         if (!lockedApplication || lockedApplication.approve_status !== 1)
           throw new BadRequestException('来源采购申请已删除或不再是审批通过状态');
-        const used = await tx.hspsi_purchase_order.count({
-          where: {
-            pur_id: effectiveApplicationId,
-            deleted_at: null,
-            NOT: id ? { po_id: poId } : undefined,
-          },
-        });
-        if (used) throw new BadRequestException('采购申请已生成订单');
+        if (!id) {
+          const used = await tx.hspsi_purchase_order.count({
+            where: { pur_id: effectiveApplicationId, deleted_at: null },
+          });
+          if (used) throw new BadRequestException('采购申请已生成订单');
+        }
       }
       if (id) {
-        if (await tx.hspsi_purchase_order_input.count({ where: { po_id: poId, deleted_at: null } }))
-          throw new BadRequestException('订单已有入库，不能编辑关键内容');
+        const [inputCount, paymentCount] = await Promise.all([
+          tx.hspsi_purchase_order_input.count({ where: { po_id: poId, deleted_at: null } }),
+          tx.hspsi_purchase_order_payment.count({ where: { po_id: poId, deleted_at: null } }),
+        ]);
+        if (inputCount || paymentCount)
+          throw new BadRequestException('订单已有入库或付款，不能编辑关键内容');
         await tx.hspsi_purchase_order.update({ where: { po_id: poId }, data });
       } else {
         orderNo = await this.businessNumber.generate(BUSINESS_PREFIX.PURCHASE_ORDER);
@@ -2965,6 +3009,9 @@ export class PurchaseService {
       await tx.hspsi_purchase_order_detail.createMany({
         data: pricedLines.map((line) => ({
           po_id: poId,
+          source_application_detail_id: line.sourceApplicationDetailId
+            ? BigInt(String(line.sourceApplicationDetailId))
+            : null,
           goods_id: BigInt(String(line.goodsId)),
           sku_id: BigInt(String(line.skuId)),
           qty: Number(line.quantity),
@@ -3018,6 +3065,17 @@ export class PurchaseService {
             createdBy: userId,
           },
           tx,
+        );
+      if (id)
+        await this.logOrderTransition(
+          tx,
+          poId,
+          'edit',
+          '编辑待采购订单',
+          userId,
+          applicationGenerated
+            ? '更新采购执行信息，来源申请及商品明细保持不变'
+            : '更新直接采购订单草稿',
         );
       return {
         id: poId,
@@ -3162,14 +3220,18 @@ export class PurchaseService {
         },
       });
       if (!order) throw new NotFoundException('采购订单不存在');
-      const [inputs, payments, shortageLines] = await Promise.all([
+      if (order.status !== 1) throw new BadRequestException('仅待采购订单可以删除');
+      const [inputs, payments, returns, refunds, shortageLines] = await Promise.all([
         tx.hspsi_purchase_order_input.count({ where: { po_id: poId, deleted_at: null } }),
         tx.hspsi_purchase_order_payment.count({ where: { po_id: poId, deleted_at: null } }),
+        tx.hspsi_purchase_order_input_exit.count({ where: { po_id: poId, deleted_at: null } }),
+        tx.hspsi_purchase_refund.count({ where: { po_id: poId, deleted_at: null } }),
         tx.hspsi_purchase_approve_detail.count({
           where: { pur_id: order.pur_id, source_shortage_id: { gt: 0n } },
         }),
       ]);
-      if (inputs || payments) throw new BadRequestException('订单已有入库或付款，不能删除');
+      if (inputs || payments || returns || refunds)
+        throw new BadRequestException('订单已有付款、入库、退货或退款，不能删除');
       if (shortageLines)
         throw new BadRequestException('生产缺料采购订单不能直接删除，请从生产计划处理');
       const directApplication = await tx.hspsi_purchase_approve.findFirst({
@@ -3190,6 +3252,33 @@ export class PurchaseService {
         where: { po_id: poId, source_application_detail_id: { not: null } },
         data: { source_application_detail_id: null },
       });
+      if (!directApplication && order.pur_id > 0n) {
+        const application = await tx.hspsi_purchase_approve.findFirst({
+          where: { pur_id: order.pur_id, approve_status: 1, deleted_at: null },
+          select: { pur_id: true, pur_no: true, org_id: true },
+        });
+        if (application) {
+          const managerIds = await this.todoService.resolveRecipients(
+            'purchase:applications:generate-order',
+            Number(application.org_id),
+            tx,
+          );
+          for (const managerId of managerIds) {
+            await this.todoService.create(
+              {
+                userId: managerId,
+                organizationId: Number(application.org_id),
+                title: application.pur_no,
+                content: '原采购订单已删除，请重新生成采购订单',
+                businessType: 'purchase_application',
+                businessId: Number(application.pur_id),
+                actorUserId: userId,
+              },
+              tx,
+            );
+          }
+        }
+      }
       if (directApplication) {
         await tx.hspsi_purchase_approve.update({
           where: { pur_id: directApplication.pur_id },
@@ -3202,6 +3291,14 @@ export class PurchaseService {
         );
       }
       await this.documentTrace.removeForDocument('purchase_order', poId, tx);
+      await this.logOrderTransition(
+        tx,
+        poId,
+        'delete',
+        '删除待采购订单',
+        userId,
+        '释放来源采购申请明细，可重新生成采购订单',
+      );
     });
     return { id, message: '删除成功' };
   }

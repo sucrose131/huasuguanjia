@@ -133,6 +133,14 @@ describe('remaining P0 frontend actions', () => {
     expect(payment?.show?.({ orderStatus: 2, vendorId: 3, remainingPayable: 100 })).toBe(true);
   });
 
+  it('allows both direct and application-generated orders to enter edit only before purchase starts', () => {
+    const edit = purchaseOrderConfig.rowActions?.find((item) => item.key === 'edit');
+
+    expect(edit?.show?.({ orderStatus: 1, applicationId: null })).toBe(true);
+    expect(edit?.show?.({ orderStatus: 1, applicationId: 7 })).toBe(true);
+    expect(edit?.show?.({ orderStatus: 2, applicationId: 7 })).toBe(false);
+  });
+
   it('locks purchase application editing permanently after submission', () => {
     const edit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'edit');
     const submit = purchaseApplicationConfig.rowActions?.find((item) => item.key === 'submit');

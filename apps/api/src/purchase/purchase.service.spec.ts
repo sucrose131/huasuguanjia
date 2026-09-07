@@ -1000,11 +1000,13 @@ describe('PurchaseService production-shortage guards', () => {
     const tx = {
       $queryRaw: vi.fn(),
       hspsi_purchase_order: {
-        findFirst: vi.fn().mockResolvedValue({ pur_id: 7n }),
+        findFirst: vi.fn().mockResolvedValue({ pur_id: 7n, status: 1 }),
         update: vi.fn(),
       },
       hspsi_purchase_order_input: { count: vi.fn().mockResolvedValue(0) },
       hspsi_purchase_order_payment: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_input_exit: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_refund: { count: vi.fn().mockResolvedValue(0) },
       hspsi_purchase_approve_detail: { count: vi.fn().mockResolvedValue(1) },
     };
     const prisma = {
@@ -1015,6 +1017,94 @@ describe('PurchaseService production-shortage guards', () => {
       '生产缺料采购订单不能直接删除',
     );
     expect(tx.hspsi_purchase_order.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks deletion after a purchase order has started even without receipts or payments', async () => {
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({ pur_id: 7n, status: 2 }),
+        update: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await expect(serviceWith(prisma).removeOrder('20', '3')).rejects.toThrow(
+      '仅待采购订单可以删除',
+    );
+    expect(tx.hspsi_purchase_order.update).not.toHaveBeenCalled();
+  });
+
+  it('releases application detail mappings and restores the generation todo after deleting a draft order', async () => {
+    const orderUpdate = vi.fn();
+    const detailUpdate = vi.fn();
+    const operationCreate = vi.fn();
+    const trace = { link: vi.fn(), removeForDocument: vi.fn() };
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({
+          po_id: 20n,
+          po_no: 'PO20',
+          pur_id: 7n,
+          org_id: 1n,
+          receiver_id: 9n,
+          status: 1,
+          created_by: 3n,
+        }),
+        update: orderUpdate,
+      },
+      hspsi_purchase_order_input: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_payment: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_input_exit: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_refund: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_approve_detail: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_detail: { updateMany: detailUpdate },
+      hspsi_purchase_approve: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ pur_id: 7n, pur_no: 'PA7', org_id: 1n }),
+      },
+      hspsi_sys_oper_log: { create: operationCreate },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma, trace);
+    const todoService = service.__todoService;
+    (todoService.resolveRecipients as ReturnType<typeof vi.fn>).mockResolvedValue([11, 12]);
+
+    await expect(service.removeOrder('20', '3')).resolves.toMatchObject({ message: '删除成功' });
+
+    expect(orderUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { po_id: 20n },
+        data: expect.objectContaining({ deleted_at: expect.any(Date) }),
+      }),
+    );
+    expect(detailUpdate).toHaveBeenCalledWith({
+      where: { po_id: 20n, source_application_detail_id: { not: null } },
+      data: { source_application_detail_id: null },
+    });
+    expect(todoService.create).toHaveBeenCalledTimes(2);
+    expect(todoService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'PA7',
+        content: '原采购订单已删除，请重新生成采购订单',
+        businessType: 'purchase_application',
+        businessId: 7,
+      }),
+      tx,
+    );
+    expect(operationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ response_data: '删除待采购订单' }),
+      }),
+    );
+    expect(trace.removeForDocument).toHaveBeenCalledWith('purchase_order', 20n, tx);
   });
 
   it('does not let an order-level return consume quantities already locked by a pending receipt', async () => {
@@ -1568,9 +1658,244 @@ describe('PurchaseService production-shortage guards', () => {
     });
 
     // 未传 quantity 时仍沿用申请数量（既有行为兼容）
-    expect(
-      (service as any).generateApplicationOrder,
-    ).toBeDefined();
+    expect((service as any).generateApplicationOrder).toBeDefined();
+  });
+
+  it('edits execution fields of an application-generated draft while preserving approved goods mapping', async () => {
+    const orderUpdate = vi.fn();
+    const detailCreate = vi.fn();
+    const operationCreate = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({ pur_id: 7n, status: 1, org_id: 1n }),
+        update: orderUpdate,
+      },
+      hspsi_purchase_approve: {
+        findFirst: vi.fn().mockResolvedValue({ approve_status: 1 }),
+      },
+      hspsi_purchase_order_input: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_payment: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_detail: { deleteMany: vi.fn(), createMany: detailCreate },
+      hspsi_sys_oper_log: { create: operationCreate },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = serviceWith(prisma);
+    vi.spyOn(service, 'order').mockResolvedValue({
+      id: 20n,
+      orderNo: 'PO20',
+      status: 1,
+      org_id: 1n,
+      applicationId: 7n,
+      details: [
+        {
+          id: 21n,
+          sourceApplicationDetailId: 12n,
+          goodsId: 10n,
+          skuId: 11n,
+          quantity: 4,
+          totalAmount: 100,
+          unitType: 1,
+        },
+      ],
+    } as any);
+    vi.spyOn(service, 'application').mockResolvedValue({
+      id: 7n,
+      applicationNo: 'PA7',
+      approveStatus: 1,
+      sourceType: 'manual',
+    } as any);
+    vi.spyOn(service as any, 'materializeQuickCatalog').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertDictionaryValue').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertProductionShortageOrderCapacity').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'purchaseMoneyPosition').mockResolvedValue({
+      effectivePayable: new Prisma.Decimal(180),
+      netPaid: new Prisma.Decimal(0),
+    });
+    vi.spyOn(service as any, 'recalcPayment').mockResolvedValue(undefined);
+
+    await service.saveOrder(
+      '20',
+      {
+        applicationId: '7',
+        orgId: '1',
+        warehouseId: '4',
+        deptId: '5',
+        receiverId: '9',
+        vendorId: '6',
+        arrivalType: 2,
+        planArrivalDate: '2026-09-20',
+        deliveryType: 1,
+        paymentType: 1,
+        details: [
+          {
+            id: '21',
+            sourceApplicationDetailId: '12',
+            goodsId: '10',
+            skuId: '11',
+            quantity: 6,
+            totalAmount: 180,
+            unitType: 1,
+          },
+        ],
+      },
+      '3',
+    );
+
+    expect(orderUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ warehouse_id: 4n, dept_id: 5n, receiver_id: 9n }),
+      }),
+    );
+    expect(detailCreate).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          source_application_detail_id: 12n,
+          goods_id: 10n,
+          sku_id: 11n,
+          qty: 6,
+          total_amout: new Prisma.Decimal(180),
+        }),
+      ],
+    });
+    expect(operationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ response_data: '编辑待采购订单' }),
+      }),
+    );
+  });
+
+  it('rejects changes to the approved goods or cost organization of an application-generated order', async () => {
+    const service = serviceWith({});
+    vi.spyOn(service, 'order').mockResolvedValue({
+      id: 20n,
+      orderNo: 'PO20',
+      status: 1,
+      org_id: 1n,
+      applicationId: 7n,
+      details: [
+        {
+          id: 21n,
+          sourceApplicationDetailId: 12n,
+          goodsId: 10n,
+          skuId: 11n,
+          quantity: 4,
+          totalAmount: 100,
+        },
+      ],
+    } as any);
+    vi.spyOn(service, 'application').mockResolvedValue({
+      id: 7n,
+      applicationNo: 'PA7',
+      approveStatus: 1,
+      sourceType: 'manual',
+    } as any);
+
+    await expect(
+      service.saveOrder(
+        '20',
+        {
+          applicationId: '7',
+          orgId: '2',
+          details: [{ id: '21', goodsId: '10', skuId: '11', quantity: 4, totalAmount: 100 }],
+        },
+        '3',
+      ),
+    ).rejects.toThrow('不允许修改成本承担组织');
+
+    await expect(
+      service.saveOrder(
+        '20',
+        {
+          applicationId: '7',
+          orgId: '1',
+          details: [{ id: '21', goodsId: '99', skuId: '11', quantity: 4, totalAmount: 100 }],
+        },
+        '3',
+      ),
+    ).rejects.toThrow('不允许修改商品或SKU');
+  });
+
+  it('preserves existing amounts when a user edits only non-amount execution fields', async () => {
+    const detailCreate = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn(),
+      hspsi_purchase_order: {
+        findFirst: vi.fn().mockResolvedValue({ pur_id: 7n, status: 1, org_id: 1n }),
+        update: vi.fn(),
+      },
+      hspsi_purchase_approve: { findFirst: vi.fn().mockResolvedValue({ approve_status: 1 }) },
+      hspsi_purchase_order_input: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_payment: { count: vi.fn().mockResolvedValue(0) },
+      hspsi_purchase_order_detail: { deleteMany: vi.fn(), createMany: detailCreate },
+      hspsi_sys_oper_log: { create: vi.fn() },
+    };
+    const service = serviceWith({
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    });
+    vi.spyOn(service, 'order').mockResolvedValue({
+      id: 20n,
+      orderNo: 'PO20',
+      status: 1,
+      org_id: 1n,
+      applicationId: 7n,
+      details: [
+        {
+          id: 21n,
+          sourceApplicationDetailId: 12n,
+          goodsId: 10n,
+          skuId: 11n,
+          quantity: 4,
+          totalAmount: 100,
+          unitType: 1,
+        },
+      ],
+    } as any);
+    vi.spyOn(service, 'application').mockResolvedValue({
+      id: 7n,
+      applicationNo: 'PA7',
+      approveStatus: 1,
+      sourceType: 'manual',
+    } as any);
+    vi.spyOn(service as any, 'materializeQuickCatalog').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertOrganizationScope').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertPurchaseWarehouse').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertDictionaryValue').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'assertProductionShortageOrderCapacity').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'purchaseMoneyPosition').mockResolvedValue({
+      effectivePayable: new Prisma.Decimal(100),
+      netPaid: new Prisma.Decimal(0),
+    });
+    vi.spyOn(service as any, 'recalcPayment').mockResolvedValue(undefined);
+
+    await service.saveOrder(
+      '20',
+      {
+        applicationId: '7',
+        orgId: '1',
+        warehouseId: '4',
+        deptId: '5',
+        receiverId: '9',
+        vendorId: '6',
+        arrivalType: 1,
+        planArrivalDate: '2026-09-20',
+        deliveryType: 1,
+        paymentType: 1,
+        details: [
+          { id: '21', goodsId: '10', skuId: '11', quantity: 4, totalAmount: null, unitType: 1 },
+        ],
+      },
+      '3',
+      false,
+    );
+
+    expect(detailCreate).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ total_amout: new Prisma.Decimal(100) })],
+    });
   });
 
   it('treats an empty plan payment date placeholder as no date when saving an order', async () => {
@@ -2576,4 +2901,3 @@ describe('PurchaseService OA CANCELED callback', () => {
     expect(update).not.toHaveBeenCalled();
   });
 });
-

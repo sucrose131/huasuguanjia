@@ -134,3 +134,9 @@ export const GLOBAL_AMOUNT_FIELDS: ReadonlySet<string> = new Set([
   'unpaid_amount',
   'unreceivedAmount',
 ]);
+
+/** 报表聚合所用的金额别名；不改变普通业务单据的归属判定。 */
+export const REPORT_AMOUNT_FIELDS: ReadonlySet<string> = new Set([
+  ...GLOBAL_AMOUNT_FIELDS,
+  'payAmountDone',
+]);

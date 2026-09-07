@@ -182,8 +182,14 @@ export class PurchaseController {
     @Body() b: Record<string, unknown>,
     @CurrentUser() u: AuthUser,
   ) {
-    await this.amountAccess.assertCanEditRecord(u.id, await this.service.purchaseOrderCreatedBy(id));
-    return this.service.saveOrder(id, b, u.id);
+    const [amountAccess, ownerId] = await Promise.all([
+      this.amountAccess.forUser(u.id),
+      this.service.purchaseOrderCreatedBy(id),
+    ]);
+    const canEditAmount =
+      amountAccess.canEditAmount &&
+      (amountAccess.amountScope === 'all' || String(ownerId) === String(u.id));
+    return this.service.saveOrder(id, b, u.id, canEditAmount);
   }
   @RequirePermissions('purchase')
   @Post('orders/:id/start')
