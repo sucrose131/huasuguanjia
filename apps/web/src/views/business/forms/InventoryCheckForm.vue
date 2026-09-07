@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '@/api';
-import { recordAmountMasked, useAuthStore } from '@/stores/auth';
+import { isStockSnapshotAmountHidden, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 import BusinessStatusTag from '@/components/business/BusinessStatusTag.vue';
@@ -16,8 +16,8 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
-/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 单价/差异金额显示 ¥ ****；新建/无归属不掩码 */
-const amountHidden = computed(() => recordAmountMasked(form.value));
+/** 盘点明细单价/差异金额为库存成本快照：仅金额权限「权限内全部」可见，不随单据归属放行 */
+const amountHidden = computed(() => isStockSnapshotAmountHidden(auth.amountAccess));
 const saving = ref(false);
 const options = reactive<Record<string, any>>({ orgs: [], warehouses: [] });
 const dicts = reactive<Record<string, any[]>>({

@@ -68,6 +68,19 @@ export const isAmountRecordMasked = (
 };
 
 /**
+ * 库存成本快照金额显示判定（盘点单明细/盘点衍生报亏、报盈只读成本价）：
+ * 金额不随单据 created_by 归属放行，仅「仅查看/可编辑 + 权限内全部」可见，
+ * own 范围一律掩码（与后端 AmountAllScopeOnly 语义一致，封堵经单据详情反推库存价值）。
+ */
+export const isStockSnapshotAmountHidden = (amountAccess: {
+  canViewAmount: boolean;
+  amountScope?: AmountAccessState['amountScope'];
+}): boolean => {
+  if (!amountAccess.canViewAmount) return true;
+  return (amountAccess.amountScope ?? 'all') !== 'all';
+};
+
+/**
  * 单据级金额显示掩码：对"当前展示的单据对象"做判定。
  * - 无查看能力 → 掩码；
  * - 范围 own 且单据有归属（createdBy/created_by）且非本人 → 掩码；

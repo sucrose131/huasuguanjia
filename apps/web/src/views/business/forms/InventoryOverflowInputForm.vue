@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive } from 'vue';
 import { api } from '@/api';
-import { recordAmountMasked } from '@/stores/auth';
+import { isStockSnapshotAmountHidden, useAuthStore } from '@/stores/auth';
 import { dateText, moneyText } from '@/utils/format';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
 
@@ -11,9 +11,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: 'cancel'): void }>();
 
+const auth = useAuthStore();
 const form = computed(() => props.modelValue);
-/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
-const amountHidden = computed(() => recordAmountMasked(form.value));
+/** 报盈入库成本单价/金额为库存成本快照（来源盘点）：仅金额权限「权限内全部」可见，不随单据归属放行 */
+const amountHidden = computed(() => isStockSnapshotAmountHidden(auth.amountAccess));
 const options = reactive<Record<string, any>>({
   orgs: [],
   warehouses: [],
