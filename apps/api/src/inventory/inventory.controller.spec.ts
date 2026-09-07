@@ -9,6 +9,9 @@ import { InventoryController } from './inventory.controller';
 const allScopeOnlyOf = (handler: (...args: any[]) => any) =>
   Reflect.getMetadata(AMOUNT_ALL_SCOPE_ONLY_KEY, handler);
 
+const scopeExemptOf = (handler: (...args: any[]) => any) =>
+  Reflect.getMetadata(AMOUNT_SCOPE_EXEMPT_KEY, handler);
+
 describe('InventoryController stock-snapshot amount scope', () => {
   it('requires all-scope amount access for inventory stock queries', () => {
     expect(allScopeOnlyOf(InventoryController.prototype.stocks)).toBe(true);
@@ -26,5 +29,17 @@ describe('InventoryController stock-snapshot amount scope', () => {
     expect(allScopeOnlyOf(InventoryController.prototype.check)).toBe(true);
     expect(allScopeOnlyOf(InventoryController.prototype.lossOutput)).toBe(true);
     expect(allScopeOnlyOf(InventoryController.prototype.overflowInput)).toBe(true);
+  });
+
+  it('requires all-scope amount access for inventory alert queries', () => {
+    const handlers = [
+      InventoryController.prototype.quantityAlerts,
+      InventoryController.prototype.expiryAlerts,
+    ];
+
+    for (const handler of handlers) {
+      expect(allScopeOnlyOf(handler)).toBe(true);
+      expect(scopeExemptOf(handler)).not.toBe(true);
+    }
   });
 });
