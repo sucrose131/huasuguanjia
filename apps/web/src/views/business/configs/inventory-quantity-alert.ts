@@ -46,7 +46,6 @@ export const inventoryQuantityAlertConfig: BusinessDocumentConfig = {
     { label: '库存预警', key: 'warningCount', kind: 'number' },
   ],
   creatable: false,
-  pagination: false,
   dialog: { width: '520px', top: '4vh' },
   formComponent: InventoryQuantityAlertForm,
   viewCloseInForm: true,

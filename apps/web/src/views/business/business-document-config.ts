@@ -126,7 +126,7 @@ export type BusinessDocumentConfig = {
   createPermission?: string;
   /** 关键字搜索框占位文案；缺省「单号 / 关键字」 */
   keywordPlaceholder?: string;
-  /** 是否显示分页 footer；缺省 true（预警类全量列表设 false） */
+  /** 是否显示分页 footer；缺省 true。大列表应使用后端服务端分页，不建议设为 false 一次渲染全量 */
   pagination?: boolean;
   createText?: string;
   /** 新增表单的初始值预设（如领用出库的 directOutput），在 openCreate 时合并 */

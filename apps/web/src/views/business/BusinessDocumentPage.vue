@@ -227,10 +227,14 @@ async function runAction(action: RowAction, row: Record<string, any>) {
   }
 }
 
+// 权限过滤一次缓存（auth/route/config 变化时随 computed 失效），行内只做静态 show 判断，
+// 避免每行每格重复 canRunAction 权限推导。
+const permittedActions = computed(() =>
+  (props.config.rowActions ?? []).filter((action) => canRunAction(action)),
+);
+
 const visibleActions = (row: Record<string, any>) =>
-  (props.config.rowActions ?? []).filter((action) =>
-    canRunAction(action) && (action.show ? action.show(row) : true),
-  );
+  permittedActions.value.filter((action) => (action.show ? action.show(row) : true));
 
 // 主操作平铺（默认），次要操作收进“更多”下拉（primary: false）
 const primaryActions = (row: Record<string, any>) =>
@@ -439,6 +443,7 @@ onMounted(async () => {
             @click="
               query.keyword = '';
               query.status = '';
+              query.page = 1;
               for (const field of config.queryFields ?? []) query[field.key] = field.type === 'date-range' ? [] : '';
               clearDynamicOptions();
               load();
@@ -486,11 +491,9 @@ onMounted(async () => {
                     : column.statusType
                 "
               />
-              <OverflowTooltipCell
-                v-else-if="column.tooltip"
-                :content="displayCell(s.row, column)"
-                >{{ displayCell(s.row, column) }}</OverflowTooltipCell
-              >
+              <OverflowTooltipCell v-else-if="column.tooltip">{{
+                displayCell(s.row, column)
+              }}</OverflowTooltipCell>
               <span v-else>{{ displayCell(s.row, column) }}</span>
             </template>
           </el-table-column>

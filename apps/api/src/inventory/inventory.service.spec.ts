@@ -918,3 +918,262 @@ describe('inventory stocks keyword search (BUG-NEW-01)', () => {
     expect(where.OR).toBeUndefined();
   });
 });
+
+describe('inventory quantity alerts sql pagination', () => {
+  function serviceWith(prisma: Record<string, any>) {
+    const service = new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return service;
+  }
+
+  const statsRows = [
+    { warehouse_id: 1n, item_count: 3n, total_amount: '60.50', warning_count: 1n },
+    { warehouse_id: 2n, item_count: 2n, total_amount: '40.00', warning_count: 0n },
+  ];
+
+  function prismaWith(raw: ReturnType<typeof vi.fn>, warehouses = [{ warehouse_id: 1n }, { warehouse_id: 2n }]) {
+    return {
+      hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue(warehouses) },
+      $queryRaw: raw,
+    };
+  }
+
+  it('keeps total/summary/warehouseCounts stable even when the requested page is empty', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([]);
+    const service = serviceWith(prismaWith(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [],
+      skus: [],
+      warehouses: [],
+      orgs: [],
+    });
+    const res = await service.quantityAlerts({ page: 99, pageSize: 20 });
+    expect(res.items).toEqual([]);
+    expect(res.total).toBe(5);
+    expect(res.page).toBe(99);
+    expect(res.pageSize).toBe(20);
+    expect(res.warehouseCounts).toEqual({ 1: 3, 2: 2 });
+    expect(res.summary).toEqual({ itemCount: 5, totalAmount: 100.5, warningCount: 1 });
+  });
+
+  it('scopes total and summary to the selected warehouse while warehouseCounts stays org-wide', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([]);
+    const service = serviceWith(prismaWith(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [],
+      skus: [],
+      warehouses: [],
+      orgs: [],
+    });
+    const res = await service.quantityAlerts({ warehouseId: '1', page: 1, pageSize: 20 });
+    expect(res.items).toEqual([]);
+    expect(res.total).toBe(3);
+    expect(res.summary).toEqual({ itemCount: 3, totalAmount: 60.5, warningCount: 1 });
+    expect(res.warehouseCounts).toEqual({ 1: 3, 2: 2 });
+  });
+
+  it('maps a configured page row to the same item shape with refs enrichment', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([
+        {
+          stock_id: 101n,
+          config_id: 5n,
+          org_id: 9n,
+          warehouse_id: 1n,
+          goods_id: 11n,
+          sku_id: 111n,
+          fact_qty: 5,
+          inventory_amount: '12.50',
+          safe_qty: 8,
+          gap_qty: 3,
+          purchase_qty: 4,
+        },
+      ]);
+    const service = serviceWith(prismaWith(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [{ goods_id: 11n, query_code: 'G-11', goods_name: '商品11', goods_catg_id: 0n }],
+      skus: [{ sku_id: 111n, spec_models: '规格11' }],
+      warehouses: [{ warehouse_id: 1n, name: '仓库一' }],
+      orgs: [{ org_id: 9n, name: '组织九' }],
+    });
+    const res = await service.quantityAlerts({ page: 1, pageSize: 20 });
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]).toMatchObject({
+      id: 5n,
+      orgId: 9n,
+      goodsId: 11n,
+      goodsCode: 'G-11',
+      goodsName: '商品11',
+      skuId: 111n,
+      skuSpec: '规格11',
+      warehouseId: 1n,
+      warehouseName: '仓库一',
+      factQty: 5,
+      safeQty: 8,
+      gapQty: 3,
+      purchaseQty: 4,
+      inventoryAmount: 12.5,
+      warning: true,
+    });
+  });
+
+  it('keeps an unconfigured row as normal with no config id', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([
+        {
+          stock_id: 102n,
+          config_id: null,
+          org_id: 9n,
+          warehouse_id: 2n,
+          goods_id: 22n,
+          sku_id: 222n,
+          fact_qty: 3,
+          inventory_amount: '40.00',
+          safe_qty: 0,
+          gap_qty: 0,
+          purchase_qty: 0,
+        },
+      ]);
+    const service = serviceWith(prismaWith(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [],
+      skus: [],
+      warehouses: [],
+      orgs: [],
+    });
+    const res = await service.quantityAlerts({ page: 1, pageSize: 20 });
+    expect(res.items[0]).toMatchObject({
+      id: undefined,
+      factQty: 3,
+      safeQty: 0,
+      gapQty: 0,
+      purchaseQty: 0,
+      warning: false,
+    });
+  });
+
+  it('rejects an invalid status value with the same message as before', async () => {
+    const service = serviceWith(prismaWith(vi.fn()));
+    await expect(service.quantityAlerts({ status: 'x' })).rejects.toThrow('库存状态参数无效');
+  });
+});
+
+describe('inventory expiry alerts sql pagination', () => {
+  function serviceWith(prisma: Record<string, any>) {
+    return new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  }
+
+  function expiryPrisma(raw: ReturnType<typeof vi.fn>) {
+    return {
+      hspsi_basic_warehouse: {
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 1n }]),
+      },
+      hspsi_sys_dictionary_category: {
+        findFirst: vi.fn().mockResolvedValue({ dict_catg_id: 1n }),
+      },
+      hspsi_sys_dictionary: {
+        findMany: vi.fn().mockResolvedValue([{ dict_value: 1, dict_name: '临期' }]),
+      },
+      hspsi_inventory_alert_period: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ id: 9n, end_day: new Date('2030-01-01T00:00:00.000Z') }]),
+      },
+      $queryRaw: raw,
+    };
+  }
+
+  const statsRows = [{ warehouse_id: 1n, item_count: 2n }];
+  const pageRow = {
+    period_id: 9n,
+    warehouse_id: 1n,
+    goods_id: 11n,
+    sku_id: 111n,
+    batch_no: 'B001',
+    alter_type: 1,
+    alter_day: 30,
+    inventory_qty: 10,
+    inventory_amount: '55.50',
+  };
+
+  it('aggregates total/warehouseCounts from stats and maps page rows with refs and dictionary', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([pageRow]);
+    const service = serviceWith(expiryPrisma(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [{ goods_id: 11n, query_code: 'G-11', goods_name: '商品11', goods_catg_id: 0n }],
+      skus: [{ sku_id: 111n, spec_models: '规格11' }],
+      warehouses: [{ warehouse_id: 1n, name: '仓库一' }],
+      orgs: [],
+    });
+    const res = await service.expiryAlerts({ page: 1, pageSize: 20 });
+    expect(res.total).toBe(2);
+    expect(res.warehouseCounts).toEqual({ 1: 2 });
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]).toMatchObject({
+      id: 9n,
+      goodsId: 11n,
+      goodsCode: 'G-11',
+      goodsName: '商品11',
+      skuSpec: '规格11',
+      warehouseId: 1n,
+      warehouseName: '仓库一',
+      batchNo: 'B001',
+      inventoryQty: 10,
+      alertQty: 10,
+      alertType: 1,
+      alertTypeName: '临期',
+      alertDays: 30,
+      alertValue: 55.5,
+    });
+    // 2030 到期日在 30 天以上 → 正常
+    expect(res.items[0]!.expiryStatus).toBe('正常');
+  });
+
+  it('keeps org-wide warehouseCounts and totals when a warehouse tab is selected', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([pageRow])
+      .mockResolvedValueOnce(statsRows)
+      .mockResolvedValueOnce([]);
+    const service = serviceWith(expiryPrisma(raw));
+    vi.spyOn(service as any, 'names').mockResolvedValue({
+      goods: [],
+      skus: [],
+      warehouses: [],
+      orgs: [],
+    });
+    const res = await service.expiryAlerts({ warehouseId: '1', page: 1, pageSize: 20 });
+    expect(res.total).toBe(2);
+    expect(res.warehouseCounts).toEqual({ 1: 2 });
+    const empty = await service.expiryAlerts({ warehouseId: '9', page: 1, pageSize: 20 });
+    expect(empty.total).toBe(0);
+    expect(empty.items).toEqual([]);
+  });
+});
