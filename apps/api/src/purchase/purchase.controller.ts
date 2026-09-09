@@ -20,7 +20,10 @@ import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 import { PurchaseReturnOaApprovalService } from './purchase-return-oa-approval.service';
 import { AmountAccessService } from '../amount-access/amount-access.service';
 import { GLOBAL_AMOUNT_FIELDS } from '../amount-access/amount-field-registry';
-import { RequireAmountEdit } from '../amount-access/amount-access.decorator';
+import {
+  AmountScopeExempt,
+  RequireAmountEdit,
+} from '../amount-access/amount-access.decorator';
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('purchase')
 export class PurchaseController {
@@ -32,12 +35,20 @@ export class PurchaseController {
     @Inject(AmountAccessService) private amountAccess: AmountAccessService,
   ) {}
 
-  private async protectPurchaseAmounts<T>(value: T, userId: string): Promise<T> {
+  private async protectPurchaseAmounts<T>(
+    value: T,
+    userId: string,
+    explicitOwnerId?: unknown,
+  ): Promise<T> {
     const access = await this.amountAccess.forUser(userId);
+    const explicitOwnerMasked =
+      access.amountScope === 'own' &&
+      explicitOwnerId !== undefined &&
+      String(explicitOwnerId ?? '') !== String(userId);
     let protectedValue = value;
-    if (!access.canViewAmount)
+    if (!access.canViewAmount || explicitOwnerMasked)
       protectedValue = this.amountAccess.maskFields(value, GLOBAL_AMOUNT_FIELDS);
-    else if (access.amountScope === 'own')
+    else if (access.amountScope === 'own' && explicitOwnerId === undefined)
       protectedValue = this.amountAccess.maskAmountsByOwner(value, userId);
     if (!protectedValue || typeof protectedValue !== 'object' || Array.isArray(protectedValue))
       return protectedValue;
@@ -45,7 +56,7 @@ export class PurchaseController {
       ...protectedValue,
       amountAccess: access.level,
       amountScope: access.amountScope,
-      amountMasked: !access.canViewAmount,
+      amountMasked: !access.canViewAmount || explicitOwnerMasked,
     } as T;
   }
   @RequirePermissions('purchase')
@@ -167,7 +178,8 @@ export class PurchaseController {
   @RequirePermissions('purchase')
   @Get('orders/:id')
   async order(@Param('id') id: string, @CurrentUser() u: AuthUser) {
-    return this.protectPurchaseAmounts(await this.service.order(id), u.id);
+    const order = await this.service.order(id);
+    return this.protectPurchaseAmounts(order, u.id, order.created_by);
   }
   @RequirePermissions('purchase')
   @Post('orders')
@@ -225,9 +237,12 @@ export class PurchaseController {
     return this.service.receipts(q);
   }
   @RequirePermissions('purchase')
+  // 入库金额归属按来源采购订单判断，跳过全局“按入库单创建人”范围判断。
+  @AmountScopeExempt()
   @Get('receipts/:id')
-  receipt(@Param('id') id: string) {
-    return this.service.receipt(id);
+  async receipt(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    const receipt = await this.service.receipt(id);
+    return this.protectPurchaseAmounts(receipt, u.id, receipt.sourceOrderCreatedBy);
   }
   @RequirePermissions('purchase')
   @Post('receipts')

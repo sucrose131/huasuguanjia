@@ -18,8 +18,15 @@ const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
 
 const auth = useAuthStore();
 const form = computed(() => props.modelValue);
-/** 记录级金额掩码：无查看权或（范围 own 且单据非本人创建）→ 金额显示 ¥ **** */
-const amountHidden = computed(() => recordAmountMasked(form.value));
+/**
+ * 订单入库以后端按来源采购订单计算的脱敏结果为准；
+ * 临时入库/旧响应才回退到当前单据的通用金额归属判断。
+ */
+const amountHidden = computed(() =>
+  typeof form.value.amountMasked === 'boolean'
+    ? form.value.amountMasked
+    : recordAmountMasked(form.value),
+);
 const saving = ref(false);
 const options = reactive<Record<string, any>>({
   organizations: [],
@@ -529,6 +536,7 @@ function warehouseChanged() {
 /** 切换来源方式：清空来源订单与单据级字段 */
 function receiptSourceChanged() {
   form.value.orderId = '';
+  delete form.value.amountMasked;
   form.value.details = isDirect.value ? [blankLine()] : [];
   form.value.orgId = '';
   form.value.deptId = '';
@@ -540,13 +548,19 @@ function receiptSourceChanged() {
 // ---------- 来源采购订单 ----------
 async function sourceOrderChanged() {
   if (!form.value.orderId) {
+    delete form.value.amountMasked;
     form.value.details = [];
     return;
   }
-  const source: any = await api.get(`/purchase/orders/${form.value.orderId}`).catch(() => null);
+  const selectedOrderId = String(form.value.orderId);
+  delete form.value.amountMasked;
+  form.value.details = [];
+  const source: any = await api.get(`/purchase/orders/${selectedOrderId}`).catch(() => null);
   if (!source) return;
+  if (String(form.value.orderId) !== selectedOrderId) return;
   const plannedWarehouseId = source.warehouseId ?? source.warehouse_id;
   Object.assign(form.value, {
+    amountMasked: Boolean(source.amountMasked),
     orgId: source.orgId ?? source.org_id ?? '',
     deptId: source.deptId ?? source.dept_id ?? '',
     warehouseId: '',

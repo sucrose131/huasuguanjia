@@ -3809,6 +3809,8 @@ export class PurchaseService {
       receiverId: header.receiver_id,
       receiverName: headerPersonNames.get(String(header.receiver_id)) ?? '',
       createdByName: headerPersonNames.get(String(header.created_by)) ?? '',
+      // 普通/换货采购入库的金额归属始终跟随来源采购订单，不跟随执行生成入库的人。
+      sourceOrderCreatedBy: order.created_by,
       inputType: header.input_type,
       confirmStatus: header.comfirm_status,
       details: enrichedDetails,
