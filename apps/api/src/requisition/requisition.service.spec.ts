@@ -27,7 +27,46 @@ function aggregatePostingLines(lines: InventoryLine[]) {
 
 function serviceWithTransaction(tx: Record<string, any>, root: Record<string, any> = {}) {
   tx.hspsi_oa_approval_instance ??= { findFirst: vi.fn().mockResolvedValue(null) };
+  tx.hspsi_inventory_total ??= {
+    findMany: vi.fn(async ({ where }: Record<string, any>) =>
+      (where.OR ?? []).map((line: Record<string, bigint>) => ({
+        goods_id: line.goods_id,
+        sku_id: line.sku_id,
+        inventory_qty: 1,
+      })),
+    ),
+  };
+  tx.hspsi_inventory_batch_total ??= {
+    findMany: vi.fn(async ({ where }: Record<string, any>) =>
+      (where.OR ?? []).map((line: Record<string, bigint | string>) => ({
+        goods_id: line.goods_id,
+        sku_id: line.sku_id,
+        batch_no: line.batch_no,
+        inventory_qty: 1,
+      })),
+    ),
+  };
+  tx.hspsi_goods_info ??= {
+    findMany: vi.fn(async ({ where }: Record<string, any>) =>
+      (where.goods_id?.in ?? []).map((goodsId: bigint) => ({
+        goods_id: goodsId,
+        goods_name: `商品${goodsId}`,
+      })),
+    ),
+  };
+  tx.hspsi_goods_info_sku ??= {
+    findMany: vi.fn(async ({ where }: Record<string, any>) =>
+      (where.sku_id?.in ?? []).map((skuId: bigint) => ({
+        sku_id: skuId,
+        spec_models: `规格${skuId}`,
+      })),
+    ),
+  };
   const prisma = {
+    hspsi_inventory_total: tx.hspsi_inventory_total,
+    hspsi_inventory_batch_total: tx.hspsi_inventory_batch_total,
+    hspsi_goods_info: tx.hspsi_goods_info,
+    hspsi_goods_info_sku: tx.hspsi_goods_info_sku,
     ...root,
     $transaction: vi.fn(async (callback: (client: Record<string, any>) => unknown) => callback(tx)),
   };
@@ -121,6 +160,55 @@ describe('RequisitionService inventory posting line aggregation', () => {
         { goodsId: 101n, skuId: 202n, batchNo: 'BATCH-01', unitType: 1, quantity: '4' },
       ]),
     ).toHaveLength(4);
+  });
+});
+
+describe('RequisitionService application submission stock validation', () => {
+  it('rejects a selected SKU with zero or missing stock and reports the exact item', async () => {
+    const { service, prisma } = serviceWithTransaction({});
+    prisma.hspsi_inventory_total.findMany.mockResolvedValue([]);
+    prisma.hspsi_goods_info.findMany.mockResolvedValue([
+      { goods_id: 101n, goods_name: 'A4纸' },
+    ]);
+    prisma.hspsi_goods_info_sku.findMany.mockResolvedValue([
+      { sku_id: 201n, spec_models: '80g/包' },
+    ]);
+
+    await expect(
+      (service as any).assertApplicationStockAvailable(prisma, 9n, 49n, [
+        { goodsId: 101n, skuId: 201n, batchNo: null },
+      ]),
+    ).rejects.toThrow('所选仓库中A4纸（80g/包）暂无库存，不能提交领用申请');
+  });
+
+  it('checks the intended batch when one is entered even if the SKU total has stock', async () => {
+    const { service, prisma } = serviceWithTransaction({});
+    prisma.hspsi_inventory_total.findMany.mockResolvedValue([
+      { goods_id: 101n, sku_id: 201n, inventory_qty: 8 },
+    ]);
+    prisma.hspsi_inventory_batch_total.findMany.mockResolvedValue([]);
+    prisma.hspsi_goods_info.findMany.mockResolvedValue([
+      { goods_id: 101n, goods_name: 'A4纸' },
+    ]);
+    prisma.hspsi_goods_info_sku.findMany.mockResolvedValue([
+      { sku_id: 201n, spec_models: '80g/包' },
+    ]);
+
+    await expect(
+      (service as any).assertApplicationStockAvailable(prisma, 9n, 49n, [
+        { goodsId: 101n, skuId: 201n, batchNo: 'B-EMPTY' },
+      ]),
+    ).rejects.toThrow('A4纸（80g/包，批号 B-EMPTY）暂无库存');
+  });
+
+  it('allows submission when current stock is positive without enforcing requested quantity', async () => {
+    const { service, prisma } = serviceWithTransaction({});
+
+    await expect(
+      (service as any).assertApplicationStockAvailable(prisma, 9n, 49n, [
+        { goodsId: 101n, skuId: 201n, batchNo: null },
+      ]),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -380,6 +468,7 @@ describe('RequisitionService locked requisition mutations', () => {
     };
     const { service, attachmentsService } = serviceWithTransaction(tx);
     vi.spyOn(service as any, 'validateApplicationReferences').mockResolvedValue(undefined);
+    const stockValidation = vi.spyOn(service as any, 'assertApplicationStockAvailable');
     const signature = {
       id: 'signature-1',
       objectKey: 'documents/requisition_application/signatures/signature-1.png',
@@ -421,6 +510,7 @@ describe('RequisitionService locked requisition mutations', () => {
         }),
       }),
     );
+    expect(stockValidation).not.toHaveBeenCalled();
   });
 
   it('rechecks the application approval state after acquiring the row lock', async () => {
@@ -1927,6 +2017,7 @@ describe('RequisitionService creator withdraw/terminate (OA cancel)', () => {
   });
 
   it('releases the auto-generated withdraw return when the same document re-enters OA', async () => {
+    const app = application();
     const tx = {
       $queryRawUnsafe: vi.fn(),
       hspsi_draw_approve_output: {
@@ -1940,7 +2031,16 @@ describe('RequisitionService creator withdraw/terminate (OA cancel)', () => {
         update: vi.fn(),
       },
     };
-    const { service, oaApproval, documentTrace } = serviceWithTransaction(tx);
+    const { service, oaApproval, documentTrace } = serviceWithTransaction(
+      tx,
+      withRoot(app, {
+        hspsi_draw_approve_detail: {
+          findMany: vi.fn().mockResolvedValue([
+            { goods_id: 101n, sku_id: 201n, batch_no: null },
+          ]),
+        },
+      }),
+    );
     oaApproval.submit.mockResolvedValue({
       instanceId: 1n,
       procInstId: 'P-1',
@@ -1962,6 +2062,32 @@ describe('RequisitionService creator withdraw/terminate (OA cancel)', () => {
       tx,
     );
     expect(result.message).toBe('已提交OA审批');
+  });
+
+  it('blocks an OA retry when the selected SKU no longer has stock', async () => {
+    const app = application();
+    const { service, oaApproval, prisma } = serviceWithTransaction(
+      {},
+      withRoot(app, {
+        hspsi_draw_approve_detail: {
+          findMany: vi.fn().mockResolvedValue([
+            { goods_id: 101n, sku_id: 201n, batch_no: null },
+          ]),
+        },
+      }),
+    );
+    prisma.hspsi_inventory_total.findMany.mockResolvedValue([]);
+    prisma.hspsi_goods_info.findMany.mockResolvedValue([
+      { goods_id: 101n, goods_name: 'A4纸' },
+    ]);
+    prisma.hspsi_goods_info_sku.findMany.mockResolvedValue([
+      { sku_id: 201n, spec_models: '80g/包' },
+    ]);
+
+    await expect(service.submitApplicationToOa('7', '9')).rejects.toThrow(
+      '所选仓库中A4纸（80g/包）暂无库存，不能提交领用申请',
+    );
+    expect(oaApproval.submit).not.toHaveBeenCalled();
   });
 });
 

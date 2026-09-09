@@ -25,6 +25,11 @@ import type { AuthUser } from '../auth/auth.types';
 
 type Body = Record<string, any>;
 type Db = Prisma.TransactionClient | PrismaService;
+type ApplicationStockLine = {
+  goodsId: bigint;
+  skuId: bigint;
+  batchNo: string | null;
+};
 
 @Injectable()
 export class RequisitionService {
@@ -398,6 +403,98 @@ export class RequisitionService {
       ...line,
       quantity: line.quantity,
     }));
+  }
+
+  /**
+   * 领用申请提交库存校验：只拦截当前库存小于等于 0 的商品/SKU；
+   * 本需求不限制申请数量超过现存量，也不产生库存预占。
+   * 填写意向批号时按该批号校验，否则按商品/SKU 总库存校验。
+   */
+  private async assertApplicationStockAvailable(
+    db: Db,
+    orgId: bigint,
+    warehouseId: bigint,
+    lines: ApplicationStockLine[],
+  ) {
+    const uniquePairs = [
+      ...new Map(
+        lines.map((line) => [`${line.goodsId}:${line.skuId}`, line] as const),
+      ).values(),
+    ];
+    const batchLines = [
+      ...new Map(
+        lines
+          .filter((line) => Boolean(line.batchNo))
+          .map((line) => [`${line.goodsId}:${line.skuId}:${line.batchNo}`, line] as const),
+      ).values(),
+    ];
+    const goodsIds = [...new Set(lines.map((line) => line.goodsId))];
+    const skuIds = [...new Set(lines.map((line) => line.skuId))];
+    const [totals, batches, goods, skus] = await Promise.all([
+      db.hspsi_inventory_total.findMany({
+        where: {
+          org_id: orgId,
+          warehouse_id: warehouseId,
+          deleted_at: null,
+          OR: uniquePairs.map((line) => ({ goods_id: line.goodsId, sku_id: line.skuId })),
+        },
+        select: { goods_id: true, sku_id: true, inventory_qty: true },
+      }),
+      batchLines.length
+        ? db.hspsi_inventory_batch_total.findMany({
+            where: {
+              org_id: orgId,
+              warehouse_id: warehouseId,
+              OR: batchLines.map((line) => ({
+                goods_id: line.goodsId,
+                sku_id: line.skuId,
+                batch_no: line.batchNo!,
+              })),
+            },
+            select: { goods_id: true, sku_id: true, batch_no: true, inventory_qty: true },
+          })
+        : [],
+      db.hspsi_goods_info.findMany({
+        where: { goods_id: { in: goodsIds } },
+        select: { goods_id: true, goods_name: true },
+      }),
+      db.hspsi_goods_info_sku.findMany({
+        where: { sku_id: { in: skuIds } },
+        select: { sku_id: true, spec_models: true },
+      }),
+    ]);
+    const totalBySku = new Map(
+      totals.map((row) => [`${row.goods_id}:${row.sku_id}`, Number(row.inventory_qty)]),
+    );
+    const batchBySku = new Map(
+      batches.map((row) => [
+        `${row.goods_id}:${row.sku_id}:${row.batch_no}`,
+        Number(row.inventory_qty),
+      ]),
+    );
+    const goodsNameById = new Map(goods.map((item) => [String(item.goods_id), item.goods_name]));
+    const skuSpecById = new Map(skus.map((item) => [String(item.sku_id), item.spec_models]));
+    const unavailable = [
+      ...new Map(
+        lines
+          .filter((line) => {
+            const quantity = line.batchNo
+              ? batchBySku.get(`${line.goodsId}:${line.skuId}:${line.batchNo}`)
+              : totalBySku.get(`${line.goodsId}:${line.skuId}`);
+            return Number(quantity ?? 0) <= 0;
+          })
+          .map((line) => {
+            const goodsName = goodsNameById.get(String(line.goodsId)) ?? `商品 ${line.goodsId}`;
+            const skuSpec = skuSpecById.get(String(line.skuId)) ?? `SKU ${line.skuId}`;
+            const label = `${goodsName}（${skuSpec}${line.batchNo ? `，批号 ${line.batchNo}` : ''}）`;
+            return [`${line.goodsId}:${line.skuId}:${line.batchNo ?? ''}`, label] as const;
+          }),
+      ).values(),
+    ];
+    if (!unavailable.length) return;
+    const shown = unavailable.slice(0, 3).join('、');
+    const more = unavailable.length > 3 ? `等 ${unavailable.length} 项` : '';
+    throw new BadRequestException(`所选仓库中${shown}${more}暂无库存，不能提交领用申请`);
   }
 
   private async lockRow(tx: Prisma.TransactionClient, table: string, key: string, id: bigint) {
@@ -912,6 +1009,7 @@ export class RequisitionService {
           !submit && !applicant,
         );
         await this.masterData.assertGoodsLines(orgId, warehouseId, lines, tx);
+        if (submit) await this.assertApplicationStockAvailable(tx, orgId, warehouseId, lines);
 
         const total = lines.reduce((sum, line) => sum + line.quantity, 0);
         const data = {
@@ -1578,6 +1676,26 @@ export class RequisitionService {
    */
   async submitApplicationToOa(id: string, userId: string) {
     const drawId = BigInt(id);
+    const application = await this.prisma.hspsi_draw_approve.findFirst({
+      where: { draw_id: drawId, deleted_at: null },
+      select: { org_id: true, warehouse_id: true },
+    });
+    if (!application) throw new NotFoundException('领用申请不存在');
+    const details = await this.prisma.hspsi_draw_approve_detail.findMany({
+      where: { draw_id: drawId },
+      select: { goods_id: true, sku_id: true, batch_no: true },
+    });
+    if (!details.length) throw new BadRequestException('领用申请没有明细，不能提交OA');
+    await this.assertApplicationStockAvailable(
+      this.prisma,
+      application.org_id,
+      application.warehouse_id,
+      details.map((line) => ({
+        goodsId: line.goods_id,
+        skuId: line.sku_id,
+        batchNo: line.batch_no ? String(line.batch_no).trim() : null,
+      })),
+    );
     const result = await this.oaApproval.submit(drawId, userId);
     if (['RUNNING', 'BACKTOSTART', 'PASSED'].includes(result.procStatus)) {
       await this.releaseWithdrawAutoReturns(drawId, userId);

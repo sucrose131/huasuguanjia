@@ -179,6 +179,41 @@ function refreshAllSkuStock() {
   }
 }
 
+function lineStockQty(line: Record<string, any>): number | null {
+  if (!form.value.warehouseId || !line.goodsId || !line.skuId) return null;
+  const goods = (options.contextGoods ?? []).find(
+    (item: any) => String(item.id) === String(line.goodsId),
+  );
+  if (!goods) return null;
+  return skuStockQty(goods, line.skuId, form.value.warehouseId, eligibleWarehouseIds.value);
+}
+
+function lineOutOfStock(line: Record<string, any>) {
+  const quantity = lineStockQty(line);
+  return quantity !== null && quantity <= 0;
+}
+
+function lineStockLabel(line: Record<string, any>) {
+  const goods = String(line.goodsName || line.goodsCode || line.goodsId || '所选商品').trim();
+  const spec = String(line.skuSpec || line.skuId || '所选规格').trim();
+  return `${goods}（${spec}${line.batchNo ? `，批号 ${line.batchNo}` : ''}）`;
+}
+
+function outOfStockLines() {
+  return (form.value.details ?? []).filter((line: any) => line.goodsId && lineOutOfStock(line));
+}
+
+function warnOutOfStock(lines = outOfStockLines()) {
+  if (!lines.length) return false;
+  const shown = lines
+    .slice(0, 3)
+    .map((line: any) => lineStockLabel(line))
+    .join('、');
+  const more = lines.length > 3 ? `等 ${lines.length} 项` : '';
+  ElMessage.warning(`所选仓库中${shown}${more}暂无库存，不能提交领用申请`);
+  return true;
+}
+
 /** 拉取商品 SKU 列表（id/label/unitType），供明细 SKU 下拉与编辑回显 */
 async function buildSkuOptionList(goodsId: unknown) {
   if (!goodsId) return [];
@@ -255,6 +290,7 @@ function warehouseChanged() {
     ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
   }
   refreshAllSkuStock();
+  warnOutOfStock();
 }
 
 function drawTypeChanged(value: unknown) {
@@ -336,6 +372,7 @@ async function lineGoodsChanged(line: any) {
       ElMessage.warning('明细商品类型已变化，请重新选择匹配的仓库');
     }
   }
+  if (form.value.warehouseId) warnOutOfStock([line]);
 }
 
 function lineUnitName(line: any) {
@@ -349,6 +386,7 @@ function lineSkuChanged(line: any) {
   line.unitType = sku?.unitType ?? 0;
   line.skuSpec = sku?.label ?? '';
   line.batchNo = '';
+  warnOutOfStock([line]);
 }
 
 function signatureChanged(value: string) {
@@ -396,6 +434,7 @@ function validate(submit: boolean) {
     ElMessage.warning('请为每条领用明细选择规格(SKU)');
     return false;
   }
+  if (submit && warnOutOfStock()) return false;
   if ((form.value.details ?? []).some((line: any) => typeof line.returnable !== 'boolean')) {
     ElMessage.warning('请为每条领用明细选择“可归还”或“无需归还”');
     return false;
@@ -626,6 +665,9 @@ onMounted(async () => {
             </el-option>
           </el-select>
           <span v-else>{{ skuViewText(s.row) }}</span>
+          <div v-if="!isView && lineOutOfStock(s.row)" class="stock-error">
+            当前仓库暂无库存，不能提交
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">
@@ -731,6 +773,12 @@ onMounted(async () => {
 }
 .is-out-of-stock {
   color: var(--hs-muted, #a8abb2);
+}
+.stock-error {
+  margin-top: 4px;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.35;
 }
 .form-actions {
   display: flex;

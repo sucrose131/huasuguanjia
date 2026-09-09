@@ -11,6 +11,14 @@ function source(relativePath: string) {
 }
 
 describe('P1 restored frontend UI contract', () => {
+  it('blocks requisition submission when a selected SKU has no stock', () => {
+    const application = source('../forms/RequisitionApplicationForm.vue');
+
+    expect(application).toContain('if (submit && warnOutOfStock()) return false');
+    expect(application).toContain('当前仓库暂无库存，不能提交');
+    expect(application).toContain('if (form.value.warehouseId) warnOutOfStock([line])');
+  });
+
   it('restores the purchase dialogs and their old actions', () => {
     const order = [
       source('../forms/PurchaseOrderForm.vue'),
