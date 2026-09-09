@@ -6,33 +6,39 @@ import {
   type PreparedInventoryStockExport,
 } from './inventory-stock-export.service';
 
+const stockRows = [
+  {
+    id: '1-2-3-B001',
+    goodsCode: '000123',
+    goodsName: '测试商品',
+    skuSpec: '10kg/袋',
+    orgName: '华数生物',
+    warehouseName: '原料仓',
+    inventoryQty: 10,
+    inputQty: 12,
+    outputQty: 2,
+    unitCost: 12.3456,
+    inventoryAmount: 123.45,
+    inventoryStatus: '有库存',
+  },
+];
+
 const baseData = {
   organizationName: '华数生物',
   warehouseName: '原料仓',
   keyword: 'G001',
   batchNo: 'B001',
   inStockOnly: true,
-  items: [
-    {
-      id: '1-2-3-B001',
-      goodsCode: '000123',
-      goodsName: '测试商品',
-      skuSpec: '10kg/袋',
-      orgName: '华数生物',
-      warehouseName: '原料仓',
-      inventoryQty: 10,
-      inputQty: 12,
-      outputQty: 2,
-      unitCost: 12.3456,
-      inventoryAmount: 123.45,
-      inventoryStatus: '有库存',
-    },
-  ],
+  total: stockRows.length,
+  where: { org_id: 1n },
 };
 
 function serviceWith(amountAccess: Record<string, any> = {}) {
   return new InventoryStockExportService(
-    { stockExportData: vi.fn().mockResolvedValue(baseData) } as never,
+    {
+      stockExportData: vi.fn().mockResolvedValue(baseData),
+      stockExportRows: vi.fn().mockResolvedValue(stockRows),
+    } as never,
     { forUser: vi.fn().mockResolvedValue(amountAccess) } as never,
     { hspsi_sys_oper_log: { create: vi.fn() } } as never,
   );
@@ -41,11 +47,12 @@ function serviceWith(amountAccess: Record<string, any> = {}) {
 async function writeWorkbook(data: PreparedInventoryStockExport) {
   const service = serviceWith();
   const stream = new PassThrough();
-  const chunks: Buffer[] = [];
+  const chunks: Uint8Array[] = [];
   stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
   await service.write(data, stream);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(Buffer.concat(chunks));
+  const content = Buffer.concat(chunks) as unknown as Parameters<typeof workbook.xlsx.load>[0];
+  await workbook.xlsx.load(content);
   return workbook;
 }
 

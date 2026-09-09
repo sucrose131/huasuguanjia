@@ -84,8 +84,8 @@ export class InventoryController {
     );
     response.setHeader('Cache-Control', 'private, no-store, max-age=0');
     response.setHeader('Pragma', 'no-cache');
-    await this.stockExport.write(prepared, response);
-    await this.stockExport.recordAudit(prepared, user.id);
+    const rowCount = await this.stockExport.write(prepared, response);
+    await this.stockExport.recordAudit(prepared, user.id, rowCount);
   }
 
   @Get('requisition-history')

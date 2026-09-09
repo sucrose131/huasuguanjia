@@ -3,7 +3,11 @@ import ExcelJS from 'exceljs';
 import type { Writable } from 'node:stream';
 import { AmountAccessService } from '../amount-access/amount-access.service';
 import { PrismaService } from '../database/prisma.service';
-import { InventoryService, type InventoryStockExportData } from './inventory.service';
+import {
+  INVENTORY_STOCK_EXPORT_CHUNK_SIZE,
+  InventoryService,
+  type InventoryStockExportData,
+} from './inventory.service';
 
 type Body = Record<string, any>;
 
@@ -122,7 +126,7 @@ export class InventoryStockExportService {
     ].join('    ');
     sheet.mergeCells('A4:M4');
     sheet.getCell('A4').value =
-      `导出时间：${shanghaiDateTime(data.exportedAt)}（Asia/Shanghai）    数据条数：${data.items.length}`;
+      `导出时间：${shanghaiDateTime(data.exportedAt)}（Asia/Shanghai）    数据条数：${data.total}`;
     for (const rowNumber of [2, 3, 4]) {
       const cell = sheet.getCell(`A${rowNumber}`);
       cell.font = { size: 10, color: { argb: 'FF475467' } };
@@ -146,54 +150,66 @@ export class InventoryStockExportService {
     header.commit();
     sheet.autoFilter = { from: 'A6', to: 'M6' };
 
-    data.items.forEach((item, index) => {
-      const row = sheet.addRow([
-        index + 1,
-        String(item.id ?? ''),
-        String(item.goodsCode ?? ''),
-        String(item.goodsName ?? ''),
-        String(item.skuSpec ?? ''),
-        String(item.orgName ?? ''),
-        String(item.warehouseName ?? ''),
-        Number(item.inventoryQty ?? 0),
-        Number(item.inputQty ?? 0),
-        Number(item.outputQty ?? 0),
-        data.amountVisible ? Number(item.unitCost ?? 0) : MASKED_AMOUNT,
-        data.amountVisible ? Number(item.inventoryAmount ?? 0) : MASKED_AMOUNT,
-        String(item.inventoryStatus ?? ''),
-      ]);
-      row.eachCell((cell, columnNumber) => {
-        cell.border = {
-          top: { style: 'hair', color: { argb: 'FFE4E7EC' } },
-          left: { style: 'hair', color: { argb: 'FFE4E7EC' } },
-          bottom: { style: 'hair', color: { argb: 'FFE4E7EC' } },
-          right: { style: 'hair', color: { argb: 'FFE4E7EC' } },
-        };
-        cell.alignment = {
-          vertical: 'middle',
-          horizontal: columnNumber >= 8 && columnNumber <= 12 ? 'right' : 'left',
-        };
-      });
-      // ID、商品编码及所有外部文本都按字符串写入，不创建公式或隐藏数据。
-      row.getCell(2).numFmt = '@';
-      row.getCell(3).numFmt = '@';
-      row.getCell(8).numFmt = '#,##0.####';
-      row.getCell(9).numFmt = '#,##0.####';
-      row.getCell(10).numFmt = '#,##0.####';
-      if (data.amountVisible) {
-        row.getCell(11).numFmt = '"¥"#,##0.0000';
-        row.getCell(12).numFmt = '"¥"#,##0.00';
-      } else {
-        row.getCell(11).numFmt = '@';
-        row.getCell(12).numFmt = '@';
+    let rowCount = 0;
+    while (rowCount < data.total) {
+      const items = await this.inventory.stockExportRows(
+        data.where,
+        rowCount,
+        Math.min(INVENTORY_STOCK_EXPORT_CHUNK_SIZE, data.total - rowCount),
+      );
+      if (!items.length) break;
+      for (const item of items) {
+        rowCount += 1;
+        const row = sheet.addRow([
+          rowCount,
+          String(item.id ?? ''),
+          String(item.goodsCode ?? ''),
+          String(item.goodsName ?? ''),
+          String(item.skuSpec ?? ''),
+          String(item.orgName ?? ''),
+          String(item.warehouseName ?? ''),
+          Number(item.inventoryQty ?? 0),
+          Number(item.inputQty ?? 0),
+          Number(item.outputQty ?? 0),
+          data.amountVisible ? Number(item.unitCost ?? 0) : MASKED_AMOUNT,
+          data.amountVisible ? Number(item.inventoryAmount ?? 0) : MASKED_AMOUNT,
+          String(item.inventoryStatus ?? ''),
+        ]);
+        row.eachCell((cell, columnNumber) => {
+          cell.border = {
+            top: { style: 'hair', color: { argb: 'FFE4E7EC' } },
+            left: { style: 'hair', color: { argb: 'FFE4E7EC' } },
+            bottom: { style: 'hair', color: { argb: 'FFE4E7EC' } },
+            right: { style: 'hair', color: { argb: 'FFE4E7EC' } },
+          };
+          cell.alignment = {
+            vertical: 'middle',
+            horizontal: columnNumber >= 8 && columnNumber <= 12 ? 'right' : 'left',
+          };
+        });
+        // ID、商品编码及所有外部文本都按字符串写入，不创建公式或隐藏数据。
+        row.getCell(2).numFmt = '@';
+        row.getCell(3).numFmt = '@';
+        row.getCell(8).numFmt = '#,##0.####';
+        row.getCell(9).numFmt = '#,##0.####';
+        row.getCell(10).numFmt = '#,##0.####';
+        if (data.amountVisible) {
+          row.getCell(11).numFmt = '"¥"#,##0.0000';
+          row.getCell(12).numFmt = '"¥"#,##0.00';
+        } else {
+          row.getCell(11).numFmt = '@';
+          row.getCell(12).numFmt = '@';
+        }
+        row.commit();
       }
-      row.commit();
-    });
+      if (items.length < INVENTORY_STOCK_EXPORT_CHUNK_SIZE) break;
+    }
 
     await workbook.commit();
+    return rowCount;
   }
 
-  async recordAudit(data: PreparedInventoryStockExport, userId: string) {
+  async recordAudit(data: PreparedInventoryStockExport, userId: string, rowCount: number) {
     try {
       await this.prisma.hspsi_sys_oper_log.create({
         data: {
@@ -211,7 +227,7 @@ export class InventoryStockExportService {
           response_code: '200',
           response_data: JSON.stringify({
             fileName: data.fileName,
-            rowCount: data.items.length,
+            rowCount,
             amountVisible: data.amountVisible,
           }),
           created_by: Number(userId),

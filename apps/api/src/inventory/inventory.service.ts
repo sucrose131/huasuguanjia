@@ -36,10 +36,12 @@ export type InventoryStockExportData = {
   keyword: string;
   batchNo: string;
   inStockOnly: boolean;
-  items: Body[];
+  total: number;
+  where: Prisma.hspsi_inventory_batch_totalWhereInput;
 };
 
 const INVENTORY_STOCK_EXPORT_LIMIT = 100_000;
+export const INVENTORY_STOCK_EXPORT_CHUNK_SIZE = 2_000;
 
 /** quantityAlerts 页行（$queryRaw 原样行，字段值以驱动返回为准） */
 type QuantityAlertRow = {
@@ -427,21 +429,6 @@ export class InventoryService {
       throw new BadRequestException(
         `可导出数据超过 ${INVENTORY_STOCK_EXPORT_LIMIT.toLocaleString('zh-CN')} 条，请缩小查询范围后重试`,
       );
-    const records = await this.prisma.hspsi_inventory_batch_total.findMany({
-      where,
-      take: INVENTORY_STOCK_EXPORT_LIMIT + 1,
-      orderBy: [
-        { warehouse_id: 'asc' },
-        { goods_id: 'asc' },
-        { sku_id: 'asc' },
-        { batch_no: 'asc' },
-      ],
-    });
-    if (!records.length) throw new BadRequestException('当前查询条件下暂无可导出数据');
-    if (records.length > INVENTORY_STOCK_EXPORT_LIMIT)
-      throw new BadRequestException(
-        `可导出数据超过 ${INVENTORY_STOCK_EXPORT_LIMIT.toLocaleString('zh-CN')} 条，请缩小查询范围后重试`,
-      );
     return {
       organizationName: organization.name,
       warehouseName,
@@ -449,8 +436,33 @@ export class InventoryService {
       batchNo: String(query.batchNo ?? '').trim(),
       inStockOnly:
         String(query.inStockOnly ?? '') === 'true' || String(query.inStockOnly ?? '') === '1',
-      items: await this.enrichStockRecords(records),
+      total,
+      where,
     };
+  }
+
+  async stockExportRows(
+    where: Prisma.hspsi_inventory_batch_totalWhereInput,
+    offset: number,
+    requestedSize = INVENTORY_STOCK_EXPORT_CHUNK_SIZE,
+  ) {
+    const skip = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+    const take = Math.min(
+      INVENTORY_STOCK_EXPORT_CHUNK_SIZE,
+      Math.max(1, Number.isSafeInteger(requestedSize) ? requestedSize : 1),
+    );
+    const records = await this.prisma.hspsi_inventory_batch_total.findMany({
+      where,
+      skip,
+      take,
+      orderBy: [
+        { warehouse_id: 'asc' },
+        { goods_id: 'asc' },
+        { sku_id: 'asc' },
+        { batch_no: 'asc' },
+      ],
+    });
+    return this.enrichStockRecords(records);
   }
 
   async requisitionHistory(query: Body) {

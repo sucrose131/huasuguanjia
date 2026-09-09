@@ -148,22 +148,26 @@ describe('inventory stock export scope', () => {
       hspsi_goods_info_category: { findMany: vi.fn().mockResolvedValue([]) },
     });
 
-    await expect(
-      service.stockExportData({
-        orgId: '10',
-        warehouseId: '20',
-        page: 9,
-        pageSize: 1,
-        inStockOnly: true,
-      }),
-    ).resolves.toMatchObject({
+    const prepared = await service.stockExportData({
+      orgId: '10',
+      warehouseId: '20',
+      page: 9,
+      pageSize: 1,
+      inStockOnly: true,
+    });
+    expect(prepared).toMatchObject({
       organizationName: '华数生物',
       warehouseName: '原料仓',
-      items: [{ goodsCode: 'G001', inventoryQty: 10, inventoryAmount: 123.45 }],
+      total: 1,
+      where: { org_id: 10n, warehouse_id: 20n, inventory_qty: { gt: 0 } },
     });
+    await expect(service.stockExportRows(prepared.where, 0, 2_000)).resolves.toMatchObject([
+      { goodsCode: 'G001', inventoryQty: 10, inventoryAmount: 123.45 },
+    ]);
     expect(stockFindMany).toHaveBeenCalledWith({
       where: { org_id: 10n, warehouse_id: 20n, inventory_qty: { gt: 0 } },
-      take: 100_001,
+      skip: 0,
+      take: 2_000,
       orderBy: [
         { warehouse_id: 'asc' },
         { goods_id: 'asc' },
