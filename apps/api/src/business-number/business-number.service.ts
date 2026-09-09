@@ -55,10 +55,13 @@ export class BusinessNumberService {
       ? PURCHASE_BUSINESS_NUMBER_DAILY_LIMIT
       : BUSINESS_NUMBER_DAILY_LIMIT;
     const sequenceWidth = isPurchaseNumber ? 4 : 6;
-    // 采购类：initialSequence 同时是"库内当日最大号"，作为 Redis 计数托底（ARGV[3]）
+    // initialSequence 同时是“库内当日最大号”，作为 Redis 计数托底（ARGV[3]）。
+    // 库存盘点在本地 Redis 重建后也必须对齐数据库水位，否则第一次新增会撞 uk_check_no。
     const initialSequence = isPurchaseNumber
       ? await this.existingPurchaseSequence(prefix, date)
-      : 0;
+      : prefix === BUSINESS_PREFIX.INVENTORY_CHECK
+        ? await this.existingInventoryCheckSequence(date)
+        : 0;
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -189,6 +192,19 @@ export class BusinessNumberService {
         return 0;
     }
     const sequence = Number(currentNumber.slice(-4));
+    return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
+  }
+
+  private async existingInventoryCheckSequence(date: string) {
+    const currentNumber =
+      (
+        await this.prisma.hspsi_inventory_check.findFirst({
+          where: { check_no: { startsWith: `${BUSINESS_PREFIX.INVENTORY_CHECK}${date}` } },
+          orderBy: { check_no: 'desc' },
+          select: { check_no: true },
+        })
+      )?.check_no ?? '';
+    const sequence = Number(currentNumber.slice(-6));
     return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
   }
 

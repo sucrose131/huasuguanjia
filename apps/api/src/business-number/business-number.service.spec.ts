@@ -19,6 +19,7 @@ function createService(environment = 'production') {
     hspsi_purchase_order_payment: emptyModel,
     hspsi_purchase_refund: emptyModel,
     hspsi_purchase_refund_flow: emptyModel,
+    hspsi_inventory_check: emptyModel,
   };
   const service = new BusinessNumberService(redis as never, prisma as never, config as never);
   return { service, redis, prisma, evalCommand };
@@ -81,6 +82,33 @@ describe('BusinessNumberService', () => {
 
     await expect(service.generate(BUSINESS_PREFIX.SALES_ORDER)).resolves.toMatch(/^SO\d{8}000008$/);
     expect(evalCommand.mock.calls[0]![2]).toMatch(/business-no:\d{8}$/);
+  });
+
+  it('starts inventory check numbers after the database maximum when Redis was reset', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T16:00:01.000Z'));
+    const { service, prisma, evalCommand } = createService('development');
+    prisma.hspsi_inventory_check.findFirst.mockResolvedValueOnce({
+      check_no: 'IC20260909000013',
+    });
+    evalCommand.mockResolvedValueOnce(14);
+
+    await expect(service.generate(BUSINESS_PREFIX.INVENTORY_CHECK)).resolves.toBe(
+      'IC20260909000014',
+    );
+    expect(prisma.hspsi_inventory_check.findFirst).toHaveBeenCalledWith({
+      where: { check_no: { startsWith: 'IC20260909' } },
+      orderBy: { check_no: 'desc' },
+      select: { check_no: true },
+    });
+    expect(evalCommand).toHaveBeenCalledWith(
+      expect.stringContaining('dbMax'),
+      1,
+      'hspsi:development:business-no:20260909',
+      expect.any(String),
+      '13',
+      '13',
+    );
   });
 
   it('starts after an existing purchase sequence when the Redis key is new', async () => {
