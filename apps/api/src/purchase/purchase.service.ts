@@ -30,6 +30,8 @@ import { PurchaseOaApprovalService } from './purchase-oa-approval.service';
 
 type Body = Record<string, any>;
 type PurchaseDb = Prisma.TransactionClient | PrismaService;
+/** purchase_arrival_type 字典：2=整批交货。 */
+const APPLICATION_ORDER_DEFAULT_ARRIVAL_TYPE = 2;
 type OperationHistoryItem = {
   key: string;
   action: string;
@@ -2344,7 +2346,7 @@ export class PurchaseService {
           receiver_id: receiverId,
           vendor_id: vendorId,
           pcs_qty: totalQuantity,
-          arrival_type: 1,
+          arrival_type: APPLICATION_ORDER_DEFAULT_ARRIVAL_TYPE,
           plan_arrival_date: now,
           delivery_type: 1,
           delivery_no: '',

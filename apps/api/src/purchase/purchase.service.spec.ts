@@ -1497,7 +1497,7 @@ describe('PurchaseService production-shortage guards', () => {
     );
   });
 
-  it('generates selected application lines using total amount as the authoritative price', async () => {
+  it('generates selected application lines with full delivery as the default arrival type', async () => {
     const orderCreate = vi.fn().mockResolvedValue({ po_id: 30n });
     const detailCreate = vi.fn();
     const trace = { link: vi.fn(), removeForDocument: vi.fn() };
@@ -1559,6 +1559,7 @@ describe('PurchaseService production-shortage guards', () => {
         vendor_id: 5n,
         receiver_id: 9n,
         pcs_qty: 4,
+        arrival_type: 2,
         pay_amout: new Prisma.Decimal(100),
       }),
     });
