@@ -9,6 +9,7 @@ import { InventoryGeneralService } from './inventory-general.service';
 import { AttachmentsModule } from '../attachments/attachments.module';
 import { InventoryOaApprovalService } from './inventory-oa-approval.service';
 import { XinfutongOaModule } from '../integrations/xinfutong-oa/xinfutong-oa.module';
+import { InventoryStockExportService } from './inventory-stock-export.service';
 
 @Module({
   imports: [AuthModule, AttachmentsModule, XinfutongOaModule],
@@ -17,6 +18,7 @@ import { XinfutongOaModule } from '../integrations/xinfutong-oa/xinfutong-oa.mod
     InventoryAlertService,
     InventoryPostingService,
     InventoryService,
+    InventoryStockExportService,
     InventoryGeneralService,
     InventoryOaApprovalService,
   ],

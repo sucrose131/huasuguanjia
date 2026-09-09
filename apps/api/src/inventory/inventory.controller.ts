@@ -8,8 +8,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { PermissionGuard } from '../auth/permission.guard';
 import { RequirePermissions } from '../auth/permissions.decorator';
@@ -18,6 +20,7 @@ import { AuthUser } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
 import { InventoryOaApprovalService } from './inventory-oa-approval.service';
 import { AmountAllScopeOnly } from '../amount-access/amount-access.decorator';
+import { InventoryStockExportService } from './inventory-stock-export.service';
 
 @UseGuards(AuthGuard, PermissionGuard)
 @Controller('inventory')
@@ -25,6 +28,8 @@ export class InventoryController {
   constructor(
     @Inject(InventoryService) private readonly service: InventoryService,
     @Inject(InventoryOaApprovalService) private readonly oa: InventoryOaApprovalService,
+    @Inject(InventoryStockExportService)
+    private readonly stockExport: InventoryStockExportService,
   ) {}
 
   @Get('users/options')
@@ -59,6 +64,28 @@ export class InventoryController {
   @RequirePermissions('inventory')
   stocks(@Query() q: any) {
     return this.service.stocks(q);
+  }
+
+  @Get('stocks/export')
+  @RequirePermissions('inventory:stocks:export')
+  async exportStocks(
+    @Query() query: any,
+    @CurrentUser() user: AuthUser,
+    @Res() response: Response,
+  ) {
+    const prepared = await this.stockExport.prepare(query, user.id);
+    response.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(prepared.fileName)}`,
+    );
+    response.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    response.setHeader('Pragma', 'no-cache');
+    await this.stockExport.write(prepared, response);
+    await this.stockExport.recordAudit(prepared, user.id);
   }
 
   @Get('requisition-history')

@@ -12,9 +12,9 @@ describe('inferRequestPermissions', () => {
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods/properties' }),
     ).toEqual([PUBLIC_READ]);
-    expect(
-      inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods' }),
-    ).toEqual([PUBLIC_READ]);
+    expect(inferRequestPermissions({ method: 'GET', originalUrl: '/api/goods' })).toEqual([
+      PUBLIC_READ,
+    ]);
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/base-data/warehouses' }),
     ).toEqual([PUBLIC_READ]);
@@ -49,6 +49,15 @@ describe('inferRequestPermissions', () => {
     ).toEqual(['purchase:applications', 'purchase:applications:withdraw']);
   });
 
+  it('库存查询导出同时要求页面和独立导出权限', () => {
+    expect(
+      inferRequestPermissions({
+        method: 'GET',
+        originalUrl: '/api/inventory/stocks/export?orgId=10',
+      }),
+    ).toEqual(['inventory:stocks', 'inventory:stocks:export']);
+  });
+
   it('处理专用操作和别名路由', () => {
     expect(
       inferRequestPermissions({
@@ -63,7 +72,10 @@ describe('inferRequestPermissions', () => {
       inferRequestPermissions({ method: 'DELETE', originalUrl: '/api/purchase/refunds/flows/8' }),
     ).toEqual(['purchase:refunds', 'purchase:refunds:void-record']);
     expect(
-      inferRequestPermissions({ method: 'POST', originalUrl: '/api/inventory/overflow-inputs/9/confirm' }),
+      inferRequestPermissions({
+        method: 'POST',
+        originalUrl: '/api/inventory/overflow-inputs/9/confirm',
+      }),
     ).toEqual(['inventory:overflows', 'inventory:overflows:confirm']);
   });
 
@@ -72,7 +84,10 @@ describe('inferRequestPermissions', () => {
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/production/product-options' }),
     ).toEqual([]);
     expect(
-      inferRequestPermissions({ method: 'GET', originalUrl: '/api/inventory/losses/approved-options' }),
+      inferRequestPermissions({
+        method: 'GET',
+        originalUrl: '/api/inventory/losses/approved-options',
+      }),
     ).toEqual([]);
     expect(
       inferRequestPermissions({ method: 'GET', originalUrl: '/api/sales/services/source-options' }),
@@ -103,7 +118,10 @@ describe('inferRequestPermissions', () => {
 
   it('映射基础资料与商品主档的页面操作', () => {
     expect(
-      inferRequestPermissions({ method: 'PATCH', originalUrl: '/api/base-data/organizations/3/status' }),
+      inferRequestPermissions({
+        method: 'PATCH',
+        originalUrl: '/api/base-data/organizations/3/status',
+      }),
     ).toEqual(['master-data:companies', 'master-data:companies:status']);
     expect(
       inferRequestPermissions({ method: 'DELETE', originalUrl: '/api/goods/categories/8' }),

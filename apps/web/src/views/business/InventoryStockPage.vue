@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { api } from '@/api';import { dateText, moneyText } from '@/utils/format';
+import { Download } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import { api, downloadFile } from '@/api';
+import { dateText, moneyText } from '@/utils/format';
 import { canPageAction } from '@/utils/permission';
 import { useAuthStore } from '@/stores/auth';
 import { buildOrganizationTree, type OrganizationTreeNode } from '@/utils/organization-tree';
@@ -15,6 +18,8 @@ const auth = useAuthStore();
 const rows = ref<Row[]>([]);
 const total = ref(0);
 const loading = ref(false);
+const exporting = ref(false);
+const appliedStockQuery = ref<Record<string, any> | null>(null);
 const summary = reactive<Record<string, any>>({ itemCount: 0, totalAmount: 0, warningCount: 0 });
 const recentLedger = ref<Row[]>([]);
 const ledger = ref<Row[]>([]);
@@ -109,17 +114,21 @@ async function load() {
     rows.value = [];
     total.value = 0;
     recentLedger.value = [];
+    appliedStockQuery.value = null;
     Object.assign(summary, { itemCount: 0, totalAmount: 0, warningCount: 0 });
     return;
   }
   loading.value = true;
   try {
     const endpoint = stockView.value === 'requisition' ? 'requisition-history' : 'stocks';
-    const result = (await api.get(`/inventory/${endpoint}`, { params: params() })) as any;
+    const requestParams = params();
+    const result = (await api.get(`/inventory/${endpoint}`, { params: requestParams })) as any;
     rows.value = result.items ?? [];
     total.value = Number(result.total ?? rows.value.length);
     Object.assign(summary, result.summary ?? {});
     if (stockView.value === 'inventory') {
+      const { page: _page, pageSize: _pageSize, ...filters } = requestParams;
+      appliedStockQuery.value = filters;
       const recent = (await api.get('/inventory/ledger', {
         params: {
           page: 1,
@@ -129,9 +138,33 @@ async function load() {
         },
       })) as any;
       recentLedger.value = recent.items ?? [];
-    }
+    } else appliedStockQuery.value = null;
   } finally {
     loading.value = false;
+  }
+}
+
+async function exportStocks() {
+  if (!query.orgId) {
+    ElMessage.warning('请先选择组织');
+    return;
+  }
+  if (!appliedStockQuery.value) {
+    ElMessage.warning('请先查询库存');
+    return;
+  }
+  if (!total.value) {
+    ElMessage.warning('当前查询条件下暂无可导出数据');
+    return;
+  }
+  exporting.value = true;
+  try {
+    await downloadFile('/inventory/stocks/export', {
+      params: appliedStockQuery.value,
+      timeout: 120_000,
+    });
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -232,6 +265,17 @@ onMounted(async () => {
         <p class="page-subtitle">按仓库查看即时库存、库存金额及可追溯流水</p>
       </div>
       <div class="page-actions">
+        <el-button
+          v-if="
+            stockView === 'inventory' && canPageAction(auth.user, '/inventory/stocks', 'export')
+          "
+          type="primary"
+          :icon="Download"
+          :loading="exporting"
+          :disabled="loading || !appliedStockQuery || total === 0"
+          @click="exportStocks"
+          >导出 Excel</el-button
+        >
         <el-button @click="load">刷新</el-button>
       </div>
     </header>
@@ -302,7 +346,8 @@ onMounted(async () => {
       <div v-if="stockScopeReady && stockView === 'inventory'" class="warehouse-tabs">
         <button :class="{ active: !query.warehouseId }" @click="selectWarehouse('')">
           全部 <span>{{ orgWarehouseItemCount }}</span>
-        </button>        <button
+        </button>
+        <button
           v-for="item in options.warehouseTabs"
           :key="item.value"
           :class="{ active: String(query.warehouseId) === String(item.value) }"
@@ -318,7 +363,10 @@ onMounted(async () => {
           class="query-field keyword"
           clearable
           placeholder="商品编码 / 名称 / SKU"
-          @keyup.enter="query.page = 1; load()"
+          @keyup.enter="
+            query.page = 1;
+            load();
+          "
         />
         <el-select
           v-if="stockView === 'requisition'"
@@ -328,7 +376,12 @@ onMounted(async () => {
           filterable
           placeholder="全部部门"
         >
-          <el-option v-for="item in stockDepartments" :key="item.value" :label="item.label" :value="item.value" />
+          <el-option
+            v-for="item in stockDepartments"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
         </el-select>
         <el-select
           v-if="stockView === 'requisition'"
@@ -338,7 +391,12 @@ onMounted(async () => {
           filterable
           placeholder="全部领用人"
         >
-          <el-option v-for="item in stockReceivers" :key="item.value" :label="item.label" :value="item.value" />
+          <el-option
+            v-for="item in stockReceivers"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
         </el-select>
         <el-input v-model="query.batchNo" class="query-field" clearable placeholder="批号" />
         <el-date-picker
@@ -350,7 +408,11 @@ onMounted(async () => {
           end-placeholder="领用结束日期"
           class="query-date-range"
         />
-        <el-select v-if="stockView === 'requisition'" v-model="query.holdingStatus" class="query-field">
+        <el-select
+          v-if="stockView === 'requisition'"
+          v-model="query.holdingStatus"
+          class="query-field"
+        >
           <el-option label="全部领用历史" value="all" />
           <el-option label="仅看持有结存" value="holding" />
           <el-option label="仅看已退清" value="returned" />
@@ -359,7 +421,14 @@ onMounted(async () => {
           >仅显示有库存</el-checkbox
         >
         <span class="query-actions">
-          <el-button type="primary" @click="query.page = 1; load()">查询</el-button>
+          <el-button
+            type="primary"
+            @click="
+              query.page = 1;
+              load();
+            "
+            >查询</el-button
+          >
           <el-button @click="resetQuery">重置</el-button>
         </span>
       </div>

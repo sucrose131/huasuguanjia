@@ -1,4 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { DocumentTraceService } from '../document-trace/document-trace.service';
@@ -23,6 +29,17 @@ import {
 export type { InventoryCheckQuantityResult };
 
 type Body = Record<string, any>;
+
+export type InventoryStockExportData = {
+  organizationName: string;
+  warehouseName: string;
+  keyword: string;
+  batchNo: string;
+  inStockOnly: boolean;
+  items: Body[];
+};
+
+const INVENTORY_STOCK_EXPORT_LIMIT = 100_000;
 
 /** quantityAlerts 页行（$queryRaw 原样行，字段值以驱动返回为准） */
 type QuantityAlertRow = {
@@ -142,6 +159,108 @@ export class InventoryService {
     return new Map(rows.map((row) => [String(row.id), row.nickname || row.username]));
   }
 
+  private positiveId(value: unknown, label: string) {
+    try {
+      const id = BigInt(String(value ?? ''));
+      if (id <= 0n) throw new Error('out of range');
+      return id;
+    } catch {
+      throw new BadRequestException(`${label}无效`);
+    }
+  }
+
+  private async stockWhere(query: Body) {
+    const where: Prisma.hspsi_inventory_batch_totalWhereInput = {};
+    if (query.orgId) where.org_id = this.positiveId(query.orgId, '组织');
+    if (query.warehouseId) where.warehouse_id = this.positiveId(query.warehouseId, '仓库');
+    if (query.batchNo) where.batch_no = { contains: String(query.batchNo).trim() };
+    if (String(query.inStockOnly ?? '') === 'true' || String(query.inStockOnly) === '1')
+      where.inventory_qty = { gt: 0 };
+    const keyword = String(query.keyword ?? '').trim();
+    if (keyword) {
+      const [goods, skus] = await Promise.all([
+        this.prisma.hspsi_goods_info.findMany({
+          where: {
+            deleted_at: null,
+            OR: [{ query_code: { contains: keyword } }, { goods_name: { contains: keyword } }],
+          },
+          select: { goods_id: true },
+        }),
+        this.prisma.hspsi_goods_info_sku.findMany({
+          where: { deleted_at: null, spec_models: { contains: keyword } },
+          select: { sku_id: true },
+        }),
+      ]);
+      const numericSkuId = /^\d+$/.test(keyword) ? BigInt(keyword) : null;
+      where.OR = [
+        { goods_id: { in: goods.map((item) => item.goods_id) } },
+        { sku_id: { in: skus.map((item) => item.sku_id) } },
+        ...(numericSkuId ? [{ sku_id: numericSkuId }] : []),
+      ];
+    }
+    return where;
+  }
+
+  private async enrichStockRecords(records: Body[]) {
+    const mapInput = records.map((item) => ({
+      goodsId: item.goods_id,
+      skuId: item.sku_id,
+      warehouseId: item.warehouse_id,
+      orgId: item.org_id,
+    }));
+    const refs = await this.names(mapInput);
+    const unitIds = [
+      ...new Set(records.map((item) => BigInt(item.unit_type)).filter((id) => id > 0n)),
+    ];
+    const categoryIds = [
+      ...new Set(refs.goods.map((item) => item.goods_catg_id).filter((id) => id > 0n)),
+    ];
+    const [units, categories] = await Promise.all([
+      this.prisma.hspsi_basic_unit.findMany({ where: { id: { in: unitIds } } }),
+      this.prisma.hspsi_goods_info_category.findMany({
+        where: { goods_catg_id: { in: categoryIds }, deleted_at: null },
+      }),
+    ]);
+    const goodsById = new Map(refs.goods.map((item) => [String(item.goods_id), item]));
+    const skusById = new Map(refs.skus.map((item) => [String(item.sku_id), item]));
+    const warehousesById = new Map(
+      refs.warehouses.map((item) => [String(item.warehouse_id), item]),
+    );
+    const organizationsById = new Map(refs.orgs.map((item) => [String(item.org_id), item]));
+    const unitsById = new Map(units.map((item) => [String(item.id), item]));
+    const categoriesById = new Map(categories.map((item) => [String(item.goods_catg_id), item]));
+    return records.map((item) => {
+      const goods = goodsById.get(String(item.goods_id));
+      return {
+        id: `${item.goods_id}-${item.sku_id}-${item.warehouse_id}-${item.batch_no}`,
+        goodsId: item.goods_id,
+        skuId: item.sku_id,
+        goodsCode: goods?.query_code,
+        goodsName: goods?.goods_name,
+        categoryId: goods?.goods_catg_id,
+        categoryName: goods
+          ? categoriesById.get(String(goods.goods_catg_id))?.goods_name
+          : undefined,
+        skuSpec: skusById.get(String(item.sku_id))?.spec_models,
+        unitType: item.unit_type,
+        unitName: unitsById.get(String(item.unit_type))?.name,
+        orgId: item.org_id,
+        orgName: organizationsById.get(String(item.org_id))?.name,
+        warehouseId: item.warehouse_id,
+        warehouseName: warehousesById.get(String(item.warehouse_id))?.name,
+        batchNo: item.batch_no,
+        inputQty: item.input_qty,
+        outputQty: item.output_qty,
+        inventoryQty: item.inventory_qty,
+        inventoryAmount: item.inventory_amount,
+        unitCost: Number(item.inventory_qty)
+          ? Number(item.inventory_amount) / Number(item.inventory_qty)
+          : 0,
+        inventoryStatus: Number(item.inventory_qty) > 0 ? '有库存' : '无库存',
+      };
+    });
+  }
+
   private async dictionary(code: string) {
     const category = await this.prisma.hspsi_sys_dictionary_category.findFirst({
       where: { dict_catg_code: code, deleted_at: null },
@@ -242,36 +361,7 @@ export class InventoryService {
 
   async stocks(query: Body) {
     const { page, pageSize } = this.page(query);
-    const where: Prisma.hspsi_inventory_batch_totalWhereInput = {};
-    if (query.orgId) where.org_id = BigInt(query.orgId);
-    if (query.warehouseId) where.warehouse_id = BigInt(query.warehouseId);
-    if (query.batchNo) where.batch_no = { contains: String(query.batchNo) };
-    if (String(query.inStockOnly ?? '') === 'true' || String(query.inStockOnly) === '1')
-      where.inventory_qty = { gt: 0 };
-    if (query.keyword) {
-      const key = String(query.keyword);
-      const [goods, skus] = await Promise.all([
-        this.prisma.hspsi_goods_info.findMany({
-          where: {
-            deleted_at: null,
-            OR: [{ query_code: { contains: key } }, { goods_name: { contains: key } }],
-          },
-          select: { goods_id: true },
-        }),
-        this.prisma.hspsi_goods_info_sku.findMany({
-          where: { deleted_at: null, spec_models: { contains: key } },
-          select: { sku_id: true },
-        }),
-      ]);
-      const skuIds = skus.map((item) => item.sku_id);
-      // keyword 为数字时同时精确匹配 sku_id（如直接输入 SKU 编号）
-      const numericSkuId = /^\d+$/.test(key) ? BigInt(key) : null;
-      where.OR = [
-        { goods_id: { in: goods.map((item) => item.goods_id) } },
-        { sku_id: { in: skuIds } },
-        ...(numericSkuId ? [{ sku_id: numericSkuId }] : []),
-      ];
-    }
+    const where = await this.stockWhere(query);
     const [records, total, summaryRows] = await Promise.all([
       this.prisma.hspsi_inventory_batch_total.findMany({
         where,
@@ -285,52 +375,7 @@ export class InventoryService {
         select: { inventory_qty: true, inventory_amount: true },
       }),
     ]);
-    const mapInput = records.map((i) => ({
-      goodsId: i.goods_id,
-      skuId: i.sku_id,
-      warehouseId: i.warehouse_id,
-      orgId: i.org_id,
-    }));
-    const refs = await this.names(mapInput);
-    const unitIds = [...new Set(records.map((i) => BigInt(i.unit_type)).filter((i) => i > 0n))];
-    const categoryIds = [
-      ...new Set(refs.goods.map((item) => item.goods_catg_id).filter((id) => id > 0n)),
-    ];
-    const [units, categories] = await Promise.all([
-      this.prisma.hspsi_basic_unit.findMany({ where: { id: { in: unitIds } } }),
-      this.prisma.hspsi_goods_info_category.findMany({
-        where: { goods_catg_id: { in: categoryIds }, deleted_at: null },
-      }),
-    ]);
-    const items = records.map((item) => {
-      const goods = refs.goods.find((g) => g.goods_id === item.goods_id);
-      return {
-        id: `${item.goods_id}-${item.sku_id}-${item.warehouse_id}-${item.batch_no}`,
-        goodsId: item.goods_id,
-        skuId: item.sku_id,
-        goodsCode: goods?.query_code,
-        goodsName: goods?.goods_name,
-        categoryId: goods?.goods_catg_id,
-        categoryName: categories.find((category) => category.goods_catg_id === goods?.goods_catg_id)
-          ?.goods_name,
-        skuSpec: refs.skus.find((s) => s.sku_id === item.sku_id)?.spec_models,
-        unitType: item.unit_type,
-        unitName: units.find((u) => u.id === BigInt(item.unit_type))?.name,
-        orgId: item.org_id,
-        orgName: refs.orgs.find((o) => o.org_id === item.org_id)?.name,
-        warehouseId: item.warehouse_id,
-        warehouseName: refs.warehouses.find((w) => w.warehouse_id === item.warehouse_id)?.name,
-        batchNo: item.batch_no,
-        inputQty: item.input_qty,
-        outputQty: item.output_qty,
-        inventoryQty: item.inventory_qty,
-        inventoryAmount: item.inventory_amount,
-        unitCost: Number(item.inventory_qty)
-          ? Number(item.inventory_amount) / Number(item.inventory_qty)
-          : 0,
-        inventoryStatus: Number(item.inventory_qty) > 0 ? '有库存' : '无库存',
-      };
-    });
+    const items = await this.enrichStockRecords(records);
     const warningCount = await this.quantityAlertCount(query.orgId, query.warehouseId);
     return {
       items,
@@ -342,6 +387,69 @@ export class InventoryService {
         totalAmount: summaryRows.reduce((s, i) => s + Number(i.inventory_amount), 0),
         warningCount,
       },
+    };
+  }
+
+  async stockExportData(query: Body): Promise<InventoryStockExportData> {
+    if (!query.orgId) throw new BadRequestException('请先选择组织');
+    const organizationId = this.positiveId(query.orgId, '组织');
+    const organization = await this.prisma.hspsi_basic_organization.findFirst({
+      where: {
+        org_id: organizationId,
+        operation_status: 1,
+        deleted_at: null,
+      },
+      select: { org_id: true, name: true },
+    });
+    if (!organization) throw new ForbiddenException('所选组织不存在或不在当前账号授权范围内');
+
+    let warehouseName = '全部仓库';
+    if (query.warehouseId) {
+      const warehouseId = this.positiveId(query.warehouseId, '仓库');
+      const warehouse = await this.prisma.hspsi_basic_warehouse.findFirst({
+        where: {
+          warehouse_id: warehouseId,
+          org_id: organizationId,
+          status: 1,
+          deleted_at: null,
+        },
+        select: { warehouse_id: true, name: true },
+      });
+      if (!warehouse)
+        throw new ForbiddenException('所选仓库不存在、不属于当前组织或不在授权范围内');
+      warehouseName = warehouse.name;
+    }
+
+    const where = await this.stockWhere({ ...query, orgId: String(organizationId) });
+    const total = await this.prisma.hspsi_inventory_batch_total.count({ where });
+    if (!total) throw new BadRequestException('当前查询条件下暂无可导出数据');
+    if (total > INVENTORY_STOCK_EXPORT_LIMIT)
+      throw new BadRequestException(
+        `可导出数据超过 ${INVENTORY_STOCK_EXPORT_LIMIT.toLocaleString('zh-CN')} 条，请缩小查询范围后重试`,
+      );
+    const records = await this.prisma.hspsi_inventory_batch_total.findMany({
+      where,
+      take: INVENTORY_STOCK_EXPORT_LIMIT + 1,
+      orderBy: [
+        { warehouse_id: 'asc' },
+        { goods_id: 'asc' },
+        { sku_id: 'asc' },
+        { batch_no: 'asc' },
+      ],
+    });
+    if (!records.length) throw new BadRequestException('当前查询条件下暂无可导出数据');
+    if (records.length > INVENTORY_STOCK_EXPORT_LIMIT)
+      throw new BadRequestException(
+        `可导出数据超过 ${INVENTORY_STOCK_EXPORT_LIMIT.toLocaleString('zh-CN')} 条，请缩小查询范围后重试`,
+      );
+    return {
+      organizationName: organization.name,
+      warehouseName,
+      keyword: String(query.keyword ?? '').trim(),
+      batchNo: String(query.batchNo ?? '').trim(),
+      inStockOnly:
+        String(query.inStockOnly ?? '') === 'true' || String(query.inStockOnly ?? '') === '1',
+      items: await this.enrichStockRecords(records),
     };
   }
 

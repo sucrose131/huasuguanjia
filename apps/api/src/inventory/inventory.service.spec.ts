@@ -79,6 +79,114 @@ describe('inventory stock option scope', () => {
   });
 });
 
+describe('inventory stock export scope', () => {
+  function serviceWith(prisma: Record<string, any>) {
+    return new InventoryService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  }
+
+  it('requires an organization and rejects an organization outside the scoped client', async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const service = serviceWith({ hspsi_basic_organization: { findFirst } });
+
+    await expect(service.stockExportData({})).rejects.toThrow('请先选择组织');
+    await expect(service.stockExportData({ orgId: '10' })).rejects.toThrow(
+      '所选组织不存在或不在当前账号授权范围内',
+    );
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { org_id: 10n, operation_status: 1, deleted_at: null },
+      select: { org_id: true, name: true },
+    });
+  });
+
+  it('exports all matching rows without page parameters and validates the selected warehouse', async () => {
+    const stock = {
+      goods_id: 1n,
+      sku_id: 2n,
+      warehouse_id: 20n,
+      org_id: 10n,
+      batch_no: 'B001',
+      unit_type: 1n,
+      input_qty: 12,
+      output_qty: 2,
+      inventory_qty: 10,
+      inventory_amount: 123.45,
+    };
+    const stockFindMany = vi.fn().mockResolvedValue([stock]);
+    const service = serviceWith({
+      hspsi_basic_organization: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 10n, name: '华数生物' }),
+        findMany: vi.fn().mockResolvedValue([{ org_id: 10n, name: '华数生物' }]),
+      },
+      hspsi_basic_warehouse: {
+        findFirst: vi.fn().mockResolvedValue({ warehouse_id: 20n, name: '原料仓' }),
+        findMany: vi.fn().mockResolvedValue([{ warehouse_id: 20n, name: '原料仓' }]),
+      },
+      hspsi_inventory_batch_total: {
+        count: vi.fn().mockResolvedValue(1),
+        findMany: stockFindMany,
+      },
+      hspsi_goods_info: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { goods_id: 1n, goods_name: '测试商品', query_code: 'G001', goods_catg_id: 0n },
+          ]),
+      },
+      hspsi_goods_info_sku: {
+        findMany: vi.fn().mockResolvedValue([{ sku_id: 2n, spec_models: '10kg/袋' }]),
+      },
+      hspsi_basic_unit: {
+        findMany: vi.fn().mockResolvedValue([{ id: 1n, name: '袋' }]),
+      },
+      hspsi_goods_info_category: { findMany: vi.fn().mockResolvedValue([]) },
+    });
+
+    await expect(
+      service.stockExportData({
+        orgId: '10',
+        warehouseId: '20',
+        page: 9,
+        pageSize: 1,
+        inStockOnly: true,
+      }),
+    ).resolves.toMatchObject({
+      organizationName: '华数生物',
+      warehouseName: '原料仓',
+      items: [{ goodsCode: 'G001', inventoryQty: 10, inventoryAmount: 123.45 }],
+    });
+    expect(stockFindMany).toHaveBeenCalledWith({
+      where: { org_id: 10n, warehouse_id: 20n, inventory_qty: { gt: 0 } },
+      take: 100_001,
+      orderBy: [
+        { warehouse_id: 'asc' },
+        { goods_id: 'asc' },
+        { sku_id: 'asc' },
+        { batch_no: 'asc' },
+      ],
+    });
+  });
+
+  it('rejects an empty export instead of creating a blank workbook', async () => {
+    const service = serviceWith({
+      hspsi_basic_organization: {
+        findFirst: vi.fn().mockResolvedValue({ org_id: 10n, name: '华数生物' }),
+      },
+      hspsi_inventory_batch_total: { count: vi.fn().mockResolvedValue(0) },
+    });
+
+    await expect(service.stockExportData({ orgId: '10' })).rejects.toThrow(
+      '当前查询条件下暂无可导出数据',
+    );
+  });
+});
+
 describe('inventory check quantity branches', () => {
   it('keeps shortage and damage as independent branches', () => {
     const result = classifyInventoryCheckQuantities(10, 8, 2);
@@ -937,7 +1045,10 @@ describe('inventory quantity alerts sql pagination', () => {
     { warehouse_id: 2n, item_count: 2n, total_amount: '40.00', warning_count: 0n },
   ];
 
-  function prismaWith(raw: ReturnType<typeof vi.fn>, warehouses = [{ warehouse_id: 1n }, { warehouse_id: 2n }]) {
+  function prismaWith(
+    raw: ReturnType<typeof vi.fn>,
+    warehouses = [{ warehouse_id: 1n }, { warehouse_id: 2n }],
+  ) {
     return {
       hspsi_basic_warehouse: { findMany: vi.fn().mockResolvedValue(warehouses) },
       $queryRaw: raw,
@@ -945,10 +1056,7 @@ describe('inventory quantity alerts sql pagination', () => {
   }
 
   it('keeps total/summary/warehouseCounts stable even when the requested page is empty', async () => {
-    const raw = vi
-      .fn()
-      .mockResolvedValueOnce(statsRows)
-      .mockResolvedValueOnce([]);
+    const raw = vi.fn().mockResolvedValueOnce(statsRows).mockResolvedValueOnce([]);
     const service = serviceWith(prismaWith(raw));
     vi.spyOn(service as any, 'names').mockResolvedValue({
       goods: [],
@@ -966,10 +1074,7 @@ describe('inventory quantity alerts sql pagination', () => {
   });
 
   it('scopes total and summary to the selected warehouse while warehouseCounts stays org-wide', async () => {
-    const raw = vi
-      .fn()
-      .mockResolvedValueOnce(statsRows)
-      .mockResolvedValueOnce([]);
+    const raw = vi.fn().mockResolvedValueOnce(statsRows).mockResolvedValueOnce([]);
     const service = serviceWith(prismaWith(raw));
     vi.spyOn(service as any, 'names').mockResolvedValue({
       goods: [],
@@ -1120,10 +1225,7 @@ describe('inventory expiry alerts sql pagination', () => {
   };
 
   it('aggregates total/warehouseCounts from stats and maps page rows with refs and dictionary', async () => {
-    const raw = vi
-      .fn()
-      .mockResolvedValueOnce(statsRows)
-      .mockResolvedValueOnce([pageRow]);
+    const raw = vi.fn().mockResolvedValueOnce(statsRows).mockResolvedValueOnce([pageRow]);
     const service = serviceWith(expiryPrisma(raw));
     vi.spyOn(service as any, 'names').mockResolvedValue({
       goods: [{ goods_id: 11n, query_code: 'G-11', goods_name: '商品11', goods_catg_id: 0n }],

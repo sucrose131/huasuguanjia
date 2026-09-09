@@ -163,6 +163,9 @@ const systemActions = [
   ['编辑', 'system:update'],
   ['删除', 'system:delete'],
 ] as const;
+const businessActions = [
+  ['inventory:stocks', '库存查询-导出', 'inventory:stocks:export', 60],
+] as const;
 async function upsertMenu(data: any) {
   const old = await prisma.hspsi_sys_menu.findFirst({
     where: { code: data.code, deleted_at: null },
@@ -224,6 +227,27 @@ async function main() {
         where: { id: { in: staleMenus.map((menu) => menu.id) } },
       });
     }
+  }
+  for (const [pageCode, name, code, sort] of businessActions) {
+    const page = await prisma.hspsi_sys_menu.findFirstOrThrow({
+      where: { code: pageCode, type: 2, deleted_at: null },
+    });
+    const action = await upsertMenu({
+      parent_id: page.id,
+      path: `${page.path},${page.id}`,
+      name,
+      code,
+      icon: null,
+      route: null,
+      component: null,
+      redirect: null,
+      type: 3,
+      status: 1,
+      sort,
+      remark: '菜单级操作权限；页面菜单本身代表查看权限',
+      deleted_at: null,
+    });
+    ids.push(action.id);
   }
   const systemParent = await prisma.hspsi_sys_menu.findFirstOrThrow({
     where: { code: 'system', deleted_at: null },
