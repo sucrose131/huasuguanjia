@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  filterGoodsByWarehouseStock,
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
+  filterSkuOptionsByWarehouseStock,
   goodsStockQty,
+  selectableGoodsStockQty,
   skuStockQty,
   warehouseTypeOf,
 } from './goods-warehouse';
@@ -116,5 +119,38 @@ describe('skuStockQty', () => {
     expect(skuStockQty(goods, '', '49')).toBe(0);
     expect(skuStockQty(goods, '999', '49')).toBe(0);
     expect(skuStockQty({}, '201', '49', ['49'])).toBe(0);
+  });
+});
+
+describe('领用申请新增页按仓库正库存过滤候选', () => {
+  const stockGoods = [
+    {
+      id: 1,
+      skuStockByWarehouse: {
+        '201': { '49': 5 },
+        '202': { '49': -8, '48': 3 },
+      },
+    },
+    { id: 2, skuStockByWarehouse: { '301': { '49': 0 } } },
+    { id: 3, skuStockByWarehouse: {} },
+  ];
+
+  it('商品只要存在一个正库存规格即可显示，负库存规格不抵扣正库存规格', () => {
+    expect(selectableGoodsStockQty(stockGoods[0]!, '49')).toBe(5);
+    expect(filterGoodsByWarehouseStock(stockGoods, '49').map((item) => item.id)).toEqual([1]);
+  });
+
+  it('未选择仓库时不按库存收窄商品候选', () => {
+    expect(filterGoodsByWarehouseStock(stockGoods, '')).toEqual(stockGoods);
+  });
+
+  it('规格下拉只保留当前仓库正库存规格', () => {
+    const options = [{ value: '201' }, { value: '202' }, { value: '999' }];
+    expect(
+      filterSkuOptionsByWarehouseStock(options, stockGoods[0]!, '49').map(
+        (item) => item.value,
+      ),
+    ).toEqual(['201']);
+    expect(filterSkuOptionsByWarehouseStock(options, stockGoods[0]!, '')).toEqual(options);
   });
 });

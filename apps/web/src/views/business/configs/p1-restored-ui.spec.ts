@@ -11,14 +11,6 @@ function source(relativePath: string) {
 }
 
 describe('P1 restored frontend UI contract', () => {
-  it('blocks requisition submission when a selected SKU has no stock', () => {
-    const application = source('../forms/RequisitionApplicationForm.vue');
-
-    expect(application).toContain('if (submit && warnOutOfStock()) return false');
-    expect(application).toContain('当前仓库暂无库存，不能提交');
-    expect(application).toContain('if (form.value.warehouseId) warnOutOfStock([line])');
-  });
-
   it('restores the purchase dialogs and their old actions', () => {
     const order = [
       source('../forms/PurchaseOrderForm.vue'),
@@ -106,5 +98,14 @@ describe('P1 restored frontend UI contract', () => {
     const remove = productionInputConfig.rowActions?.find((item) => item.key === 'delete');
     expect(remove?.show?.({ confirmStatus: 0 })).toBe(true);
     expect(remove?.show?.({ confirmStatus: 1 })).toBe(false);
+  });
+
+  it('narrows new requisition goods and SKU candidates after selecting a warehouse', () => {
+    const application = source('../forms/RequisitionApplicationForm.vue');
+    expect(application).toContain("props.mode === 'create'");
+    expect(application).toContain('filterGoodsByWarehouseStock');
+    expect(application).toContain('filterSkuOptionsByWarehouseStock');
+    expect(application).toContain('v-for="opt in visibleSkuOptions(s.row)"');
+    expect(application).not.toContain('if (submit && warnOutOfStock())');
   });
 });

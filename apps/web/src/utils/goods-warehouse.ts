@@ -75,3 +75,38 @@ export function skuStockQty(
   ];
   return goodsStockQty({ stockByWarehouse: map ?? {} }, warehouseId, eligibleWarehouseIds);
 }
+
+/** 当前仓库内所有正库存 SKU 的可选择库存合计；负库存 SKU 不抵扣其它可选规格。 */
+export function selectableGoodsStockQty(goods: Record<string, any>, warehouseId: unknown) {
+  const selected = String(warehouseId ?? '').trim();
+  if (!selected) return 0;
+  const skuMap = (goods?.skuStockByWarehouse ?? {}) as Record<
+    string,
+    Record<string, number>
+  >;
+  return Object.values(skuMap).reduce(
+    (sum, stockByWarehouse) => sum + Math.max(0, Number(stockByWarehouse?.[selected] ?? 0)),
+    0,
+  );
+}
+
+/** 选中仓库后只保留至少一个 SKU 有正库存的商品；未选仓库时不收窄候选。 */
+export function filterGoodsByWarehouseStock(
+  goods: Array<Record<string, any>>,
+  warehouseId: unknown,
+) {
+  const selected = String(warehouseId ?? '').trim();
+  if (!selected) return goods;
+  return goods.filter((item) => selectableGoodsStockQty(item, selected) > 0);
+}
+
+/** 选中仓库后只保留正库存 SKU；未选仓库时保留全部规格。 */
+export function filterSkuOptionsByWarehouseStock<T extends { value: unknown }>(
+  options: T[],
+  goods: Record<string, any>,
+  warehouseId: unknown,
+) {
+  const selected = String(warehouseId ?? '').trim();
+  if (!selected) return options;
+  return options.filter((option) => skuStockQty(goods, option.value, selected) > 0);
+}

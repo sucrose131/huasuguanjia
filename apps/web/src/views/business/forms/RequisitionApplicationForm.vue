@@ -5,9 +5,12 @@ import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { dateText } from '@/utils/format';
 import {
+  filterGoodsByWarehouseStock,
   filterGoodsByWarehouseType,
   filterMappedGoodsByKeyword,
+  filterSkuOptionsByWarehouseStock,
   goodsStockQty,
+  selectableGoodsStockQty,
   skuStockQty,
   warehouseTypeOf,
 } from '@/utils/goods-warehouse';
@@ -36,6 +39,7 @@ const options = reactive<Record<string, any>>({
   contextGoods: [],
 });
 const dicts = reactive<Record<string, any[]>>({});
+let warehouseRefreshVersion = 0;
 
 const isView = computed(() => props.mode === 'view');
 
@@ -104,6 +108,7 @@ async function resolveCurrentApplicant() {
 }
 
 async function organizationChanged() {
+  warehouseRefreshVersion += 1;
   form.value.warehouseId = '';
   form.value.deptId = '';
   form.value.applicantId = '';
@@ -114,16 +119,28 @@ async function organizationChanged() {
   await resolveCurrentApplicant();
 }
 
+async function fetchOrgGoods(orgId: unknown) {
+  if (!orgId) return [];
+  const loaded = await api
+    .get('/requisitions/all-goods-options', { params: { orgId: String(orgId) } })
+    .catch(() => null);
+  return Array.isArray(loaded) ? (loaded as any[]) : null;
+}
+
 /** 按单据组织加载全部可用商品（后端返回分类 warehouse_type，供仓库兼容匹配），组织为空时清空 */
-async function loadOrgGoods(orgId: unknown) {
+async function loadOrgGoods(orgId: unknown, preserveOnFailure = false) {
   if (!orgId) {
     options.contextGoods = [];
-    return;
+    return true;
   }
-  options.contextGoods = (await api
-    .get('/requisitions/all-goods-options', { params: { orgId: String(orgId) } })
-    .catch(() => [])) as any[];
+  const loaded = await fetchOrgGoods(orgId);
+  if (!loaded) {
+    if (!preserveOnFailure) options.contextGoods = [];
+    return false;
+  }
+  options.contextGoods = loaded as any[];
   refreshAllSkuStock();
+  return true;
 }
 
 /** 明细商品的唯一分类仓库类型：全部同类型则返回该类型（仓库只能选该类型），否则 0（不限） */
@@ -136,9 +153,9 @@ const documentWarehouseType = computed(() => {
   return types.size === 1 ? [...types][0] : 0;
 });
 
-/** 给规格选项附带当前组织（已选仓库或领用可用仓库合计）的库存，仅展示不收窄候选 */
+/** 给规格选项附带当前组织（已选仓库或领用可用仓库合计）的库存；是否收窄由页面模式决定 */
 function decorateSkuOptions(
-  list: Array<{ value: unknown; label: string; unitType?: number }>,
+  list: Array<{ value: unknown; label: string; unitType?: number; isDefault?: number }>,
   goodsId: unknown,
 ) {
   const goods = (options.contextGoods ?? []).find((g: any) => String(g.id) === String(goodsId));
@@ -153,13 +170,14 @@ function decorateSkuOptions(
       value: opt.value,
       label: opt.label,
       unitType: opt.unitType ?? 0,
+      isDefault: opt.isDefault ?? 0,
       stockQty,
       outOfStock: stockQty <= 0,
     };
   });
 }
 
-function skuOptionLabel(opt: { label?: string; stockQty?: number; outOfStock?: boolean }) {
+function skuOptionLabel(opt: Record<string, any>) {
   const name = String(opt.label ?? '').trim();
   if (typeof opt.stockQty !== 'number') return name || '—';
   return opt.outOfStock ? `${name}（暂无库存）` : `${name}（库存 ${opt.stockQty}）`;
@@ -179,39 +197,13 @@ function refreshAllSkuStock() {
   }
 }
 
-function lineStockQty(line: Record<string, any>): number | null {
-  if (!form.value.warehouseId || !line.goodsId || !line.skuId) return null;
+function visibleSkuOptions(line: Record<string, any>) {
+  const list = (line.skuOptions ?? []) as Array<Record<string, any> & { value: unknown }>;
+  if (props.mode !== 'create' || !form.value.warehouseId) return list;
   const goods = (options.contextGoods ?? []).find(
     (item: any) => String(item.id) === String(line.goodsId),
   );
-  if (!goods) return null;
-  return skuStockQty(goods, line.skuId, form.value.warehouseId, eligibleWarehouseIds.value);
-}
-
-function lineOutOfStock(line: Record<string, any>) {
-  const quantity = lineStockQty(line);
-  return quantity !== null && quantity <= 0;
-}
-
-function lineStockLabel(line: Record<string, any>) {
-  const goods = String(line.goodsName || line.goodsCode || line.goodsId || '所选商品').trim();
-  const spec = String(line.skuSpec || line.skuId || '所选规格').trim();
-  return `${goods}（${spec}${line.batchNo ? `，批号 ${line.batchNo}` : ''}）`;
-}
-
-function outOfStockLines() {
-  return (form.value.details ?? []).filter((line: any) => line.goodsId && lineOutOfStock(line));
-}
-
-function warnOutOfStock(lines = outOfStockLines()) {
-  if (!lines.length) return false;
-  const shown = lines
-    .slice(0, 3)
-    .map((line: any) => lineStockLabel(line))
-    .join('、');
-  const more = lines.length > 3 ? `等 ${lines.length} 项` : '';
-  ElMessage.warning(`所选仓库中${shown}${more}暂无库存，不能提交领用申请`);
-  return true;
+  return filterSkuOptionsByWarehouseStock(list, goods ?? {}, form.value.warehouseId);
 }
 
 /** 拉取商品 SKU 列表（id/label/unitType），供明细 SKU 下拉与编辑回显 */
@@ -223,6 +215,7 @@ async function buildSkuOptionList(goodsId: unknown) {
       value: x.id,
       label: x.specModels || `规格 ${x.id}`,
       unitType: x.unitType ?? 0,
+      isDefault: x.isDefault ?? 0,
     })),
     goodsId,
   );
@@ -280,17 +273,63 @@ const warehouseOptions = computed(() =>
   ),
 );
 
-function warehouseChanged() {
-  // 先选商品后选仓库：换仓库只校验兼容性，不清空明细
+async function warehouseChanged() {
+  const refreshVersion = ++warehouseRefreshVersion;
+  const selectedWarehouseId = String(form.value.warehouseId ?? '');
+  // 先选商品后选仓库：先校验类型，再按新仓库的实时库存修正明细
   const current = warehouseOptions.value.find(
     (w: any) => String(w.value) === String(form.value.warehouseId),
   );
   if (documentWarehouseType.value && !current) {
     form.value.warehouseId = '';
     ElMessage.warning('所选仓库类型与明细商品不匹配，请重新选择仓库');
+    refreshAllSkuStock();
+    return;
   }
+  if (props.mode !== 'create' || !form.value.warehouseId) {
+    refreshAllSkuStock();
+    return;
+  }
+  const loaded = await fetchOrgGoods(form.value.orgId);
+  if (
+    refreshVersion !== warehouseRefreshVersion ||
+    selectedWarehouseId !== String(form.value.warehouseId ?? '')
+  ) {
+    return;
+  }
+  if (!loaded) {
+    ElMessage.warning('库存刷新失败，已保留当前明细，请稍后重新选择仓库');
+    return;
+  }
+  options.contextGoods = loaded;
   refreshAllSkuStock();
-  warnOutOfStock();
+  let clearedGoods = 0;
+  let clearedSkus = 0;
+  for (const line of form.value.details ?? []) {
+    if (!line.goodsId) continue;
+    const goods = (options.contextGoods ?? []).find(
+      (item: any) => String(item.id) === String(line.goodsId),
+    );
+    if (!goods || selectableGoodsStockQty(goods, form.value.warehouseId) <= 0) {
+      Object.assign(line, blankLine());
+      clearedGoods += 1;
+      continue;
+    }
+    if (line.skuId && skuStockQty(goods, line.skuId, form.value.warehouseId) <= 0) {
+      line.skuId = '';
+      line.skuSpec = '';
+      line.unitType = 0;
+      line.batchNo = '';
+      clearedSkus += 1;
+    }
+  }
+  if (clearedGoods || clearedSkus) {
+    const parts = [
+      clearedGoods ? `${clearedGoods} 条无库存商品明细` : '',
+      clearedSkus ? `${clearedSkus} 条无库存规格` : '',
+    ].filter(Boolean);
+    ElMessage.warning(`切换仓库后已清空${parts.join('及')}，请重新选择`);
+  }
 }
 
 function drawTypeChanged(value: unknown) {
@@ -306,16 +345,24 @@ function removeLine(index: number) {
 }
 
 async function searchGoodsOptions(keyword: string) {
-  const list = filterMappedGoodsByKeyword(
-    filterGoodsByWarehouseType(options.contextGoods, selectedWarehouseType.value),
-    keyword,
+  const warehouseCompatible = filterGoodsByWarehouseType(
+    options.contextGoods,
+    selectedWarehouseType.value,
   );
+  const stockFiltered =
+    props.mode === 'create' && form.value.warehouseId
+      ? filterGoodsByWarehouseStock(warehouseCompatible, form.value.warehouseId)
+      : warehouseCompatible;
+  const list = filterMappedGoodsByKeyword(stockFiltered, keyword);
   return list.map((g: any) => {
-    const stockQty = goodsStockQty(g, form.value.warehouseId, eligibleWarehouseIds.value);
+    const stockQty =
+      props.mode === 'create' && form.value.warehouseId
+        ? selectableGoodsStockQty(g, form.value.warehouseId)
+        : goodsStockQty(g, form.value.warehouseId, eligibleWarehouseIds.value);
     return {
       value: g.id,
       label: `${g.queryCode || ''} ${g.goodsName || ''}`.trim(),
-      // 库存仅作展示（未选仓库=可用仓库合计，选仓库=该仓库数量），不参与候选过滤
+      // 新增页选中仓库后候选只保留正库存商品；其它模式及未选仓库仍只作库存展示
       stockQty,
       outOfStock: stockQty <= 0,
     };
@@ -349,15 +396,22 @@ async function lineGoodsChanged(line: any) {
       value: x.id,
       label: x.specModels || `规格 ${x.id}`,
       unitType: x.unitType ?? 0,
+      isDefault: x.isDefault ?? 0,
     })),
     line.goodsId,
   );
-  const sku = (g.skus ?? []).find((x: any) => x.isDefault === 1) ?? g.skus?.[0];
-  line.skuId = sku?.id ?? '';
+  const selectableSkus = visibleSkuOptions(line);
+  const sku = selectableSkus.find((x: any) => x.isDefault === 1) ?? selectableSkus[0];
+  if (props.mode === 'create' && form.value.warehouseId && !sku) {
+    Object.assign(line, blankLine());
+    ElMessage.warning('该商品在当前仓库没有可选择的有库存规格，请重新选择商品');
+    return;
+  }
+  line.skuId = sku?.value ?? '';
   line.unitType = sku?.unitType ?? 0;
   line.goodsCode = g.queryCode ?? '';
   line.goodsName = g.goodsName ?? '';
-  line.skuSpec = sku?.specModels ?? '';
+  line.skuSpec = sku?.label ?? '';
   // 商品分类类型变化后，若已选仓库类型不匹配则清空仓库
   if (form.value.warehouseId && documentWarehouseType.value) {
     const current = (options.requisitionWarehouses ?? []).find(
@@ -372,7 +426,6 @@ async function lineGoodsChanged(line: any) {
       ElMessage.warning('明细商品类型已变化，请重新选择匹配的仓库');
     }
   }
-  if (form.value.warehouseId) warnOutOfStock([line]);
 }
 
 function lineUnitName(line: any) {
@@ -386,7 +439,6 @@ function lineSkuChanged(line: any) {
   line.unitType = sku?.unitType ?? 0;
   line.skuSpec = sku?.label ?? '';
   line.batchNo = '';
-  warnOutOfStock([line]);
 }
 
 function signatureChanged(value: string) {
@@ -434,7 +486,6 @@ function validate(submit: boolean) {
     ElMessage.warning('请为每条领用明细选择规格(SKU)');
     return false;
   }
-  if (submit && warnOutOfStock()) return false;
   if ((form.value.details ?? []).some((line: any) => typeof line.returnable !== 'boolean')) {
     ElMessage.warning('请为每条领用明细选择“可归还”或“无需归还”');
     return false;
@@ -643,7 +694,7 @@ onMounted(async () => {
             @change="lineSkuChanged(s.row)"
           >
             <el-option
-              v-for="opt in s.row.skuOptions ?? []"
+              v-for="opt in visibleSkuOptions(s.row)"
               :key="opt.value"
               :label="skuOptionLabel(opt)"
               :value="opt.value"
@@ -665,9 +716,6 @@ onMounted(async () => {
             </el-option>
           </el-select>
           <span v-else>{{ skuViewText(s.row) }}</span>
-          <div v-if="!isView && lineOutOfStock(s.row)" class="stock-error">
-            当前仓库暂无库存，不能提交
-          </div>
         </template>
       </el-table-column>
       <el-table-column label="申请数量" width="120">
@@ -773,12 +821,6 @@ onMounted(async () => {
 }
 .is-out-of-stock {
   color: var(--hs-muted, #a8abb2);
-}
-.stock-error {
-  margin-top: 4px;
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.35;
 }
 .form-actions {
   display: flex;
